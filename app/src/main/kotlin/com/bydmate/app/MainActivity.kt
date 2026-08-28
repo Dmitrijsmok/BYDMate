@@ -11,6 +11,11 @@ import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -18,7 +23,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.bydmate.app.data.local.LocalePreferences
@@ -29,6 +37,7 @@ import com.bydmate.app.ui.components.ConsumptionThresholds
 import com.bydmate.app.ui.components.LocalConsumptionThresholds
 import com.bydmate.app.ui.navigation.AppNavigation
 import com.bydmate.app.ui.theme.BYDMateTheme
+import com.bydmate.app.voice.VoiceController
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
 import javax.inject.Inject
@@ -38,6 +47,7 @@ class MainActivity : AppCompatActivity() {
 
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var updateChecker: UpdateChecker
+    @Inject lateinit var voiceController: VoiceController
 
     companion object {
         private const val TAG = "MainActivity"
@@ -113,10 +123,28 @@ class MainActivity : AppCompatActivity() {
                     LocalConfiguration provides localizedConfig,
                     LocalConsumptionThresholds provides thresholds,
                 ) {
-                    AppNavigation(
-                        settingsRepository = settingsRepository,
-                        updateChecker = updateChecker,
-                    )
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        AppNavigation(
+                            settingsRepository = settingsRepository,
+                            updateChecker = updateChecker,
+                        )
+
+                        // DiLink3 diagnostic: manual PTT entry point. This deliberately calls the
+                        // same VoiceController path as the steering-wheel PTT so microphone,
+                        // GigaAM ASR, routing and TTS are exercised without relying on DiLink5
+                        // steering-wheel integration.
+                        Button(
+                            onClick = {
+                                Log.i(TAG, "DiLink3 diagnostic manual voice button pressed")
+                                voiceController.onPttPressed()
+                            },
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(end = 24.dp, bottom = 72.dp),
+                        ) {
+                            Text("🎤 Voice")
+                        }
+                    }
                 }
             }
         }
@@ -138,6 +166,11 @@ class MainActivity : AppCompatActivity() {
             != PackageManager.PERMISSION_GRANTED
         ) {
             permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            permissions.add(Manifest.permission.RECORD_AUDIO)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
