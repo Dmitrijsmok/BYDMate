@@ -23,16 +23,38 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v5
 
+      - name: Prepare side-by-side DiLink3 diagnostic package
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          gradle = Path('app/build.gradle.kts')
+          text = gradle.read_text()
+          needle = '''    buildTypes {\n        release {'''
+          replacement = '''    buildTypes {\n        debug {\n            applicationIdSuffix = ".dilink3diag"\n            versionNameSuffix = "-dilink3diag"\n        }\n        release {'''
+          if needle not in text:
+              raise SystemExit('buildTypes insertion point not found')
+          gradle.write_text(text.replace(needle, replacement, 1))
+
+          manifest = Path('app/src/main/AndroidManifest.xml')
+          m = manifest.read_text()
+          old = 'android:label="BYDMate"'
+          new = 'android:label="BYDMate DiLink3 Diagnostic"'
+          if old not in m:
+              raise SystemExit('application label not found')
+          manifest.write_text(m.replace(old, new, 1))
+          PY
+
       - name: Unit tests for TTS diagnostics
         run: ./gradlew :app:testDebugUnitTest --tests "com.bydmate.app.voice.TtsModelManagerTest" --stacktrace
 
-      - name: Build debug APK
+      - name: Build side-by-side debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v7
         with:
-          name: bydmate-dilink3-voice-diagnostic-debug
+          name: bydmate-dilink3-voice-diagnostic-side-by-side
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
