@@ -25,6 +25,7 @@ jobs:
 
       - name: Prepare updateable DiLink3 diagnostic package
         run: |
+          base64 -d .github/dilink3-debug.keystore.b64 > .github/dilink3-debug.keystore
           python3 - <<'PY'
           import os
           from pathlib import Path
@@ -32,16 +33,23 @@ jobs:
           gradle = Path('app/build.gradle.kts')
           text = gradle.read_text()
 
-          # Keep the exact same package id as every previous DiLink3 diagnostic APK so
-          # Android treats this build as an update and preserves app-private settings/models.
+          # Stable diagnostic signing config. Every future APK from this branch uses the
+          # same certificate, so Android can update it in-place and retain settings/models.
+          signing_needle = '''    signingConfigs {\n        if (keystorePropsFile.exists()) {'''
+          signing_replacement = '''    signingConfigs {\n        create("dilink3Diag") {\n            storeFile = rootProject.file(".github/dilink3-debug.keystore")\n            storePassword = "dilink3debug"\n            keyAlias = "dilink3debug"\n            keyPassword = "dilink3debug"\n        }\n        if (keystorePropsFile.exists()) {'''
+          if signing_needle not in text:
+              raise SystemExit('signingConfigs insertion point not found')
+          text = text.replace(signing_needle, signing_replacement, 1)
+
+          # Keep the exact DiLink3 diagnostic package id. Android therefore sees each
+          # subsequent build as an update rather than a separate app.
           needle = '''    buildTypes {\n        release {'''
-          replacement = '''    buildTypes {\n        debug {\n            applicationIdSuffix = ".dilink3diag"\n            versionNameSuffix = "-dilink3diag"\n        }\n        release {'''
+          replacement = '''    buildTypes {\n        debug {\n            applicationIdSuffix = ".dilink3diag"\n            versionNameSuffix = "-dilink3diag"\n            signingConfig = signingConfigs.getByName("dilink3Diag")\n        }\n        release {'''
           if needle not in text:
               raise SystemExit('buildTypes insertion point not found')
           text = text.replace(needle, replacement, 1)
 
-          # Give every CI diagnostic build a strictly increasing versionCode so the
-          # package installer can overwrite the installed diagnostic APK without uninstalling it.
+          # Strictly increasing versionCode lets package installers accept every newer APK.
           run_number = int(os.environ['GITHUB_RUN_NUMBER'])
           diag_version_code = 10000 + run_number
           old_version = '        versionCode = 433'
