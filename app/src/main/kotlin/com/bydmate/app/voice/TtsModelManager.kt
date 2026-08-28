@@ -1,6 +1,7 @@
 package com.bydmate.app.voice
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -49,7 +50,6 @@ class TtsModelManager(
             hasRealOnnx(dir) && File(dir, "tokens.txt").isFile && File(dir, "espeak-ng-data").isDirectory
         TtsVoiceEngine.VITS_MULTI ->
             hasRealOnnx(dir) && File(dir, "tokens.txt").isFile && File(dir, "stress.tsv").isFile
-        // Supertonic ships a fixed 7-file layout and NO tokens.txt.
         TtsVoiceEngine.SUPERTONIC -> SUPERTONIC_FILES.all { File(dir, it).isFile }
     }
 
@@ -67,32 +67,92 @@ class TtsModelManager(
         }
     }
 
+    /**
+     * Downloads a voice archive with verbose diagnostics intended for old DiLink 3 units.
+     * Progress behaviour remains compatible with the existing UI, while logcat now shows
+     * request URL, redirect target, HTTP status, declared size, transferred bytes, elapsed
+     * time, unpack stage and the full exception when anything fails.
+     */
     suspend fun download(voice: TtsVoice, onProgress: (Int) -> Unit): Result<Unit> =
         withContext(Dispatchers.IO) {
+            val startedAt = SystemClock.elapsedRealtime()
+            var stage = "prepare"
+            var transferred = 0L
+            var declaredLength = -1L
+            var finalUrl = voice.url
+
+            Log.i(TAG, "download start voice=${voice.id} modelDir=${voice.modelDirId} engine=${voice.engine} url=${voice.url}")
+
             runCatching {
                 val tmp = File(context.cacheDir, "tts-${voice.modelDirId}.tar.bz2")
                 try {
-                    http.newCall(Request.Builder().url(voice.url).build()).execute().use { resp ->
-                        if (!resp.isSuccessful) error("HTTP ${resp.code}")
-                        val body = resp.body ?: error("empty response body")
-                        val total = body.contentLength()
-                        var read = 0L
+                    stage = "http"
+                    val request = Request.Builder()
+                        .url(voice.url)
+                        .header("User-Agent", "BYDMate-DiLink3-Diagnostic")
+                        .build()
+
+                    http.newCall(request).execute().use { resp ->
+                        finalUrl = resp.request.url.toString()
+                        declaredLength = resp.body?.contentLength() ?: -1L
+                        Log.i(
+                            TAG,
+                            "download response voice=${voice.id} code=${resp.code} protocol=${resp.protocol} " +
+                                "redirected=${finalUrl != voice.url} finalUrl=$finalUrl contentLength=$declaredLength " +
+                                "contentType=${resp.body?.contentType()}"
+                        )
+                        if (!resp.isSuccessful) {
+                            error("HTTP ${resp.code} ${resp.message}; finalUrl=$finalUrl")
+                        }
+
+                        val body = resp.body ?: error("empty response body; finalUrl=$finalUrl")
+                        stage = "transfer"
+                        var lastLoggedBytes = 0L
+                        var lastLoggedAt = startedAt
+
                         body.byteStream().use { input ->
-                            tmp.outputStream().use { out ->
+                            tmp.outputStream().buffered().use { out ->
                                 val buf = ByteArray(64 * 1024)
                                 while (true) {
                                     ensureActive()
-                                    val n = input.read(buf); if (n < 0) break
-                                    out.write(buf, 0, n); read += n
-                                    if (total > 0) onProgress(((read * 100) / total).toInt())
+                                    val n = input.read(buf)
+                                    if (n < 0) break
+                                    out.write(buf, 0, n)
+                                    transferred += n
+
+                                    if (declaredLength > 0) {
+                                        onProgress(((transferred * 100L) / declaredLength).coerceIn(0L, 100L).toInt())
+                                    }
+
+                                    val now = SystemClock.elapsedRealtime()
+                                    if (transferred - lastLoggedBytes >= LOG_EVERY_BYTES || now - lastLoggedAt >= LOG_EVERY_MS) {
+                                        Log.i(
+                                            TAG,
+                                            "download progress voice=${voice.id} bytes=$transferred total=$declaredLength " +
+                                                "pct=${if (declaredLength > 0) (transferred * 100L / declaredLength) else -1} " +
+                                                "elapsedMs=${now - startedAt}"
+                                        )
+                                        lastLoggedBytes = transferred
+                                        lastLoggedAt = now
+                                    }
                                 }
+                                out.flush()
                             }
                         }
+
+                        if (declaredLength > 0 && transferred != declaredLength) {
+                            error("truncated download: received=$transferred expected=$declaredLength; finalUrl=$finalUrl")
+                        }
                     }
+
+                    Log.i(
+                        TAG,
+                        "download transfer complete voice=${voice.id} bytes=$transferred fileBytes=${tmp.length()} " +
+                            "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
+                    )
+
+                    stage = "unpack"
                     diskMutex.withLock {
-                        // Checked under the lock: a delete that cancelled us has
-                        // either finished (we bail here) or runs strictly after
-                        // this whole commit section (and removes its result).
                         ensureActive()
                         val staging = stagingDir(voice.modelDirId)
                         val target = baseDir(voice.modelDirId)
@@ -101,9 +161,6 @@ class TtsModelManager(
                         try {
                             untarFlatten(tmp, staging)
                             check(isComplete(staging, voice.engine)) { "unpack produced incomplete model dir" }
-                            // Atomic publish: the final dir only ever appears as a
-                            // fully verified unpack, so a process kill mid-unpack can
-                            // never leave a dir that isReady() accepts.
                             target.deleteRecursively()
                             check(staging.renameTo(target)) { "failed to publish staged model" }
                         } catch (t: Throwable) {
@@ -111,13 +168,28 @@ class TtsModelManager(
                             throw t
                         }
                     }
-                    // Cancelled between commit and return: don't report success —
-                    // the serialized delete() removes the dir, state must not flip.
+
+                    stage = "verify"
+                    check(isReady(voice)) { "installed model is not ready after publish" }
                     ensureActive()
+                    Log.i(
+                        TAG,
+                        "download success voice=${voice.id} modelDir=${voice.modelDirId} bytes=$transferred " +
+                            "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
+                    )
                 } finally {
                     tmp.delete()
                 }
-            }.onFailure { if (it is CancellationException) throw it }
+            }.onFailure {
+                if (it is CancellationException) throw it
+                Log.e(
+                    TAG,
+                    "download failed voice=${voice.id} stage=$stage bytes=$transferred total=$declaredLength " +
+                        "finalUrl=$finalUrl elapsedMs=${SystemClock.elapsedRealtime() - startedAt}: " +
+                        "${it.javaClass.simpleName}: ${it.message}",
+                    it
+                )
+            }
         }
 
     /** Supertonic archives (k2-fsa upstream) ship no stress dictionary; fetches our
@@ -159,11 +231,6 @@ class TtsModelManager(
                         try {
                             untarFlatten(tmp, staging)
                             val staged = File(staging, STRESS_DICT_FILE)
-                            // A truncated download or a wrong/tiny release asset can still unpack a
-                            // short but valid stress.tsv; publishing it would poison the cache
-                            // permanently (the isFile short-circuit above trusts it forever),
-                            // silently disabling stress for almost every word. Require a plausible
-                            // size so a bad asset stays retryable instead of cached.
                             check(staged.isFile && staged.length() >= STRESS_DICT_MIN_BYTES) {
                                 "stress dictionary implausibly small (${staged.length()} bytes)"
                             }
@@ -210,24 +277,18 @@ class TtsModelManager(
 
     companion object {
         private const val TAG = "TtsModelManager"
+        private const val LOG_EVERY_BYTES = 1L * 1024L * 1024L
+        private const val LOG_EVERY_MS = 2_000L
         const val DEFAULT_VOICE_ID = "dmitri"
         internal const val STRESS_DICT_URL = "https://github.com/AndyShaman/BYDMate/releases/download/tts-voices-v1/stress-ru.tar.bz2"
         internal const val STRESS_DICT_FILE = "stress.tsv"
-        /** Sanity floor for a freshly downloaded dictionary: the real ru asset is ~11.9 MB /
-         *  529k lines (tts-voices-v1), so anything far smaller is a truncated or wrong asset
-         *  and must not be renamed into place (see ensureStressDict). */
         internal const val STRESS_DICT_MIN_BYTES = 1_000_000L
 
-        /** Fixed file set for a Supertonic archive: 4-model flow-matching pipeline,
-         *  char-based (no tokens.txt). All 7 files must be present for the model to load. */
         internal val SUPERTONIC_FILES = listOf(
             "duration_predictor.int8.onnx", "text_encoder.int8.onnx", "vector_estimator.int8.onnx",
             "vocoder.int8.onnx", "tts.json", "unicode_indexer.bin", "voice.bin",
         )
 
-        /** macOS tar pollutes archives with AppleDouble (._*) and Finder junk; commons-compress
-         *  faithfully extracts them, and a ._*.onnx picked up by onnxFile() crashes sherpa-onnx
-         *  (field defect: the Artem voice went silent, 2026-07-08). */
         internal fun isJunkPath(path: String): Boolean =
             path.split('/').any { it.startsWith("._") || it == ".DS_Store" || it == "__MACOSX" }
     }
