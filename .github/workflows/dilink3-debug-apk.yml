@@ -23,18 +23,34 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v5
 
-      - name: Prepare side-by-side DiLink3 diagnostic package
+      - name: Prepare updateable DiLink3 diagnostic package
         run: |
           python3 - <<'PY'
+          import os
           from pathlib import Path
 
           gradle = Path('app/build.gradle.kts')
           text = gradle.read_text()
+
+          # Keep the exact same package id as every previous DiLink3 diagnostic APK so
+          # Android treats this build as an update and preserves app-private settings/models.
           needle = '''    buildTypes {\n        release {'''
           replacement = '''    buildTypes {\n        debug {\n            applicationIdSuffix = ".dilink3diag"\n            versionNameSuffix = "-dilink3diag"\n        }\n        release {'''
           if needle not in text:
               raise SystemExit('buildTypes insertion point not found')
-          gradle.write_text(text.replace(needle, replacement, 1))
+          text = text.replace(needle, replacement, 1)
+
+          # Give every CI diagnostic build a strictly increasing versionCode so the
+          # package installer can overwrite the installed diagnostic APK without uninstalling it.
+          run_number = int(os.environ['GITHUB_RUN_NUMBER'])
+          diag_version_code = 10000 + run_number
+          old_version = '        versionCode = 433'
+          new_version = f'        versionCode = {diag_version_code}'
+          if old_version not in text:
+              raise SystemExit('versionCode insertion point not found')
+          text = text.replace(old_version, new_version, 1)
+          gradle.write_text(text)
+          print(f'DiLink3 diagnostic versionCode={diag_version_code}')
 
           manifest = Path('app/src/main/AndroidManifest.xml')
           m = manifest.read_text()
@@ -45,15 +61,13 @@ jobs:
           manifest.write_text(m.replace(old, new, 1))
           PY
 
-      # Diagnostic code tests passed in the preceding branch build. This workflow
-      # only repackages the same code with a side-by-side application id.
-      - name: Build side-by-side debug APK
+      - name: Build updateable debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v7
         with:
-          name: bydmate-dilink3-voice-diagnostic-side-by-side
+          name: bydmate-dilink3-voice-diagnostic-updateable
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
