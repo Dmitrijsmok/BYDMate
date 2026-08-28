@@ -55,9 +55,6 @@ class TtsModelManager(
 
     fun isReady(voice: TtsVoice): Boolean = isComplete(baseDir(voice.modelDirId), voice.engine)
 
-    /** Serializes all disk mutations of the model dir: a delete can never
-     *  interleave with download's commit (unpack) section, so a cancelled
-     *  download cannot recreate a dir the user just deleted. */
     internal val diskMutex = Mutex()
 
     suspend fun delete(modelDirId: String) {
@@ -177,6 +174,7 @@ class TtsModelManager(
                         "download success voice=${voice.id} modelDir=${voice.modelDirId} bytes=$transferred " +
                             "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
                     )
+                    Unit
                 } finally {
                     tmp.delete()
                 }
@@ -192,10 +190,6 @@ class TtsModelManager(
             }
         }
 
-    /** Supertonic archives (k2-fsa upstream) ship no stress dictionary; fetches our
-     *  stress.tsv release asset into the voice dir so UPPERCASE stress marking works.
-     *  Fail-soft: any error just leaves marking disabled. Returns true when the dict
-     *  is present (already or downloaded just now). */
     suspend fun ensureStressDict(voice: TtsVoice): Boolean =
         withContext(Dispatchers.IO) {
             if (voice.engine != TtsVoiceEngine.SUPERTONIC) return@withContext true
@@ -249,8 +243,6 @@ class TtsModelManager(
             }.getOrDefault(false)
         }
 
-    /** Archive has a single top-level folder; flatten it into [target].
-     *  Tar Slip guard mirrors VoiceModelManager.unzipFlatten's Zip Slip guard. */
     internal fun untarFlatten(archive: File, target: File) {
         val canonicalTarget = target.canonicalFile
         BZip2CompressorInputStream(BufferedInputStream(archive.inputStream())).use { bz ->
