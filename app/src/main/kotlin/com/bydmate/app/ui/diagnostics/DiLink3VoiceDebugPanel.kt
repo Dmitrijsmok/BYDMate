@@ -32,6 +32,7 @@ import androidx.core.content.ContextCompat
 import com.bydmate.app.voice.AudioCapture
 import com.bydmate.app.voice.ContinuousAsr
 import com.bydmate.app.voice.ContinuousAsrEvent
+import com.bydmate.app.voice.DiLink3AudioSourceProbe
 import com.bydmate.app.voice.TtsModelManager
 import com.bydmate.app.voice.TtsVoiceCatalog
 import com.bydmate.app.voice.VoiceController
@@ -41,8 +42,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 
-/** Visible, self-contained DiLink3 diagnostic panel. It intentionally includes a RAW ASR test
- * that bypasses VoiceController/gates/routing and feeds AudioCapture directly into GigaAM. */
+/** Visible, self-contained DiLink3 diagnostic panel. It intentionally includes:
+ *  1) a source-by-source Android AudioRecord probe (no GigaAM, no VoiceController), and
+ *  2) a RAW ASR test that feeds AudioCapture directly into GigaAM.
+ */
 @Composable
 fun DiLink3VoiceDebugPanel(
     voiceController: VoiceController,
@@ -82,6 +85,10 @@ fun DiLink3VoiceDebugPanel(
     var rawHeard by remember { mutableStateOf("") }
     var rawError by remember { mutableStateOf("") }
 
+    var probeRunning by remember { mutableStateOf(false) }
+    var probeResults by remember { mutableStateOf<List<DiLink3AudioSourceProbe.Result>>(emptyList()) }
+    var probeError by remember { mutableStateOf("") }
+
     val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val activeRecording = runCatching {
         audioManager.activeRecordingConfigurations
@@ -118,12 +125,49 @@ fun DiLink3VoiceDebugPanel(
             DebugRow("Controller state", stateText)
             DebugRow("Android active recording", activeRecording)
 
+            Text("STEP 1 - Android microphone sources", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "This test does NOT use GigaAM, OpenRouter, VoiceController or TTS. It opens each Android microphone source, starts recording and reads raw PCM.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(
+                enabled = micGranted && !probeRunning && rawJob?.isActive != true && !listening,
+                onClick = {
+                    probeRunning = true
+                    probeResults = emptyList()
+                    probeError = ""
+                    scope.launch {
+                        try {
+                            probeResults = DiLink3AudioSourceProbe.run()
+                        } catch (t: Throwable) {
+                            probeError = "${t::class.java.simpleName}: ${t.message}"
+                        } finally {
+                            probeRunning = false
+                        }
+                    }
+                },
+            ) {
+                Text(if (probeRunning) "PROBING..." else "PROBE MIC SOURCES")
+            }
+            if (probeResults.isEmpty()) {
+                DebugRow("Probe", if (probeRunning) "running..." else "not run yet")
+            } else {
+                probeResults.forEach { result ->
+                    DebugRow(result.name, result.summary())
+                }
+            }
+            if (probeError.isNotBlank()) DebugRow("Probe ERROR", probeError)
+
+            Text("STEP 2 - VoiceController / RAW GigaAM", style = MaterialTheme.typography.titleSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { voiceController.onPttPressed() }) {
+                Button(
+                    enabled = !probeRunning,
+                    onClick = { voiceController.onPttPressed() },
+                ) {
                     Text(if (listening) "STOP Voice" else "START Voice")
                 }
                 Button(
-                    enabled = micGranted && asrReady,
+                    enabled = micGranted && asrReady && !probeRunning,
                     onClick = {
                         if (rawJob?.isActive == true) {
                             rawJob?.cancel()
@@ -175,7 +219,7 @@ fun DiLink3VoiceDebugPanel(
                 }
             }
 
-            Text("RAW ASR TEST (bypasses VoiceController)", style = MaterialTheme.typography.titleSmall)
+            Text("RAW ASR TEST (AudioCapture -> GigaAM)", style = MaterialTheme.typography.titleSmall)
             DebugRow("Raw status", rawStatus)
             DebugRow("PCM frames", rawFrames.toString())
             DebugRow("PCM samples", rawSamples.toString())
@@ -184,7 +228,7 @@ fun DiLink3VoiceDebugPanel(
             DebugRow("ERROR", rawError.ifBlank { "none" })
 
             Text(
-                "Interpretation: frames=0 means microphone/capture path failed. Frames>0 but SpeechStart=0 means VAD sees no speech. SpeechStart>0 but HEARD empty points to GigaAM decode/model. HEARD text proves mic + VAD + ASR all work.",
+                "How to read this: if every mic source fails INIT/START/READ, DiLink3 is blocking Android microphone capture. If at least one source shows read=OK with peak/rms above zero, the car is giving BYDMate real PCM and OpenRouter is irrelevant. Then run RAW ASR TEST: frames>0 but SpeechStart=0 means VAD; SpeechStart>0 but HEARD empty means GigaAM decode/model; HEARD text proves the complete local recognition chain.",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
