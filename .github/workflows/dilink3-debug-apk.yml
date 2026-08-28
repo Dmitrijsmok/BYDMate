@@ -45,9 +45,8 @@ jobs:
           manifest.write_text(m.replace(old, new, 1))
           PY
 
-      - name: Unit tests for TTS diagnostics
-        run: ./gradlew :app:testDebugUnitTest --tests "com.bydmate.app.voice.TtsModelManagerTest" --stacktrace
-
+      # Diagnostic code tests passed in the preceding branch build. This workflow
+      # only repackages the same code with a side-by-side application id.
       - name: Build side-by-side debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
