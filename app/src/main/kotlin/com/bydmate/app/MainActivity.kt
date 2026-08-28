@@ -8,22 +8,15 @@ import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
-import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -41,10 +34,13 @@ import com.bydmate.app.service.TrackingService
 import com.bydmate.app.service.UpdateChecker
 import com.bydmate.app.ui.components.ConsumptionThresholds
 import com.bydmate.app.ui.components.LocalConsumptionThresholds
+import com.bydmate.app.ui.diagnostics.DiLink3VoiceDebugPanel
 import com.bydmate.app.ui.navigation.AppNavigation
 import com.bydmate.app.ui.theme.BYDMateTheme
+import com.bydmate.app.voice.AudioCapture
+import com.bydmate.app.voice.ContinuousAsr
+import com.bydmate.app.voice.TtsModelManager
 import com.bydmate.app.voice.VoiceController
-import com.bydmate.app.voice.VoiceUiState
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
 import javax.inject.Inject
@@ -55,19 +51,18 @@ class MainActivity : AppCompatActivity() {
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var updateChecker: UpdateChecker
     @Inject lateinit var voiceController: VoiceController
+    @Inject lateinit var continuousAsr: ContinuousAsr
+    @Inject lateinit var audioCapture: AudioCapture
+    @Inject lateinit var ttsModelManager: TtsModelManager
 
     companion object {
         private const val TAG = "MainActivity"
         private const val PERMISSION_REQUEST_CODE = 1001
         private const val BACKGROUND_LOCATION_REQUEST_CODE = 1002
-        private const val AUDIO_PERMISSION_REQUEST_CODE = 1003
         private const val DEFAULT_LANG = "ru"
     }
 
     override fun attachBaseContext(newBase: Context) {
-        // Cold-start: read stored language and wrap baseContext with a Configuration
-        // that already has the right locale. Without this, initial layouts paint in
-        // the system locale for one frame before AppCompat catches up.
         val lang = newBase.getSharedPreferences(LocalePreferences.FILE, Context.MODE_PRIVATE)
             .getString(LocalePreferences.KEY_LANG, null) ?: DEFAULT_LANG
         val locale = Locale.forLanguageTag(lang)
@@ -88,15 +83,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // Runtime locale switch: listen to LocalePreferences via SharedPreferences,
-            // mutate Activity resources in place (deprecated since API 24 but functional
-            // on Android 12), then bump `lang` state. The new LocalConfiguration value
-            // triggers recomposition of every stringResource consumer in the tree.
-            // LocalContext is left untouched so Hilt's `instanceof Activity` check passes.
             val prefs = remember {
-                applicationContext.getSharedPreferences(
-                    LocalePreferences.FILE, Context.MODE_PRIVATE
-                )
+                applicationContext.getSharedPreferences(LocalePreferences.FILE, Context.MODE_PRIVATE)
             }
             var lang by remember {
                 mutableStateOf(prefs.getString(LocalePreferences.KEY_LANG, null) ?: DEFAULT_LANG)
@@ -126,26 +114,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            val voiceState by voiceController.state.collectAsState()
-            val voiceListening by voiceController.listening.collectAsState()
-            var lastHeard by remember { mutableStateOf("") }
-            var micGranted by remember {
-                mutableStateOf(
-                    ContextCompat.checkSelfPermission(
-                        this@MainActivity,
-                        Manifest.permission.RECORD_AUDIO,
-                    ) == PackageManager.PERMISSION_GRANTED
-                )
-            }
-
-            LaunchedEffect(voiceState) {
-                when (val s = voiceState) {
-                    is VoiceUiState.Done -> if (s.transcript.isNotBlank()) lastHeard = s.transcript
-                    is VoiceUiState.NotUnderstood -> if (s.transcript.isNotBlank()) lastHeard = s.transcript
-                    else -> Unit
-                }
-            }
-
             BYDMateTheme {
                 CompositionLocalProvider(
                     LocalConfiguration provides localizedConfig,
@@ -157,72 +125,24 @@ class MainActivity : AppCompatActivity() {
                             updateChecker = updateChecker,
                         )
 
-                        // DiLink3 diagnostic panel: intentionally always visible in this debug APK.
-                        // It makes the ASR state observable even when the normal floating overlay
-                        // cannot be shown by this DiLink generation.
-                        Surface(
-                            tonalElevation = 6.dp,
-                            shadowElevation = 6.dp,
-                            shape = MaterialTheme.shapes.medium,
+                        // DiLink3-only diagnostic build: keep the entire voice chain visible.
+                        // RAW ASR TEST bypasses VoiceController and directly runs
+                        // AudioCapture -> GigaAM so gate/routing problems can be separated from
+                        // microphone/VAD/model problems in one screen.
+                        DiLink3VoiceDebugPanel(
+                            voiceController = voiceController,
+                            continuousAsr = continuousAsr,
+                            audioCapture = audioCapture,
+                            ttsModelManager = ttsModelManager,
                             modifier = Modifier
                                 .align(Alignment.BottomStart)
-                                .padding(start = 16.dp, bottom = 72.dp)
-                                .widthIn(max = 520.dp),
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text("DiLink3 Voice Debug", style = MaterialTheme.typography.titleSmall)
-                                Text("Mic permission: ${if (micGranted) "GRANTED" else "DENIED"}")
-                                Text("Voice lang: ${voiceController.currentLang()}")
-                                Text("Listening: $voiceListening")
-                                Text("State: ${voiceStateLabel(voiceState)}")
-                                Text("Heard: ${lastHeard.ifBlank { "<nothing yet>" }}")
-                            }
-                        }
-
-                        // DiLink3 diagnostic: manual PTT entry point. This deliberately calls the
-                        // same VoiceController path as the steering-wheel PTT so microphone,
-                        // GigaAM ASR, routing and TTS are exercised without relying on DiLink5
-                        // steering-wheel integration.
-                        Button(
-                            onClick = {
-                                micGranted = ContextCompat.checkSelfPermission(
-                                    this@MainActivity,
-                                    Manifest.permission.RECORD_AUDIO,
-                                ) == PackageManager.PERMISSION_GRANTED
-                                Log.i(
-                                    TAG,
-                                    "DiLink3 manual voice pressed: micGranted=$micGranted lang=${voiceController.currentLang()} listening=${voiceController.listening.value} state=${voiceController.state.value}",
-                                )
-                                if (!micGranted) {
-                                    ActivityCompat.requestPermissions(
-                                        this@MainActivity,
-                                        arrayOf(Manifest.permission.RECORD_AUDIO),
-                                        AUDIO_PERMISSION_REQUEST_CODE,
-                                    )
-                                } else {
-                                    voiceController.onPttPressed()
-                                }
-                            },
-                            modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .padding(end = 24.dp, bottom = 72.dp),
-                        ) {
-                            Text(if (voiceListening) "■ Stop Voice" else "🎤 Voice")
-                        }
+                                .padding(start = 12.dp, end = 12.dp, bottom = 56.dp)
+                                .widthIn(max = 680.dp),
+                        )
                     }
                 }
             }
         }
-    }
-
-    private fun voiceStateLabel(state: VoiceUiState): String = when (state) {
-        VoiceUiState.Idle -> "IDLE"
-        VoiceUiState.Listening -> "LISTENING"
-        VoiceUiState.Thinking -> "THINKING"
-        is VoiceUiState.Done -> "DONE: ${state.transcript}"
-        is VoiceUiState.Blocked -> "BLOCKED: ${state.reason}"
-        is VoiceUiState.NotUnderstood -> "NOT_UNDERSTOOD: ${state.transcript}"
-        is VoiceUiState.AgentAnswer -> "AGENT: ${state.text}"
     }
 
     private fun requestPermissionsIfNeeded() {
@@ -258,17 +178,11 @@ class MainActivity : AppCompatActivity() {
             Log.d(TAG, "Requesting permissions: $permissions")
             ActivityCompat.requestPermissions(this, permissions.toTypedArray(), PERMISSION_REQUEST_CODE)
         } else {
-            // Base permissions granted, check background location
             requestBackgroundLocationIfNeeded()
             startTrackingService()
         }
     }
 
-    /**
-     * On Android 10+ (API 29+), ACCESS_BACKGROUND_LOCATION must be requested
-     * SEPARATELY after ACCESS_FINE_LOCATION is granted. Without it, the
-     * foreground service GPS does not work when the activity is not visible.
-     */
     private fun requestBackgroundLocationIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
@@ -304,7 +218,6 @@ class MainActivity : AppCompatActivity() {
                 if (denied.isNotEmpty()) {
                     Log.w(TAG, "Starting TrackingService with denied permissions: $denied")
                 }
-                // Now request background location (must be after fine location)
                 requestBackgroundLocationIfNeeded()
                 startTrackingService()
             }
@@ -315,10 +228,6 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     Log.w(TAG, "Background location denied — GPS may not work when app is hidden")
                 }
-            }
-            AUDIO_PERMISSION_REQUEST_CODE -> {
-                val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
-                Log.i(TAG, "Manual voice RECORD_AUDIO permission result: granted=$granted")
             }
         }
     }
