@@ -70,6 +70,9 @@ jobs:
       - name: Apply AIHubMix quick setup
         run: python3 .github/patch-dilink3-aihubmix.py
 
+      - name: Apply timing logs and Telegram export
+        run: python3 .github/patch-dilink3-logging.py
+
       - name: Build updateable debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
