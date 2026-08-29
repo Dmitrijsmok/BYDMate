@@ -73,6 +73,9 @@ jobs:
       - name: Apply timing logs and Telegram export
         run: python3 .github/patch-dilink3-logging.py
 
+      - name: Apply mic button interception and TTS inventory diagnostics
+        run: python3 .github/patch-dilink3-mic-button.py
+
       - name: Build updateable debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
