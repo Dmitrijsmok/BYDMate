@@ -2,8 +2,13 @@ package com.bydmate.app.ui.diagnostics
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
+import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,6 +22,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -103,6 +109,73 @@ fun DiLink3VoiceDebugPanel(
     var probeResults by remember { mutableStateOf<List<DiLink3AudioSourceProbe.Result>>(emptyList()) }
     var probeError by remember { mutableStateOf("") }
 
+    // Alternative ASR path: Android's installed SpeechRecognizer service. This does not use GigaAM.
+    val systemAsrAvailable = remember { SpeechRecognizer.isRecognitionAvailable(context) }
+    var systemAsrRunning by remember { mutableStateOf(false) }
+    var systemAsrStatus by remember { mutableStateOf("idle") }
+    var systemAsrHeard by remember { mutableStateOf("") }
+    var systemAsrError by remember { mutableStateOf("") }
+    var systemAsrPartial by remember { mutableStateOf("") }
+
+    val systemRecognizer = remember(systemAsrAvailable) {
+        if (systemAsrAvailable) SpeechRecognizer.createSpeechRecognizer(context) else null
+    }
+
+    DisposableEffect(systemRecognizer) {
+        onDispose {
+            runCatching { systemRecognizer?.cancel() }
+            runCatching { systemRecognizer?.destroy() }
+        }
+    }
+
+    LaunchedEffect(systemRecognizer) {
+        systemRecognizer?.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {
+                systemAsrRunning = true
+                systemAsrStatus = "ready - speak now"
+            }
+
+            override fun onBeginningOfSpeech() {
+                systemAsrStatus = "speech detected"
+            }
+
+            override fun onRmsChanged(rmsdB: Float) {
+                if (systemAsrRunning) systemAsrStatus = "listening rms=${"%.1f".format(rmsdB)}"
+            }
+
+            override fun onBufferReceived(buffer: ByteArray?) = Unit
+
+            override fun onEndOfSpeech() {
+                systemAsrStatus = "decoding..."
+            }
+
+            override fun onError(error: Int) {
+                systemAsrRunning = false
+                systemAsrError = "$error / ${speechErrorName(error)}"
+                systemAsrStatus = "ERROR"
+            }
+
+            override fun onResults(results: Bundle?) {
+                systemAsrRunning = false
+                val heard = results
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.joinToString(" | ")
+                    .orEmpty()
+                systemAsrHeard = heard
+                systemAsrStatus = if (heard.isBlank()) "finished - no text" else "decoded"
+            }
+
+            override fun onPartialResults(partialResults: Bundle?) {
+                systemAsrPartial = partialResults
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.joinToString(" | ")
+                    .orEmpty()
+            }
+
+            override fun onEvent(eventType: Int, params: Bundle?) = Unit
+        })
+    }
+
     val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val activeRecording = runCatching {
         audioManager.activeRecordingConfigurations
@@ -134,7 +207,7 @@ fun DiLink3VoiceDebugPanel(
                     modifier = Modifier.weight(1f),
                 )
                 Button(onClick = { expanded = false }) {
-                    Text("✕ CLOSE")
+                    Text("CLOSE")
                 }
             }
 
@@ -154,6 +227,7 @@ fun DiLink3VoiceDebugPanel(
                 DebugRow("Voice commands", yesNo(voiceEnabled))
                 DebugRow("Voice language", voiceLang)
                 DebugRow("GigaAM ASR ready", yesNo(asrReady))
+                DebugRow("Android System ASR", if (systemAsrAvailable) "AVAILABLE" else "NOT AVAILABLE")
                 DebugRow("TTS enabled", yesNo(ttsEnabled))
                 DebugRow("TTS voice", "${selectedVoice.id} / ${selectedVoice.engine}")
                 DebugRow("TTS model ready", yesNo(ttsReady))
@@ -167,7 +241,7 @@ fun DiLink3VoiceDebugPanel(
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Button(
-                    enabled = micGranted && !probeRunning && rawJob?.isActive != true && !listening,
+                    enabled = micGranted && !probeRunning && rawJob?.isActive != true && !listening && !systemAsrRunning,
                     onClick = {
                         probeRunning = true
                         probeResults = emptyList()
@@ -195,10 +269,56 @@ fun DiLink3VoiceDebugPanel(
                 }
                 if (probeError.isNotBlank()) DebugRow("Probe ERROR", probeError)
 
-                Text("STEP 2 - VoiceController / RAW GigaAM", style = MaterialTheme.typography.titleSmall)
+                Text("STEP 2A - Android System SpeechRecognizer", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Alternative engine test. It bypasses the GigaAM model and uses the speech recognition service installed in DiLink. If this decodes speech while GigaAM does not, the microphone path is good and the problem is GigaAM/model download or decoding.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Button(
+                    enabled = micGranted && systemAsrAvailable && !probeRunning && rawJob?.isActive != true && !listening,
+                    onClick = {
+                        if (systemAsrRunning) {
+                            runCatching { systemRecognizer?.cancel() }
+                            systemAsrRunning = false
+                            systemAsrStatus = "stopped"
+                        } else {
+                            systemAsrHeard = ""
+                            systemAsrPartial = ""
+                            systemAsrError = ""
+                            systemAsrStatus = "starting..."
+                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+                                when (voiceLang.uppercase()) {
+                                    "RU", "RU-RU" -> putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ru-RU")
+                                    "EN", "EN-US" -> putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+                                    "LV", "LV-LV" -> putExtra(RecognizerIntent.EXTRA_LANGUAGE, "lv-LV")
+                                }
+                            }
+                            runCatching {
+                                systemRecognizer?.startListening(intent)
+                                systemAsrRunning = true
+                            }.onFailure { t ->
+                                systemAsrRunning = false
+                                systemAsrStatus = "ERROR"
+                                systemAsrError = "${t::class.java.simpleName}: ${t.message}"
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (systemAsrRunning) "STOP SYSTEM ASR" else "TEST ANDROID SYSTEM ASR")
+                }
+                DebugRow("System ASR status", systemAsrStatus)
+                DebugRow("System ASR partial", systemAsrPartial.ifBlank { "<none>" })
+                DebugRow("System ASR HEARD", systemAsrHeard.ifBlank { "<nothing decoded>" })
+                DebugRow("System ASR ERROR", systemAsrError.ifBlank { "none" })
+
+                Text("STEP 2B - VoiceController / RAW GigaAM", style = MaterialTheme.typography.titleSmall)
 
                 Button(
-                    enabled = !probeRunning,
+                    enabled = !probeRunning && !systemAsrRunning,
                     onClick = { voiceController.onPttPressed() },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -206,7 +326,7 @@ fun DiLink3VoiceDebugPanel(
                 }
 
                 Button(
-                    enabled = micGranted && asrReady && !probeRunning,
+                    enabled = micGranted && asrReady && !probeRunning && !systemAsrRunning,
                     onClick = {
                         if (rawJob?.isActive == true) {
                             rawJob?.cancel()
@@ -255,7 +375,7 @@ fun DiLink3VoiceDebugPanel(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(if (rawJob?.isActive == true) "STOP RAW" else "RAW ASR TEST")
+                    Text(if (rawJob?.isActive == true) "STOP RAW" else "RAW GIGAAM ASR TEST")
                 }
 
                 Text("RAW ASR TEST (AudioCapture -> GigaAM)", style = MaterialTheme.typography.titleSmall)
@@ -267,16 +387,15 @@ fun DiLink3VoiceDebugPanel(
                 DebugRow("ERROR", rawError.ifBlank { "none" })
 
                 Text(
-                    "How to read this: if every mic source fails INIT/START/READ, DiLink3 is blocking Android microphone capture. If at least one source shows read=OK with peak/rms above zero, the car is giving BYDMate real PCM and OpenRouter is irrelevant. Then run RAW ASR TEST: frames>0 but SpeechStart=0 means VAD; SpeechStart>0 but HEARD empty means GigaAM decode/model; HEARD text proves the complete local recognition chain.",
+                    "Interpretation: mic probe read=OK proves raw PCM access. System ASR HEARD text proves DiLink's installed recognizer can use the mic without GigaAM. If System ASR works but GigaAM stays not ready or fails, focus on the GigaAM model/download source. If System ASR reports unavailable, DiLink has no compatible recognition service installed.",
                     style = MaterialTheme.typography.bodySmall,
                 )
 
-                // Second escape hatch at the bottom for oversized/quirky DiLink screens.
                 Button(
                     onClick = { expanded = false },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("✕ CLOSE DEBUG")
+                    Text("CLOSE DEBUG")
                 }
             }
         }
@@ -302,3 +421,16 @@ private fun DebugRow(label: String, value: String) {
 }
 
 private fun yesNo(value: Boolean): String = if (value) "YES" else "NO"
+
+private fun speechErrorName(error: Int): String = when (error) {
+    SpeechRecognizer.ERROR_AUDIO -> "AUDIO"
+    SpeechRecognizer.ERROR_CLIENT -> "CLIENT"
+    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "INSUFFICIENT_PERMISSIONS"
+    SpeechRecognizer.ERROR_NETWORK -> "NETWORK"
+    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "NETWORK_TIMEOUT"
+    SpeechRecognizer.ERROR_NO_MATCH -> "NO_MATCH"
+    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "RECOGNIZER_BUSY"
+    SpeechRecognizer.ERROR_SERVER -> "SERVER"
+    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "SPEECH_TIMEOUT"
+    else -> "UNKNOWN"
+}
