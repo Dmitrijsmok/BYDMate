@@ -3,4 +3,5 @@
     <external-path name="downloads" path="Download/" />
     <!-- dumpFids() fallback target when the public Download is unavailable (W6-F4) -->
     <external-files-path name="fid_dumps_external" path="." />
+    <cache-path name="dilink3_debug_logs" path="dilink3-debug/" />
 </paths>
