@@ -76,6 +76,16 @@ jobs:
       - name: Apply mic button interception and TTS inventory diagnostics
         run: python3 .github/patch-dilink3-mic-button.py
 
+      - name: Fix diagnostic Activity focus invocation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/kotlin/com/bydmate/app/MainActivity.kt')
+          s = p.read_text()
+          s = s.replace('"hasFocus=$hasWindowFocus"', '"hasFocus=${hasWindowFocus()}"')
+          p.write_text(s)
+          PY
+
       - name: Build updateable debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
