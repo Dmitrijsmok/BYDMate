@@ -77,7 +77,10 @@ class DiLink3E2EBridge(context: Context) {
 
         return when (val result = deps.agentOrchestrator().ask(text)) {
             is AgentResult.Answer -> {
-                val spoken = runCatching { deps.ttsEngine().speak(result.text) }.getOrDefault(false)
+                // The Settings "Test Model"/local voice preview intentionally bypasses the
+                // online TTS router. That path is already proven audible on DiLink 3, so use
+                // the exact same local-output route for diagnostic AI replies.
+                val spoken = runCatching { deps.ttsEngine().speakOffline(result.text) }.getOrDefault(false)
                 Result(answer = result.text, spoken = spoken)
             }
             is AgentResult.Error -> Result(error = result.message)
