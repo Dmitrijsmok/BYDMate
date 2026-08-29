@@ -45,6 +45,8 @@ import kotlinx.coroutines.launch
 /** Visible, self-contained DiLink3 diagnostic panel. It intentionally includes:
  *  1) a source-by-source Android AudioRecord probe (no GigaAM, no VoiceController), and
  *  2) a RAW ASR test that feeds AudioCapture directly into GigaAM.
+ *
+ * The panel can be collapsed to a small OPEN DEBUG button so it never traps the user on-screen.
  */
 @Composable
 fun DiLink3VoiceDebugPanel(
@@ -58,6 +60,21 @@ fun DiLink3VoiceDebugPanel(
     val voiceState by voiceController.state.collectAsState()
     val listening by voiceController.listening.collectAsState()
     val scope = rememberCoroutineScope()
+    var expanded by remember { mutableStateOf(true) }
+
+    if (!expanded) {
+        Card(modifier = modifier.fillMaxWidth()) {
+            Button(
+                onClick = { expanded = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp),
+            ) {
+                Text("OPEN DiLink3 VOICE DEBUG")
+            }
+        }
+        return
+    }
 
     val prefs = remember { context.getSharedPreferences("voice", Context.MODE_PRIVATE) }
     var refresh by remember { mutableLongStateOf(0L) }
@@ -113,7 +130,25 @@ fun DiLink3VoiceDebugPanel(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text("DiLink3 Voice Debug", style = MaterialTheme.typography.titleMedium)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "DiLink3 Voice Debug",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                Button(onClick = { expanded = false }) {
+                    Text("CLOSE")
+                }
+            }
+
+            Text(
+                "You can close this panel at any time. Re-open it with OPEN DiLink3 VOICE DEBUG.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
             DebugRow("Mic permission", yesNo(micGranted))
             DebugRow("Voice commands", yesNo(voiceEnabled))
             DebugRow("Voice language", voiceLang)
@@ -146,6 +181,7 @@ fun DiLink3VoiceDebugPanel(
                         }
                     }
                 },
+                modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(if (probeRunning) "PROBING..." else "PROBE MIC SOURCES")
             }
@@ -159,64 +195,66 @@ fun DiLink3VoiceDebugPanel(
             if (probeError.isNotBlank()) DebugRow("Probe ERROR", probeError)
 
             Text("STEP 2 - VoiceController / RAW GigaAM", style = MaterialTheme.typography.titleSmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    enabled = !probeRunning,
-                    onClick = { voiceController.onPttPressed() },
-                ) {
-                    Text(if (listening) "STOP Voice" else "START Voice")
-                }
-                Button(
-                    enabled = micGranted && asrReady && !probeRunning,
-                    onClick = {
-                        if (rawJob?.isActive == true) {
-                            rawJob?.cancel()
-                            rawStatus = "stopping..."
-                        } else {
-                            rawFrames = 0
-                            rawSamples = 0
-                            rawSpeechStarts = 0
-                            rawHeard = ""
-                            rawError = ""
-                            rawStatus = "starting mic + GigaAM..."
-                            rawJob = scope.launch {
-                                try {
-                                    val pcm = audioCapture.captureSession(maxMs = 20_000)
-                                        .onEach { frame ->
-                                            rawFrames++
-                                            rawSamples += frame.size
-                                            rawStatus = "PCM flowing"
+
+            Button(
+                enabled = !probeRunning,
+                onClick = { voiceController.onPttPressed() },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (listening) "STOP Voice" else "START Voice")
+            }
+
+            Button(
+                enabled = micGranted && asrReady && !probeRunning,
+                onClick = {
+                    if (rawJob?.isActive == true) {
+                        rawJob?.cancel()
+                        rawStatus = "stopping..."
+                    } else {
+                        rawFrames = 0
+                        rawSamples = 0
+                        rawSpeechStarts = 0
+                        rawHeard = ""
+                        rawError = ""
+                        rawStatus = "starting mic + GigaAM..."
+                        rawJob = scope.launch {
+                            try {
+                                val pcm = audioCapture.captureSession(maxMs = 20_000)
+                                    .onEach { frame ->
+                                        rawFrames++
+                                        rawSamples += frame.size
+                                        rawStatus = "PCM flowing"
+                                    }
+                                continuousAsr.transcribe(pcm).collect { ev ->
+                                    when (ev) {
+                                        ContinuousAsrEvent.SpeechStart -> {
+                                            rawSpeechStarts++
+                                            rawStatus = "speech detected"
                                         }
-                                    continuousAsr.transcribe(pcm).collect { ev ->
-                                        when (ev) {
-                                            ContinuousAsrEvent.SpeechStart -> {
-                                                rawSpeechStarts++
-                                                rawStatus = "speech detected"
-                                            }
-                                            is ContinuousAsrEvent.SilenceTick -> {
-                                                if (rawSpeechStarts == 0L) rawStatus = "listening / silence ${ev.silentMs}ms"
-                                            }
-                                            is ContinuousAsrEvent.Utterance -> {
-                                                rawHeard = ev.text
-                                                rawStatus = "decoded"
-                                            }
+                                        is ContinuousAsrEvent.SilenceTick -> {
+                                            if (rawSpeechStarts == 0L) rawStatus = "listening / silence ${ev.silentMs}ms"
+                                        }
+                                        is ContinuousAsrEvent.Utterance -> {
+                                            rawHeard = ev.text
+                                            rawStatus = "decoded"
                                         }
                                     }
-                                    rawStatus = "finished"
-                                } catch (t: Throwable) {
-                                    if (t is CancellationException) {
-                                        rawStatus = "stopped"
-                                        throw t
-                                    }
-                                    rawError = "${t::class.java.simpleName}: ${t.message}"
-                                    rawStatus = "ERROR"
                                 }
+                                rawStatus = "finished"
+                            } catch (t: Throwable) {
+                                if (t is CancellationException) {
+                                    rawStatus = "stopped"
+                                    throw t
+                                }
+                                rawError = "${t::class.java.simpleName}: ${t.message}"
+                                rawStatus = "ERROR"
                             }
                         }
-                    },
-                ) {
-                    Text(if (rawJob?.isActive == true) "STOP RAW" else "RAW ASR TEST")
-                }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (rawJob?.isActive == true) "STOP RAW" else "RAW ASR TEST")
             }
 
             Text("RAW ASR TEST (AudioCapture -> GigaAM)", style = MaterialTheme.typography.titleSmall)
@@ -244,7 +282,12 @@ private fun DebugRow(label: String, value: String) {
             .padding(horizontal = 8.dp, vertical = 5.dp)
     ) {
         Text(label, style = MaterialTheme.typography.labelSmall)
-        Text(value, style = MaterialTheme.typography.bodySmall)
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.fillMaxWidth(),
+            softWrap = true,
+        )
     }
 }
 
