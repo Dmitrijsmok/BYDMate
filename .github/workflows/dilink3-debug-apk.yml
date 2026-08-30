@@ -89,6 +89,16 @@ jobs:
       - name: Apply guided diagnostic wizard and batch checks
         run: python3 .github/patch-dilink3-wizard.py
 
+      - name: Fix wizard primitive input-device collection
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt')
+          s = p.read_text()
+          s = s.replace('InputDevice.getDeviceIds().mapNotNull', 'InputDevice.getDeviceIds().toList().mapNotNull')
+          p.write_text(s)
+          PY
+
       - name: Build updateable debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
