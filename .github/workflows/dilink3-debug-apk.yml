@@ -99,6 +99,9 @@ jobs:
           p.write_text(s)
           PY
 
+      - name: Apply keyCode 304 interception and latency tracing
+        run: python3 .github/patch-dilink3-304-latency.py
+
       - name: Build updateable debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
