@@ -40,7 +40,9 @@ jobs:
               raise SystemExit('buildTypes insertion point not found')
           text = text.replace(needle, replacement, 1)
           run_number = int(os.environ['GITHUB_RUN_NUMBER'])
-          diag_version_code = 50000 + run_number
+          # Use a deliberately high diagnostic versionCode base so this APK can
+          # always update every Build48/49/50 diagnostic APK already distributed.
+          diag_version_code = 500000 + run_number
           old_version = '        versionCode = 433'
           if old_version not in text:
               raise SystemExit('versionCode insertion point not found')
