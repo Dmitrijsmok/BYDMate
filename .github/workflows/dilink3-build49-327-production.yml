@@ -1,4 +1,4 @@
-name: DiLink3 Build52 BYD-Compatible Key Trace
+name: DiLink3 Build53 Clean Provenance Key Trace
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: dilink3-build52-${{ github.ref }}
+  group: dilink3-build53-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -39,25 +39,23 @@ jobs:
               raise SystemExit('buildTypes insertion point not found')
           text = text.replace(needle, replacement, 1)
 
-          # Build49 (49002) is the last confirmed installable build on this DiLink 3 unit.
-          # The 500005/510001 experiments pass normal Android APK verification but the BYD
-          # package UI reports that it cannot process them. Keep the usable sequence strictly
-          # increasing while staying below 65536 to avoid a suspected OEM parser limitation.
-          diag_version_code = 60001
-          assert 49002 < diag_version_code < 65536
+          # Keep every installable DiLink3 diagnostic build strictly increasing while
+          # remaining below the suspected BYD PackageInstaller 16-bit parser boundary.
+          diag_version_code = 60002
+          assert 60001 < diag_version_code < 65536
           old_version = '        versionCode = 433'
           if old_version not in text:
               raise SystemExit('versionCode insertion point not found')
           text = text.replace(old_version, f'        versionCode = {diag_version_code}', 1)
           gradle.write_text(text)
-          print(f'Build52 versionCode={diag_version_code}')
+          print(f'Build53 versionCode={diag_version_code}')
 
           manifest = Path('app/src/main/AndroidManifest.xml')
           m = manifest.read_text()
           old = 'android:label="BYDMate"'
           if old not in m:
               raise SystemExit('application label not found')
-          manifest.write_text(m.replace(old, 'android:label="BYDMate DiLink3 Build52"', 1))
+          manifest.write_text(m.replace(old, 'android:label="BYDMate DiLink3 Build53"', 1))
           PY
 
       - name: Apply DiLink3 E2E bridge
@@ -108,11 +106,13 @@ jobs:
         run: python3 .github/patch-dilink3-build49-327-production.py
       - name: Apply build50 clean all-key trace
         run: python3 .github/patch-dilink3-build50-clean-keytrace.py
+      - name: Apply build53 stale-log reset and provenance markers
+        run: python3 .github/patch-dilink3-build53-log-reset.py
 
-      - name: Build Build52 APK
+      - name: Build Build53 APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
-      - name: Verify APK package, manifest, alignment and signature
+      - name: Verify APK package, signature and diagnostic provenance
         run: |
           set -euo pipefail
           APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
@@ -124,20 +124,36 @@ jobs:
           test -x "$BUILD_TOOLS/aapt"
           test -x "$BUILD_TOOLS/apksigner"
           test -x "$BUILD_TOOLS/zipalign"
-          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee /tmp/build52-badging.txt
-          grep -F "package: name='com.bydmate.app.dilink3diag' versionCode='60001'" /tmp/build52-badging.txt
-          grep -F "sdkVersion:'29'" /tmp/build52-badging.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee /tmp/build53-badging.txt
+          grep -F "package: name='com.bydmate.app.dilink3diag' versionCode='60002'" /tmp/build53-badging.txt
+          grep -F "sdkVersion:'29'" /tmp/build53-badging.txt
           "$BUILD_TOOLS/zipalign" -c -v 4 "$APK"
-          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/build52-signature.txt
-          grep -F "certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb" /tmp/build52-signature.txt
-          mkdir -p verified
-          cp "$APK" verified/BYDMate-DiLink3-build52.apk
-          sha256sum verified/BYDMate-DiLink3-build52.apk | tee verified/BYDMate-DiLink3-build52.sha256
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/build53-signature.txt
+          grep -F "certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb" /tmp/build53-signature.txt
 
-      - name: Upload verified Build52 APK
+          # Verify the actual compiled DEX, not just the patch source. Build53 must contain
+          # the live key trace/blocker + provenance marker and must NOT contain the retired
+          # privacy-noisy A11Y_WINDOW_TRACE logger anywhere in the APK.
+          : > /tmp/build53-dex-strings.txt
+          while IFS= read -r dex; do
+            unzip -p "$APK" "$dex" | strings >> /tmp/build53-dex-strings.txt
+          done < <(zipinfo -1 "$APK" | grep '^classes.*\.dex$')
+          grep -F "BUILD53_LOG_RESET" /tmp/build53-dex-strings.txt
+          grep -F "BUILD50_KEY_EVENT" /tmp/build53-dex-strings.txt
+          grep -F "BUILD49_STOCK_ASSISTANT_327_BLOCKED" /tmp/build53-dex-strings.txt
+          if grep -Fq "A11Y_WINDOW_TRACE" /tmp/build53-dex-strings.txt; then
+            echo "ERROR: retired A11Y_WINDOW_TRACE still exists in compiled APK"
+            exit 1
+          fi
+
+          mkdir -p verified
+          cp "$APK" verified/BYDMate-DiLink3-build53.apk
+          sha256sum verified/BYDMate-DiLink3-build53.apk | tee verified/BYDMate-DiLink3-build53.sha256
+
+      - name: Upload verified Build53 APK
         uses: actions/upload-artifact@v7
         with:
-          name: bydmate-dilink3-build52-byd-compatible
+          name: bydmate-dilink3-build53-clean-provenance
           path: verified/*
           if-no-files-found: error
           retention-days: 14
