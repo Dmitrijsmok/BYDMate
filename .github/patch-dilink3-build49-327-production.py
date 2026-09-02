@@ -49,25 +49,26 @@ if 'BUILD49_A11Y_CONNECTED' not in s:
     s = s.replace(anchor, replacement, 1)
 p.write_text(s)
 
-# 2) This APK uses applicationIdSuffix=.dilink3diag. The helper's original constants
-# point at com.bydmate.app, which would re-bind the wrong AccessibilityService after
-# boot/wake. Point the narrow self-grants at this diagnostic package instead.
+# 2) This APK uses applicationIdSuffix=.dilink3diag. Build42 already retargets these
+# constants in the normal patch chain, so this step must be idempotent.
 p = Path('app/src/main/kotlin/com/bydmate/app/helper/HelperBinderProtocol.kt')
 s = p.read_text()
 old_pkg = '    const val APP_PACKAGE = "com.bydmate.app"\n'
 new_pkg = '    const val APP_PACKAGE = "com.bydmate.app.dilink3diag"\n'
-if old_pkg not in s:
-    raise SystemExit('build49 APP_PACKAGE anchor not found')
-s = s.replace(old_pkg, new_pkg, 1)
+if old_pkg in s:
+    s = s.replace(old_pkg, new_pkg, 1)
+elif new_pkg not in s:
+    raise SystemExit('build49 APP_PACKAGE diagnostic value not found')
 old_component = '''    const val ACCESSIBILITY_SERVICE_COMPONENT =
         "com.bydmate.app/com.bydmate.app.cluster.SteeringWheelKeyService"
 '''
 new_component = '''    const val ACCESSIBILITY_SERVICE_COMPONENT =
         "com.bydmate.app.dilink3diag/com.bydmate.app.cluster.SteeringWheelKeyService"
 '''
-if old_component not in s:
-    raise SystemExit('build49 accessibility component anchor not found')
-s = s.replace(old_component, new_component, 1)
+if old_component in s:
+    s = s.replace(old_component, new_component, 1)
+elif new_component not in s:
+    raise SystemExit('build49 accessibility diagnostic component not found')
 p.write_text(s)
 
 # 3) Keep the key-filter service alive even when projection/voice/knob/HUD features are
