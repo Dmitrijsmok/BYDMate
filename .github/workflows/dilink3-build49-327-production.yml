@@ -1,4 +1,4 @@
-name: DiLink3 Build49 Production 327 Blocker
+name: DiLink3 Build50 Clean Key Trace
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: dilink3-build49-${{ github.ref }}
+  group: dilink3-build50-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -40,9 +40,7 @@ jobs:
               raise SystemExit('buildTypes insertion point not found')
           text = text.replace(needle, replacement, 1)
           run_number = int(os.environ['GITHUB_RUN_NUMBER'])
-          # Keep Build49 strictly above fixed Build48 (48xxx) so Android accepts
-          # an in-place update with the same package and signing key.
-          diag_version_code = 49000 + run_number
+          diag_version_code = 50000 + run_number
           old_version = '        versionCode = 433'
           if old_version not in text:
               raise SystemExit('versionCode insertion point not found')
@@ -53,7 +51,7 @@ jobs:
           old = 'android:label="BYDMate"'
           if old not in m:
               raise SystemExit('application label not found')
-          manifest.write_text(m.replace(old, 'android:label="BYDMate DiLink3 Build49"', 1))
+          manifest.write_text(m.replace(old, 'android:label="BYDMate DiLink3 Build50"', 1))
           PY
 
       - name: Apply DiLink3 E2E bridge
@@ -100,16 +98,18 @@ jobs:
         run: python3 .github/patch-dilink3-build47-304-block-lab.py
       - name: Apply build48 focused 327 block lab
         run: python3 .github/patch-dilink3-build48-327-block-lab.py
-      - name: Apply build49 production 327 blocker last
+      - name: Apply build49 production 327 blocker
         run: python3 .github/patch-dilink3-build49-327-production.py
+      - name: Apply build50 clean all-key trace last
+        run: python3 .github/patch-dilink3-build50-clean-keytrace.py
 
       - name: Build updateable debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
-      - name: Upload build49 debug APK
+      - name: Upload build50 debug APK
         uses: actions/upload-artifact@v7
         with:
-          name: bydmate-dilink3-build49-327-production
+          name: bydmate-dilink3-build50-clean-keytrace
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
