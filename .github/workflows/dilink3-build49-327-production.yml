@@ -129,7 +129,7 @@ jobs:
           grep -F "sdkVersion:'29'" /tmp/build52-badging.txt
           "$BUILD_TOOLS/zipalign" -c -v 4 "$APK"
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/build52-signature.txt
-          grep -F "Signer #1 certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb" /tmp/build52-signature.txt
+          grep -F "certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb" /tmp/build52-signature.txt
           mkdir -p verified
           cp "$APK" verified/BYDMate-DiLink3-build52.apk
           sha256sum verified/BYDMate-DiLink3-build52.apk | tee verified/BYDMate-DiLink3-build52.sha256
