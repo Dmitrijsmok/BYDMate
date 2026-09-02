@@ -1,4 +1,4 @@
-name: DiLink3 Build50 Clean Key Trace
+name: DiLink3 Build51 Verified Key Trace
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: dilink3-build50-${{ github.ref }}
+  group: dilink3-build51-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -25,7 +25,6 @@ jobs:
         run: |
           base64 -d .github/dilink3-debug.keystore.b64 > .github/dilink3-debug.keystore
           python3 - <<'PY'
-          import os
           from pathlib import Path
           gradle = Path('app/build.gradle.kts')
           text = gradle.read_text()
@@ -39,21 +38,21 @@ jobs:
           if needle not in text:
               raise SystemExit('buildTypes insertion point not found')
           text = text.replace(needle, replacement, 1)
-          run_number = int(os.environ['GITHUB_RUN_NUMBER'])
-          # Use a deliberately high diagnostic versionCode base so this APK can
-          # always update every Build48/49/50 diagnostic APK already distributed.
-          diag_version_code = 500000 + run_number
+          # IMPORTANT: every distributed diagnostic build must have a strictly
+          # higher versionCode than all previous ones so it installs as an update.
+          diag_version_code = 510001
           old_version = '        versionCode = 433'
           if old_version not in text:
               raise SystemExit('versionCode insertion point not found')
           text = text.replace(old_version, f'        versionCode = {diag_version_code}', 1)
           gradle.write_text(text)
+          print(f'Build51 versionCode={diag_version_code}')
           manifest = Path('app/src/main/AndroidManifest.xml')
           m = manifest.read_text()
           old = 'android:label="BYDMate"'
           if old not in m:
               raise SystemExit('application label not found')
-          manifest.write_text(m.replace(old, 'android:label="BYDMate DiLink3 Build50"', 1))
+          manifest.write_text(m.replace(old, 'android:label="BYDMate DiLink3 Build51"', 1))
           PY
 
       - name: Apply DiLink3 E2E bridge
@@ -102,16 +101,37 @@ jobs:
         run: python3 .github/patch-dilink3-build48-327-block-lab.py
       - name: Apply build49 production 327 blocker
         run: python3 .github/patch-dilink3-build49-327-production.py
-      - name: Apply build50 clean all-key trace last
+      - name: Apply build50 clean all-key trace
         run: python3 .github/patch-dilink3-build50-clean-keytrace.py
 
-      - name: Build updateable debug APK
+      - name: Build Build51 APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
-      - name: Upload build50 debug APK
+      - name: Verify APK package, manifest, alignment and signature
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          test -n "$APK"
+          echo "APK=$APK"
+          unzip -t "$APK"
+          BUILD_TOOLS="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          echo "BUILD_TOOLS=$BUILD_TOOLS"
+          test -x "$BUILD_TOOLS/aapt"
+          test -x "$BUILD_TOOLS/apksigner"
+          test -x "$BUILD_TOOLS/zipalign"
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee /tmp/build51-badging.txt
+          grep -F "package: name='com.bydmate.app.dilink3diag' versionCode='510001'" /tmp/build51-badging.txt
+          grep -F "sdkVersion:'29'" /tmp/build51-badging.txt
+          "$BUILD_TOOLS/zipalign" -c -v 4 "$APK"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK"
+          mkdir -p verified
+          cp "$APK" verified/BYDMate-DiLink3-build51.apk
+          sha256sum verified/BYDMate-DiLink3-build51.apk | tee verified/BYDMate-DiLink3-build51.sha256
+
+      - name: Upload verified Build51 APK
         uses: actions/upload-artifact@v7
         with:
-          name: bydmate-dilink3-build50-clean-keytrace
-          path: app/build/outputs/apk/debug/*.apk
+          name: bydmate-dilink3-build51-verified
+          path: verified/*
           if-no-files-found: error
           retention-days: 14
