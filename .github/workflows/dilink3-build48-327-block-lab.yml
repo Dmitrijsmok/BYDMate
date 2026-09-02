@@ -40,7 +40,9 @@ jobs:
               raise SystemExit('buildTypes insertion point not found')
           text = text.replace(needle, replacement, 1)
           run_number = int(os.environ['GITHUB_RUN_NUMBER'])
-          diag_version_code = 17000 + run_number
+          # Build48 uses its own workflow counter, so keep its versionCode in a
+          # higher range than Build47 to guarantee Android treats it as an update.
+          diag_version_code = 48000 + run_number
           old_version = '        versionCode = 433'
           if old_version not in text:
               raise SystemExit('versionCode insertion point not found')
