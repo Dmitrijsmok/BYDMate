@@ -170,6 +170,11 @@ s = s.replace(
     'Text("Accessibility нужен для кнопок руля/voice PTT, steering-key automation, star projection trigger, knob override и Navi HUD reads. Split-screen запускается через helper и сам по себе от Accessibility не зависит.", style = MaterialTheme.typography.bodySmall)',
     1,
 )
+s = s.replace(
+    'log("BUILD55_LOG_CLEARED", "versionCode=60004")',
+    'log("BUILD56_LOG_CLEARED", "versionCode=60005")',
+    1,
+)
 
 p.write_text(s)
 print('Build56 production blocker activation + physical 304 routing installed')
