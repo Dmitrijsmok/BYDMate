@@ -1,29 +1,26 @@
 from pathlib import Path
 
 # Build56 production follow-up to the successful Build55 field test.
-# - Keep the confirmed unconditional keyCode 327 blocker.
-# - Route the physical DiLink3 mic 304/scanCode 290 into BYDMate's existing voice/PTT path.
-# - Replace the multi-step A11Y lab controls with one ACTIVATE BLOCKER action using the
-#   exact ADB/Secure-Settings repair path that succeeded in the vehicle on Build55.
-# - Keep status + clean/share log diagnostics.
+# Keep the confirmed 327 blocker, route the physical 304 into BYDMate's existing
+# voice/PTT path, and collapse Accessibility recovery to one proven action.
 
-# 1) Physical mic 304 -> existing BYDMate voice action when voice is enabled.
+# ---------------------------------------------------------------------------
+# 1) Physical mic 304 -> existing BYDMate voice/PTT route.
+# The earlier mic-diagnostic patch has already rewritten voiceDecision() into a
+# voiceKeyDecision variable, so patch that generated form rather than the raw source.
+# ---------------------------------------------------------------------------
 p = Path('app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt')
 s = p.read_text()
-old = '''        val voicePrefs = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
-        val voiceEnabled = voicePrefs.getBoolean("voice_enabled", false)
-        val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)
-        when (voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey)) {
-'''
-new = '''        val voicePrefs = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
-        val voiceEnabled = voicePrefs.getBoolean("voice_enabled", false)
-        val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)
 
-        // Build56 DiLink3 microphone mapping. The physical microphone button emits
-        // 304/scanCode=290 plus 327/scanCode=294. Build49 consumes 327 above to suppress
-        // the stock BYD assistant. Feed the matching physical 304 into BYDMate's normal
-        // configured voice/PTT route instead of requiring the generic default keyCode 320.
-        // Do not bind deviceId because it can change across vehicle boots.
+voice_key_anchor = '        val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)\n'
+if voice_key_anchor not in s:
+    raise SystemExit('Build56 voiceKey anchor not found')
+
+if 'BUILD56_MIC_304_ROUTED_TO_BYDMATE' not in s:
+    mapping = '''
+        // Build56 DiLink3 microphone mapping. One physical press emits
+        // 304/scanCode=290 plus 327/scanCode=294. Build49 consumes 327 above.
+        // Keep deviceId out of the signature because it may change after reboot.
         val build56PhysicalMic304 = event.keyCode == 304 && event.scanCode == 290 && event.source == 257
         val build56VoiceEventKey = if (build56PhysicalMic304) voiceKey else event.keyCode
         if (build56PhysicalMic304) {
@@ -33,14 +30,20 @@ new = '''        val voicePrefs = applicationContext.getSharedPreferences("voice
                 "action=${event.action} isDown=$isDown voiceEnabled=$voiceEnabled configuredVoiceKey=$voiceKey scanCode=${event.scanCode} source=${event.source}"
             )
         }
-        when (voiceDecision(build56VoiceEventKey, isDown, voiceEnabled, voiceKey)) {
 '''
-if old not in s:
-    raise SystemExit('Build56 voice routing anchor not found')
-s = s.replace(old, new, 1)
+    s = s.replace(voice_key_anchor, voice_key_anchor + mapping, 1)
+
+old_decision = '        val voiceKeyDecision = voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey)\n'
+new_decision = '        val voiceKeyDecision = voiceDecision(build56VoiceEventKey, isDown, voiceEnabled, voiceKey)\n'
+if old_decision not in s:
+    raise SystemExit('Build56 generated voiceKeyDecision anchor not found')
+s = s.replace(old_decision, new_decision, 1)
 p.write_text(s)
 
-# 2) Simplify the Build55 recovery panel to one user-facing activation path.
+# ---------------------------------------------------------------------------
+# 2) Simplify Build55 recovery panel to one user-facing ACTIVATE BLOCKER path.
+# It uses the exact Secure Settings remove/re-add sequence that succeeded in-car.
+# ---------------------------------------------------------------------------
 p = Path('app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt')
 s = p.read_text()
 
@@ -85,8 +88,6 @@ if 'fun build56ActivateBlocker()' not in s:
             val withoutOurs = original.filter { it != component }
             val withOurs = (withoutOurs + component).distinct()
 
-            // Proven Build55 field-repair sequence: remove our exact component, re-add it,
-            // then assert accessibility_enabled=1. Preserve every other service entry.
             val r0 = runCatching {
                 adb.execDiagnosticMutation("set_a11y_services", if (withoutOurs.isEmpty()) "null" else withoutOurs.joinToString(":"))
             }.getOrNull()
@@ -116,12 +117,15 @@ if 'fun build56ActivateBlocker()' not in s:
 '''
     s = s.replace(card_anchor, function + card_anchor, 1)
 
+if 'DiLink3 STOCK ASSISTANT BLOCKER #55' not in s:
+    raise SystemExit('Build56 Build55 title anchor not found')
 s = s.replace('DiLink3 STOCK ASSISTANT BLOCKER #55', 'DiLink3 STOCK ASSISTANT BLOCKER #56', 1)
-s = s.replace(
-    'Text("keyCode 327 блокируется только когда наш AccessibilityService реально подключён. 304 остаётся доступен BYDMate.")',
-    'Text("327 блокирует штатный BYD Assistant. Физический 304/scanCode 290 направляется в обычный BYDMate voice/PTT маршрут.")',
-    1,
-)
+
+old_description = 'Text("keyCode 327 блокируется только когда наш AccessibilityService реально подключён. 304 остаётся доступен BYDMate.")'
+new_description = 'Text("327 блокирует штатный BYD Assistant. Физический 304/scanCode 290 направляется в обычный BYDMate voice/PTT маршрут.")'
+if old_description not in s:
+    raise SystemExit('Build56 Build55 description anchor not found')
+s = s.replace(old_description, new_description, 1)
 
 old_controls = r'''            Button(onClick = { build55RefreshAccessibilityStatus() }, modifier = Modifier.fillMaxWidth()) {
                 Text("1. ПРОВЕРИТЬ СТАТУС БЛОКИРОВКИ")
@@ -159,22 +163,22 @@ if old_controls not in s:
     raise SystemExit('Build56 Build55 controls anchor not found')
 s = s.replace(old_controls, new_controls, 1)
 
-s = s.replace(
-    'DiLink3DebugLog.log(context, "BUILD55_LOG_SHARE_PRESSED", "path=${context.filesDir.absolutePath}/dilink3-voice-debug.log")',
-    'DiLink3DebugLog.log(context, "BUILD56_LOG_SHARE_PRESSED", "path=${context.filesDir.absolutePath}/dilink3-voice-debug.log")',
-    1,
-)
+share_old = 'DiLink3DebugLog.log(context, "BUILD55_LOG_SHARE_PRESSED", "path=${context.filesDir.absolutePath}/dilink3-voice-debug.log")'
+if share_old not in s:
+    raise SystemExit('Build56 share marker anchor not found')
+s = s.replace(share_old, 'DiLink3DebugLog.log(context, "BUILD56_LOG_SHARE_PRESSED", "path=${context.filesDir.absolutePath}/dilink3-voice-debug.log")', 1)
 s = s.replace('Text("6. ОТПРАВИТЬ ДИАГНОСТИЧЕСКИЙ ЛОГ")', 'Text("ОТПРАВИТЬ ЛОГ")', 1)
-s = s.replace(
-    'Text("После ENABLE статус обязан показать blockerActive=true. Затем нажмите физическую кнопку микрофона: в логе ожидаются BUILD50_KEY_EVENT и BUILD49_STOCK_ASSISTANT_327_BLOCKED.", style = MaterialTheme.typography.bodySmall)',
-    'Text("Accessibility нужен для кнопок руля/voice PTT, steering-key automation, star projection trigger, knob override и Navi HUD reads. Split-screen запускается через helper и сам по себе от Accessibility не зависит.", style = MaterialTheme.typography.bodySmall)',
-    1,
-)
-s = s.replace(
-    'log("BUILD55_LOG_CLEARED", "versionCode=60004")',
-    'log("BUILD56_LOG_CLEARED", "versionCode=60005")',
-    1,
-)
+
+footer_old = 'Text("После ENABLE статус обязан показать blockerActive=true. Затем нажмите физическую кнопку микрофона: в логе ожидаются BUILD50_KEY_EVENT и BUILD49_STOCK_ASSISTANT_327_BLOCKED.", style = MaterialTheme.typography.bodySmall)'
+footer_new = 'Text("Accessibility нужен для кнопок руля/voice PTT, steering-key automation, star projection trigger, knob override и Navi HUD reads. Split-screen запускается через helper и сам по себе от Accessibility не зависит.", style = MaterialTheme.typography.bodySmall)'
+if footer_old not in s:
+    raise SystemExit('Build56 Build55 footer anchor not found')
+s = s.replace(footer_old, footer_new, 1)
+
+clear_old = 'log("BUILD55_LOG_CLEARED", "versionCode=60004")'
+if clear_old not in s:
+    raise SystemExit('Build56 clear-log marker anchor not found')
+s = s.replace(clear_old, 'log("BUILD56_LOG_CLEARED", "versionCode=60005")', 1)
 
 p.write_text(s)
 print('Build56 production blocker activation + physical 304 routing installed')
