@@ -1,4 +1,4 @@
-name: DiLink3 Build56 Production Mic + Blocker
+name: DiLink3 Build57 Reliability Bundle
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: dilink3-build56-${{ github.ref }}
+  group: dilink3-build57-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -43,9 +43,9 @@ jobs:
           text = text.replace(build_types_needle, build_types_replacement, 1)
 
           diag_version_code = int(Path('.github/dilink3-version-code.txt').read_text().strip())
-          if diag_version_code != 60005:
-              raise SystemExit(f'Build56 requires versionCode 60005, ledger has {diag_version_code}')
-          if not (60004 < diag_version_code < 65536):
+          if diag_version_code != 60006:
+              raise SystemExit(f'Build57 requires versionCode 60006, ledger has {diag_version_code}')
+          if not (60005 < diag_version_code < 65536):
               raise SystemExit(f'Unsafe/non-monotonic DiLink3 versionCode: {diag_version_code}')
 
           old_version = '        versionCode = 433'
@@ -53,79 +53,60 @@ jobs:
               raise SystemExit('versionCode insertion point not found')
           text = text.replace(old_version, f'        versionCode = {diag_version_code}', 1)
           gradle.write_text(text)
-          print(f'Build56 versionCode={diag_version_code}')
+          print(f'Build57 versionCode={diag_version_code}')
 
           manifest = Path('app/src/main/AndroidManifest.xml')
           m = manifest.read_text()
           old = 'android:label="BYDMate"'
           if old not in m:
               raise SystemExit('application label not found')
-          manifest.write_text(m.replace(old, 'android:label="BYDMate DiLink3 Build56"', 1))
+          manifest.write_text(m.replace(old, 'android:label="BYDMate DiLink3 Build57"', 1))
           PY
 
           keytool -list -v \
             -keystore .github/dilink3-debug.keystore \
             -storepass dilink3debug \
-            -alias dilink3debug | tee /tmp/build56-keystore.txt
-          grep -F "SHA256: C5:34:44:59:70:7B:B5:36:C6:88:41:3A:CB:A4:F9:DF:F2:30:8D:A9:25:FE:3B:36:59:C5:35:5D:60:E0:9A:EB" /tmp/build56-keystore.txt
+            -alias dilink3debug | tee /tmp/build57-keystore.txt
+          grep -F "SHA256: C5:34:44:59:70:7B:B5:36:C6:88:41:3A:CB:A4:F9:DF:F2:30:8D:A9:25:FE:3B:36:59:C5:35:5D:60:E0:9A:EB" /tmp/build57-keystore.txt
 
-      - name: Apply DiLink3 E2E bridge
-        run: python3 .github/patch-dilink3-e2e.py
-      - name: Apply AIHubMix quick setup
-        run: python3 .github/patch-dilink3-aihubmix.py
-      - name: Apply timing logs and Telegram export
-        run: python3 .github/patch-dilink3-logging.py
-      - name: Apply mic button diagnostics
-        run: python3 .github/patch-dilink3-mic-button.py
-      - name: Fix diagnostic Activity focus invocation
+      - name: Apply DiLink3 patch chain
         run: |
+          set -euo pipefail
+          python3 .github/patch-dilink3-e2e.py
+          python3 .github/patch-dilink3-aihubmix.py
+          python3 .github/patch-dilink3-logging.py
+          python3 .github/patch-dilink3-mic-button.py
           python3 - <<'PY'
           from pathlib import Path
           p = Path('app/src/main/kotlin/com/bydmate/app/MainActivity.kt')
           p.write_text(p.read_text().replace('"hasFocus=$hasWindowFocus"', '"hasFocus=${hasWindowFocus()}"'))
           PY
-      - name: Apply guided diagnostic wizard baseline
-        run: python3 .github/patch-dilink3-wizard.py
-      - name: Fix wizard primitive input-device collection
-        run: |
+          python3 .github/patch-dilink3-wizard.py
           python3 - <<'PY'
           from pathlib import Path
           p = Path('app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt')
           p.write_text(p.read_text().replace('InputDevice.getDeviceIds().mapNotNull', 'InputDevice.getDeviceIds().toList().mapNotNull'))
           PY
-      - name: Apply keyCode 304 and latency tracing
-        run: python3 .github/patch-dilink3-304-latency.py
-      - name: Reapply known-good build40 vehicle fixes
-        run: python3 .github/patch-dilink3-build40-compat.py
-      - name: Apply build41 system assistant and deep TTS diagnostics
-        run: python3 .github/patch-dilink3-build41-system-tts.py
-      - name: Apply build42 AccessibilityService interception test
-        run: python3 .github/patch-dilink3-build42-a11y.py
-      - name: Replace old wizard with build43 multi-test lab
-        run: python3 .github/patch-dilink3-build43-testlab.py
-      - name: Add build44 rootless ADB alternatives
-        run: python3 .github/patch-dilink3-build44-adb-lab.py
-      - name: Add build45 safe ADB transactions and restore
-        run: python3 .github/patch-dilink3-build45-safe-adb-tx.py
-      - name: Restore build46 log-share button
-        run: python3 .github/patch-dilink3-build46-log-share.py
-      - name: Apply build47 minimal 304 block lab
-        run: python3 .github/patch-dilink3-build47-304-block-lab.py
-      - name: Apply build48 focused 327 block lab
-        run: python3 .github/patch-dilink3-build48-327-block-lab.py
-      - name: Apply build49 production 327 blocker
-        run: python3 .github/patch-dilink3-build49-327-production.py
-      - name: Apply build50 clean all-key trace
-        run: python3 .github/patch-dilink3-build50-clean-keytrace.py
-      - name: Apply build55 accessibility recovery controls
-        run: python3 .github/patch-dilink3-build55-accessibility-recovery.py
-      - name: Apply build56 production mic routing and blocker UI
-        run: python3 .github/patch-dilink3-build56-production.py
+          python3 .github/patch-dilink3-304-latency.py
+          python3 .github/patch-dilink3-build40-compat.py
+          python3 .github/patch-dilink3-build41-system-tts.py
+          python3 .github/patch-dilink3-build42-a11y.py
+          python3 .github/patch-dilink3-build43-testlab.py
+          python3 .github/patch-dilink3-build44-adb-lab.py
+          python3 .github/patch-dilink3-build45-safe-adb-tx.py
+          python3 .github/patch-dilink3-build46-log-share.py
+          python3 .github/patch-dilink3-build47-304-block-lab.py
+          python3 .github/patch-dilink3-build48-327-block-lab.py
+          python3 .github/patch-dilink3-build49-327-production.py
+          python3 .github/patch-dilink3-build50-clean-keytrace.py
+          python3 .github/patch-dilink3-build55-accessibility-recovery.py
+          python3 .github/patch-dilink3-build56-production.py
+          python3 .github/patch-dilink3-build57-reliability.py
 
-      - name: Build Build56 APK
+      - name: Build Build57 APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
-      - name: Verify package, version, alignment, signer and Build56 code
+      - name: Verify package, updateability, signer and Build57 code
         run: |
           set -euo pipefail
           APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
@@ -138,43 +119,47 @@ jobs:
           test -x "$BUILD_TOOLS/apksigner"
           test -x "$BUILD_TOOLS/zipalign"
 
-          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee /tmp/build56-badging.txt
-          grep -F "package: name='com.bydmate.app.dilink3diag' versionCode='60005'" /tmp/build56-badging.txt
-          grep -F "sdkVersion:'29'" /tmp/build56-badging.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee /tmp/build57-badging.txt
+          grep -F "package: name='com.bydmate.app.dilink3diag' versionCode='60006'" /tmp/build57-badging.txt
+          grep -F "sdkVersion:'29'" /tmp/build57-badging.txt
 
           "$BUILD_TOOLS/zipalign" -c -v 4 "$APK"
-          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/build56-signature.txt
-          grep -F "certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb" /tmp/build56-signature.txt
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/build57-signature.txt
+          grep -F "certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb" /tmp/build57-signature.txt
 
-          : > /tmp/build56-dex-strings.txt
+          : > /tmp/build57-dex-strings.txt
           while IFS= read -r dex; do
-            unzip -p "$APK" "$dex" | strings >> /tmp/build56-dex-strings.txt
+            unzip -p "$APK" "$dex" | strings >> /tmp/build57-dex-strings.txt
           done < <(zipinfo -1 "$APK" | grep '^classes.*\.dex$')
 
-          grep -F "BUILD56_MIC_304_ROUTED_TO_BYDMATE" /tmp/build56-dex-strings.txt
-          grep -F "BUILD56_ACTIVATE_BLOCKER_RESULT" /tmp/build56-dex-strings.txt
-          grep -F "BUILD56_LOG_CLEARED" /tmp/build56-dex-strings.txt
-          grep -F "BUILD49_STOCK_ASSISTANT_327_BLOCKED" /tmp/build56-dex-strings.txt
-          grep -F "BUILD50_KEY_EVENT" /tmp/build56-dex-strings.txt
-          if grep -Fq "A11Y_WINDOW_TRACE" /tmp/build56-dex-strings.txt; then
+          grep -F "BUILD49_STOCK_ASSISTANT_327_BLOCKED" /tmp/build57-dex-strings.txt
+          grep -F "BUILD56_MIC_304_ROUTED_TO_BYDMATE" /tmp/build57-dex-strings.txt
+          grep -F "BUILD57_MIC_STATUS" /tmp/build57-dex-strings.txt
+          grep -F "BUILD57_A11Y_SELF_HEAL" /tmp/build57-dex-strings.txt
+          grep -F "BUILD57_GIGAAM_STAGE" /tmp/build57-dex-strings.txt
+          grep -F "BUILD57_GIGAAM_SERVICE_START" /tmp/build57-dex-strings.txt
+          grep -F "OPEN DiLink3 VOICE DEBUG" /tmp/build57-dex-strings.txt
+          grep -F "CLOSE" /tmp/build57-dex-strings.txt
+          if grep -Fq "A11Y_WINDOW_TRACE" /tmp/build57-dex-strings.txt; then
             echo "ERROR: retired privacy-invasive A11Y_WINDOW_TRACE exists in compiled APK"
             exit 1
           fi
 
           mkdir -p verified
-          cp "$APK" verified/BYDMate-DiLink3-build56.apk
-          sha256sum verified/BYDMate-DiLink3-build56.apk | tee verified/BYDMate-DiLink3-build56.sha256
+          cp "$APK" verified/BYDMate-DiLink3-build57.apk
+          sha256sum verified/BYDMate-DiLink3-build57.apk | tee verified/BYDMate-DiLink3-build57.sha256
           {
             echo "package=com.bydmate.app.dilink3diag"
-            echo "versionCode=60005"
+            echo "versionCode=60006"
             echo "signerSha256=c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb"
-            echo "previousDistributedVersionCode=60004"
-          } | tee verified/BYDMate-DiLink3-build56-metadata.txt
+            echo "previousDistributedVersionCode=60005"
+            echo "updateMustInstallOverPrevious=true"
+          } | tee verified/BYDMate-DiLink3-build57-metadata.txt
 
-      - name: Upload verified Build56 APK
+      - name: Upload verified Build57 APK
         uses: actions/upload-artifact@v7
         with:
-          name: bydmate-dilink3-build56-production
+          name: bydmate-dilink3-build57-reliability
           path: verified/*
           if-no-files-found: error
           retention-days: 14
