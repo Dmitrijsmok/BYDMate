@@ -202,9 +202,15 @@ new_scope = '''    val scope = rememberCoroutineScope()
 s = s[:start] + new_scope + s[end:]
 
 # Build57's header close button is below diagPrefs and still references its old state variable.
-# Retarget it, and update the build label. No other wizard state is touched.
+# Retarget it, and update the build label. Build43 currently owns the generated panel header,
+# while older diagnostic revisions used a Build57 header, so accept either known source shape.
 s = s.replace('build57PanelExpanded', 'build58PanelExpanded')
-s = s.replace('Text("DiLink3 Build57"', 'Text("DiLink3 Build58"', 1)
+if 'Text("DiLink3 Build57"' in s:
+    s = s.replace('Text("DiLink3 Build57"', 'Text("DiLink3 Build58"', 1)
+elif 'Text("DiLink3 Voice Test Lab #43"' in s:
+    s = s.replace('Text("DiLink3 Voice Test Lab #43"', 'Text("DiLink3 Build58"', 1)
+else:
+    raise SystemExit('Build58 panel label anchor not found')
 
 p.write_text(s)
 print('Build58 installed: GigaAM forced-RU recognition + compact DBG WindowManager collapse')
