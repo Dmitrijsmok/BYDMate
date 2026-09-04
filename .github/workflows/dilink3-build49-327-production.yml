@@ -140,7 +140,10 @@ jobs:
           grep -F "BUILD57_GIGAAM_STAGE" /tmp/build58-dex-strings.txt
           grep -F "BUILD57_GIGAAM_SERVICE_START" /tmp/build58-dex-strings.txt
           grep -F "BUILD58_GIGAAM_FORCED_RU" /tmp/build58-dex-strings.txt
-          grep -F "Voice recognition: Русский - GigaAM" /tmp/build58-dex-strings.txt
+          # Cyrillic Compose resource strings are not reliably visible through GNU strings on DEX.
+          # Verify the patched source directly instead, while the runtime behavior is covered by
+          # BUILD58_GIGAAM_FORCED_RU above.
+          grep -F "Voice recognition: Русский - GigaAM" app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt
           grep -F "BUILD58_DEBUG_WINDOW_RESIZE" /tmp/build58-dex-strings.txt
           grep -F "DBG" /tmp/build58-dex-strings.txt
           grep -F "DiLink3 Build58" /tmp/build58-dex-strings.txt
