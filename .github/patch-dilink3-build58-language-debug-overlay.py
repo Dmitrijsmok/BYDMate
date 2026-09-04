@@ -54,16 +54,19 @@ new_error = '''            // Build58: UI locale no longer blocks GigaAM. Reachi
 if old_error not in s:
     raise SystemExit('Build58 PTT langBlocked block anchor not found')
 s = s.replace(old_error, new_error, 1)
+
 old_log = '                "GigaAM ${if (langBlocked) "lang not supported" else "model not ready"} lang=${currentLang()}"\n'
 new_log = '                "GigaAM model not ready; uiLang=${currentLang()} recognitionLang=${gigaAmRecognitionLang()}"\n'
 if old_log not in s:
     raise SystemExit('Build58 PTT error log anchor not found')
 s = s.replace(old_log, new_log, 1)
+
 old_resolve = '        val res = if (followUp) null else resolve(command, currentLang())\n'
 new_resolve = '        val res = if (followUp) null else resolve(command, gigaAmRecognitionLang())\n'
 if old_resolve not in s:
     raise SystemExit('Build58 GigaAM NLU language anchor not found')
 s = s.replace(old_resolve, new_resolve, 1)
+
 s = s.replace(
     '''    /** PTT toggle (Wave B): no session running -> start one (continuous GigaAM session when the
      *  model is ready and the language is RU, else the GigaAM model is missing or the language is
@@ -102,9 +105,9 @@ if 'Voice recognition: Русский - GigaAM' not in s:
 p.write_text(s)
 
 # ---------------------------------------------------------------------------
-# 3) DiLink3 debug panel. Build57 added an outer collapse around the wizard, while the wizard
-# already had its own `expanded` state. Consolidate both onto one Build58 state. Re-use the
-# wizard's existing close button by retargeting `expanded` -> `build58PanelExpanded`.
+# 3) DiLink3 debug panel. Build57 already inserted a top-level collapse control. Replace that
+# exact region using stable neighbours from the Build43 panel instead of depending on a later
+# field name that changed between diagnostic revisions.
 # ---------------------------------------------------------------------------
 p = Path('app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt')
 s = p.read_text()
@@ -114,11 +117,11 @@ if 'import androidx.compose.ui.platform.LocalView\n' not in s:
     s = s.replace('import androidx.compose.ui.platform.LocalContext\n', 'import androidx.compose.ui.platform.LocalContext\nimport androidx.compose.ui.platform.LocalView\n', 1)
 
 start_anchor = '    val scope = rememberCoroutineScope()\n'
-end_anchor = '    val voicePrefs = remember { context.getSharedPreferences("voice", Context.MODE_PRIVATE) }\n'
+end_anchor = '    val diagPrefs = remember { context.getSharedPreferences("dilink3_diag", Context.MODE_PRIVATE) }\n'
 if start_anchor not in s:
     raise SystemExit('Build58 panel scope anchor not found')
 if end_anchor not in s:
-    raise SystemExit('Build58 panel voicePrefs anchor not found')
+    raise SystemExit('Build58 panel diagPrefs anchor not found')
 start = s.index(start_anchor)
 end = s.index(end_anchor, start)
 new_scope = '''    val scope = rememberCoroutineScope()
@@ -153,7 +156,9 @@ new_scope = '''    val scope = rememberCoroutineScope()
         if (collapsed) {
             lp.width = (72f * build58Density).toInt().coerceAtLeast(1)
             lp.height = (52f * build58Density).toInt().coerceAtLeast(1)
-            lp.flags = original[2] or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+            lp.flags = original[2] or
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
         } else {
             lp.width = original[0]
             lp.height = original[1]
@@ -161,10 +166,18 @@ new_scope = '''    val scope = rememberCoroutineScope()
         }
         runCatching { build58WindowManager.updateViewLayout(root, lp) }
             .onSuccess {
-                DiLink3DebugLog.log(context, "BUILD58_DEBUG_WINDOW_RESIZE", "success=true collapsed=$collapsed width=${lp.width} height=${lp.height} type=${lp.type} flags=${lp.flags}")
+                DiLink3DebugLog.log(
+                    context,
+                    "BUILD58_DEBUG_WINDOW_RESIZE",
+                    "success=true collapsed=$collapsed width=${lp.width} height=${lp.height} type=${lp.type} flags=${lp.flags}"
+                )
             }
             .onFailure {
-                DiLink3DebugLog.log(context, "BUILD58_DEBUG_WINDOW_RESIZE", "success=false collapsed=$collapsed error=${it::class.java.simpleName}:${it.message}")
+                DiLink3DebugLog.log(
+                    context,
+                    "BUILD58_DEBUG_WINDOW_RESIZE",
+                    "success=false collapsed=$collapsed error=${it::class.java.simpleName}:${it.message}"
+                )
             }
     }
 
@@ -188,13 +201,10 @@ new_scope = '''    val scope = rememberCoroutineScope()
 '''
 s = s[:start] + new_scope + s[end:]
 
-old_decl = '    var expanded by remember { mutableStateOf(false) }\n'
-if old_decl not in s:
-    raise SystemExit('Build58 wizard expanded declaration not found')
-s = s.replace(old_decl, '', 1)
-s = s.replace('expanded =', 'build58PanelExpanded =')
-s = s.replace('if (!expanded) {', 'if (!build58PanelExpanded) {')
-s = s.replace('Text("DiLink3 диагностика · шаг $step/5"', 'Text("DiLink3 Build58 · диагностика · шаг $step/5"', 1)
+# Build57's header close button is below diagPrefs and still references its old state variable.
+# Retarget it, and update the build label. No other wizard state is touched.
+s = s.replace('build57PanelExpanded', 'build58PanelExpanded')
+s = s.replace('Text("DiLink3 Build57"', 'Text("DiLink3 Build58"', 1)
 
 p.write_text(s)
-print('Build58 installed: GigaAM forced-RU recognition + consolidated DBG WindowManager collapse')
+print('Build58 installed: GigaAM forced-RU recognition + compact DBG WindowManager collapse')
