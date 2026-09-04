@@ -123,6 +123,7 @@ jobs:
           "$BUILD_TOOLS/aapt" dump badging "$APK" | tee /tmp/build58-badging.txt
           grep -F "package: name='com.bydmate.app.dilink3diag' versionCode='60007'" /tmp/build58-badging.txt
           grep -F "sdkVersion:'29'" /tmp/build58-badging.txt
+          grep -F "application-label:'BYDMate DiLink3 Build58'" /tmp/build58-badging.txt
 
           "$BUILD_TOOLS/zipalign" -c -v 4 "$APK"
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/build58-signature.txt
@@ -140,13 +141,10 @@ jobs:
           grep -F "BUILD57_GIGAAM_STAGE" /tmp/build58-dex-strings.txt
           grep -F "BUILD57_GIGAAM_SERVICE_START" /tmp/build58-dex-strings.txt
           grep -F "BUILD58_GIGAAM_FORCED_RU" /tmp/build58-dex-strings.txt
-          # Cyrillic Compose resource strings are not reliably visible through GNU strings on DEX.
-          # Verify the patched source directly instead, while the runtime behavior is covered by
-          # BUILD58_GIGAAM_FORCED_RU above.
-          grep -F "Voice recognition: Русский - GigaAM" app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt
           grep -F "BUILD58_DEBUG_WINDOW_RESIZE" /tmp/build58-dex-strings.txt
-          grep -F "DBG" /tmp/build58-dex-strings.txt
-          grep -F "DiLink3 Build58" /tmp/build58-dex-strings.txt
+          grep -F "Voice recognition: Русский - GigaAM" app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt
+          grep -F 'Text("DBG")' app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt
+          grep -F 'Text("DiLink3 Build58"' app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt
           if grep -Fq "A11Y_WINDOW_TRACE" /tmp/build58-dex-strings.txt; then
             echo "ERROR: retired privacy-invasive A11Y_WINDOW_TRACE exists in compiled APK"
             exit 1
