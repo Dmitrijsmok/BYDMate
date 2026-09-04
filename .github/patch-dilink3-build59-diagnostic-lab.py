@@ -248,10 +248,20 @@ p.write_text(s)
 p = Path('app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt')
 s = p.read_text()
 
-card_anchor = '    Card(modifier = modifier.fillMaxWidth()) {'
-if card_anchor not in s:
-    raise SystemExit('Build59 panel Card anchor not found')
+launch_import = 'import kotlinx.coroutines.launch\n'
+if launch_import not in s:
+    raise SystemExit('Build59 panel launch import anchor not found')
+if 'import kotlinx.coroutines.Job\n' not in s:
+    s = s.replace(launch_import, 'import kotlinx.coroutines.Job\n' + launch_import, 1)
+asr_import = 'import com.bydmate.app.voice.ContinuousAsr\n'
+if asr_import not in s:
+    raise SystemExit('Build59 panel ContinuousAsr import anchor not found')
+if 'import com.bydmate.app.voice.ContinuousAsrEvent\n' not in s:
+    s = s.replace(asr_import, asr_import + 'import com.bydmate.app.voice.ContinuousAsrEvent\n', 1)
 
+collapse_anchor = '    if (!build58PanelExpanded) {\n'
+if collapse_anchor not in s:
+    raise SystemExit('Build59 Build58 collapse anchor not found')
 if 'fun build59RunMicProbe()' not in s:
     lab_state = r'''    var build59MicProbeJob by remember { mutableStateOf<Job?>(null) }
     var build59AsrProbeJob by remember { mutableStateOf<Job?>(null) }
@@ -259,13 +269,12 @@ if 'fun build59RunMicProbe()' not in s:
     fun build59RunMicProbe() {
         if (build59MicProbeJob?.isActive == true) {
             build59MicProbeJob?.cancel()
-            status = "RAW MIC: stopping"
+            DiLink3DebugLog.log(context, "BUILD59_RAW_MIC_TEST", "phase=cancel_requested")
             return
         }
         build59MicProbeJob = scope.launch {
             var frames = 0L
             var samples = 0L
-            status = "RAW MIC: 3 секунды..."
             DiLink3DebugLog.log(context, "BUILD59_RAW_MIC_TEST", "phase=start durationMs=3000")
             val result = runCatching {
                 audioCapture.captureSession(maxMs = 3_000).collect { frame ->
@@ -273,7 +282,6 @@ if 'fun build59RunMicProbe()' not in s:
                     samples += frame.size
                 }
             }
-            status = if (result.isSuccess) "RAW MIC OK: frames=$frames samples=$samples" else "RAW MIC ERROR: ${result.exceptionOrNull()?.message}"
             DiLink3DebugLog.log(
                 context,
                 "BUILD59_RAW_MIC_TEST",
@@ -285,16 +293,14 @@ if 'fun build59RunMicProbe()' not in s:
     fun build59RunRawGigaAm() {
         if (build59AsrProbeJob?.isActive == true) {
             build59AsrProbeJob?.cancel()
-            status = "RAW GigaAM: stopping"
+            DiLink3DebugLog.log(context, "BUILD59_RAW_GIGAAM_TEST", "phase=cancel_requested")
             return
         }
         if (!continuousAsr.isReady()) {
-            status = "RAW GigaAM: model NOT READY"
             DiLink3DebugLog.log(context, "BUILD59_RAW_GIGAAM_TEST", "phase=reject reason=model_not_ready")
             return
         }
         build59AsrProbeJob = scope.launch {
-            status = "RAW GigaAM: говорите до 10 секунд"
             DiLink3DebugLog.log(context, "BUILD59_RAW_GIGAAM_TEST", "phase=start durationMs=10000")
             var speechStarts = 0
             var utterances = 0
@@ -316,11 +322,6 @@ if 'fun build59RunMicProbe()' not in s:
                     }
                 }
             }
-            status = if (result.isSuccess) {
-                "RAW GigaAM: speech=$speechStarts utterances=$utterances text=${lastText.ifBlank { "<none>" }}"
-            } else {
-                "RAW GigaAM ERROR: ${result.exceptionOrNull()?.message}"
-            }
             DiLink3DebugLog.log(
                 context,
                 "BUILD59_RAW_GIGAAM_TEST",
@@ -330,9 +331,8 @@ if 'fun build59RunMicProbe()' not in s:
     }
 
 '''
-    s = s.replace(card_anchor, lab_state + card_anchor, 1)
+    s = s.replace(collapse_anchor, lab_state + collapse_anchor, 1)
 
-# Replace the Build58 title with Build59 plus a guaranteed re-collapse button and modular tests.
 title_anchor = '            Text("DiLink3 Build58", style = MaterialTheme.typography.titleLarge)\n'
 if title_anchor not in s:
     raise SystemExit('Build59 Build58 title anchor not found')
@@ -381,20 +381,34 @@ controls = r'''            Text("DiLink3 Build59 DIAGNOSTIC LAB", style = Materi
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("4. VOICE PIPELINE SNAPSHOT") }
 
-            Button(onClick = { build59RunMicProbe() }, modifier = Modifier.fillMaxWidth()) {
+            Button(
+                onClick = {
+                    build59RunMicProbe()
+                    status = if (build59MicProbeJob?.isActive == true) "RAW MIC: stop requested" else "RAW MIC: test started; result goes to log"
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Text(if (build59MicProbeJob?.isActive == true) "STOP RAW MIC" else "5. RAW MIC TEST - 3 SEC")
             }
 
-            Button(onClick = { build59RunRawGigaAm() }, modifier = Modifier.fillMaxWidth()) {
+            Button(
+                onClick = {
+                    build59RunRawGigaAm()
+                    status = if (continuousAsr.isReady()) "RAW GigaAM: test toggled; result goes to log" else "RAW GigaAM: model NOT READY"
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Text(if (build59AsrProbeJob?.isActive == true) "STOP RAW GIGAAM" else "6. RAW GIGAAM TEST - 10 SEC")
             }
 
 '''
 s = s.replace(title_anchor, controls, 1)
 
-# Build58's collapsed path logs expand; promote the marker to Build59 for field readability.
-s = s.replace('DiLink3DebugLog.log(context, "BUILD58_DEBUG_PANEL", "action=expand")',
-              'DiLink3DebugLog.log(context, "BUILD59_DEBUG_PANEL", "action=expand")', 1)
+s = s.replace(
+    'DiLink3DebugLog.log(context, "BUILD58_DEBUG_PANEL", "action=expand")',
+    'DiLink3DebugLog.log(context, "BUILD59_DEBUG_PANEL", "action=expand")',
+    1,
+)
 
 p.write_text(s)
 print('Build59 installed: hardware ACK + modular voice diagnostics + re-collapsible DBG panel')
