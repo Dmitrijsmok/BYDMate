@@ -201,14 +201,19 @@ new_scope = '''    val scope = rememberCoroutineScope()
 '''
 s = s[:start] + new_scope + s[end:]
 
-# Build57's header close button is below diagPrefs and still references its old state variable.
-# Retarget it, and update the build label. Build43 currently owns the generated panel header,
-# while older diagnostic revisions used a Build57 header, so accept either known source shape.
+# Build57's temporary close panel lives in the region replaced above. The surviving panel title
+# is still Build56's production title, so promote that title to Build58. Keep fallbacks for older
+# diagnostic chain shapes so the patch fails loudly only if none of the known anchors exist.
 s = s.replace('build57PanelExpanded', 'build58PanelExpanded')
-if 'Text("DiLink3 Build57"' in s:
-    s = s.replace('Text("DiLink3 Build57"', 'Text("DiLink3 Build58"', 1)
-elif 'Text("DiLink3 Voice Test Lab #43"' in s:
-    s = s.replace('Text("DiLink3 Voice Test Lab #43"', 'Text("DiLink3 Build58"', 1)
+label_anchors = (
+    'Text("DiLink3 STOCK ASSISTANT BLOCKER #56"',
+    'Text("DiLink3 Build57"',
+    'Text("DiLink3 Voice Test Lab #43"',
+)
+for label_anchor in label_anchors:
+    if label_anchor in s:
+        s = s.replace(label_anchor, 'Text("DiLink3 Build58"', 1)
+        break
 else:
     raise SystemExit('Build58 panel label anchor not found')
 
