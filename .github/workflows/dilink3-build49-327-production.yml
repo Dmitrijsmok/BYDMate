@@ -1,4 +1,4 @@
-name: DiLink3 Build59 Diagnostic Lab
+name: DiLink3 Build60 Auto Voice Trace
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: dilink3-build59-${{ github.ref }}
+  group: dilink3-build60-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -43,9 +43,9 @@ jobs:
           text = text.replace(build_types_needle, build_types_replacement, 1)
 
           diag_version_code = int(Path('.github/dilink3-version-code.txt').read_text().strip())
-          if diag_version_code != 60008:
-              raise SystemExit(f'Build59 requires versionCode 60008, ledger has {diag_version_code}')
-          if not (60007 < diag_version_code < 65536):
+          if diag_version_code != 60009:
+              raise SystemExit(f'Build60 requires versionCode 60009, ledger has {diag_version_code}')
+          if not (60008 < diag_version_code < 65536):
               raise SystemExit(f'Unsafe/non-monotonic DiLink3 versionCode: {diag_version_code}')
 
           old_version = '        versionCode = 433'
@@ -53,21 +53,21 @@ jobs:
               raise SystemExit('versionCode insertion point not found')
           text = text.replace(old_version, f'        versionCode = {diag_version_code}', 1)
           gradle.write_text(text)
-          print(f'Build59 versionCode={diag_version_code}')
+          print(f'Build60 versionCode={diag_version_code}')
 
           manifest = Path('app/src/main/AndroidManifest.xml')
           m = manifest.read_text()
           old = 'android:label="BYDMate"'
           if old not in m:
               raise SystemExit('application label not found')
-          manifest.write_text(m.replace(old, 'android:label="BYDMate DiLink3 Build59"', 1))
+          manifest.write_text(m.replace(old, 'android:label="BYDMate DiLink3 Build60"', 1))
           PY
 
           keytool -list -v \
             -keystore .github/dilink3-debug.keystore \
             -storepass dilink3debug \
-            -alias dilink3debug | tee /tmp/build59-keystore.txt
-          grep -F "SHA256: C5:34:44:59:70:7B:B5:36:C6:88:41:3A:CB:A4:F9:DF:F2:30:8D:A9:25:FE:3B:36:59:C5:35:5D:60:E0:9A:EB" /tmp/build59-keystore.txt
+            -alias dilink3debug | tee /tmp/build60-keystore.txt
+          grep -F "SHA256: C5:34:44:59:70:7B:B5:36:C6:88:41:3A:CB:A4:F9:DF:F2:30:8D:A9:25:FE:3B:36:59:C5:35:5D:60:E0:9A:EB" /tmp/build60-keystore.txt
 
       - name: Apply DiLink3 patch chain
         run: |
@@ -104,11 +104,12 @@ jobs:
           python3 .github/patch-dilink3-build57-reliability.py
           python3 .github/patch-dilink3-build58-language-debug-overlay.py
           python3 .github/patch-dilink3-build59-diagnostic-lab.py
+          python3 .github/patch-dilink3-build60-auto-voice-trace.py
 
-      - name: Build Build59 APK
+      - name: Build Build60 APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
-      - name: Verify package, updateability, signer and Build59 diagnostics
+      - name: Verify package, updateability, signer and Build60 voice trace
         run: |
           set -euo pipefail
           APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
@@ -121,55 +122,69 @@ jobs:
           test -x "$BUILD_TOOLS/apksigner"
           test -x "$BUILD_TOOLS/zipalign"
 
-          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee /tmp/build59-badging.txt
-          grep -F "package: name='com.bydmate.app.dilink3diag' versionCode='60008'" /tmp/build59-badging.txt
-          grep -F "sdkVersion:'29'" /tmp/build59-badging.txt
-          grep -F "application-label:'BYDMate DiLink3 Build59'" /tmp/build59-badging.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee /tmp/build60-badging.txt
+          grep -F "package: name='com.bydmate.app.dilink3diag' versionCode='60009'" /tmp/build60-badging.txt
+          grep -F "sdkVersion:'29'" /tmp/build60-badging.txt
+          grep -F "application-label:'BYDMate DiLink3 Build60'" /tmp/build60-badging.txt
 
           "$BUILD_TOOLS/zipalign" -c -v 4 "$APK"
-          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/build59-signature.txt
-          grep -F "certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb" /tmp/build59-signature.txt
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/build60-signature.txt
+          grep -F "certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb" /tmp/build60-signature.txt
 
-          : > /tmp/build59-dex-strings.txt
+          : > /tmp/build60-dex-strings.txt
           while IFS= read -r dex; do
-            unzip -p "$APK" "$dex" | strings >> /tmp/build59-dex-strings.txt
+            unzip -p "$APK" "$dex" | strings >> /tmp/build60-dex-strings.txt
           done < <(zipinfo -1 "$APK" | grep '^classes.*\.dex$')
 
-          grep -F "BUILD49_STOCK_ASSISTANT_327_BLOCKED" /tmp/build59-dex-strings.txt
-          grep -F "BUILD56_MIC_304_ROUTED_TO_BYDMATE" /tmp/build59-dex-strings.txt
-          grep -F "BUILD57_A11Y_SELF_HEAL" /tmp/build59-dex-strings.txt
-          grep -F "BUILD58_GIGAAM_FORCED_RU" /tmp/build59-dex-strings.txt
-          grep -F "BUILD59_PTT_HARDWARE_ACK" /tmp/build59-dex-strings.txt
-          grep -F "BUILD59_PTT_ENTER" /tmp/build59-dex-strings.txt
-          grep -F "BUILD59_SESSION_LISTENING" /tmp/build59-dex-strings.txt
-          grep -F "BUILD59_PCM_FIRST_FRAME" /tmp/build59-dex-strings.txt
-          grep -F "BUILD59_GIGAAM_SPEECH_START" /tmp/build59-dex-strings.txt
-          grep -F "BUILD59_GIGAAM_UTTERANCE" /tmp/build59-dex-strings.txt
-          grep -F "BUILD59_RAW_MIC_TEST" /tmp/build59-dex-strings.txt
-          grep -F "BUILD59_RAW_GIGAAM_TEST" /tmp/build59-dex-strings.txt
-          grep -F "BUILD59_TTS_TEST" /tmp/build59-dex-strings.txt
-          grep -F 'Text("MINIMIZE DBG")' app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt
-          grep -F 'Text("DiLink3 Build59 DIAGNOSTIC LAB"' app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt
-          if grep -Fq "A11Y_WINDOW_TRACE" /tmp/build59-dex-strings.txt; then
+          grep -F "BUILD49_STOCK_ASSISTANT_327_BLOCKED" /tmp/build60-dex-strings.txt
+          grep -F "BUILD56_MIC_304_ROUTED_TO_BYDMATE" /tmp/build60-dex-strings.txt
+          grep -F "BUILD58_GIGAAM_FORCED_RU" /tmp/build60-dex-strings.txt
+          grep -F "BUILD59_GIGAAM_UTTERANCE" /tmp/build60-dex-strings.txt
+          grep -F "BUILD60_UTTERANCE_ACCEPTED" /tmp/build60-dex-strings.txt
+          grep -F "BUILD60_TTS_TRACE" /tmp/build60-dex-strings.txt
+          grep -F "BUILD60_ROUTE_JOB_START" /tmp/build60-dex-strings.txt
+          grep -F "BUILD60_ROUTE_TIMEOUT" /tmp/build60-dex-strings.txt
+          grep -F "BUILD60_RESOLVE_START" /tmp/build60-dex-strings.txt
+          grep -F "BUILD60_RESOLVE_END" /tmp/build60-dex-strings.txt
+          grep -F "BUILD60_AGENT_ASK_START" /tmp/build60-dex-strings.txt
+          grep -F "BUILD60_AGENT_ANSWER" /tmp/build60-dex-strings.txt
+          grep -F "BUILD60_AGENT_TTS_RESULT" /tmp/build60-dex-strings.txt
+          grep -F "BUILD60_ANNOUNCE_TTS_RESULT" /tmp/build60-dex-strings.txt
+          grep -F 'Text("DiLink3 Build60 AUTO VOICE TRACE"' app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt
+
+          # Build60 must not expose Build59's repeated manual diagnostic buttons.
+          for retired in \
+            'TEST BEEP / ПРОВЕРИТЬ СИГНАЛ' \
+            'TEST TTS / ПРОВЕРИТЬ ГОЛОС' \
+            'PTT START / STOP' \
+            'VOICE PIPELINE SNAPSHOT' \
+            'RAW MIC TEST - 3 SEC' \
+            'RAW GIGAAM TEST - 10 SEC'; do
+            if grep -Fq "$retired" app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt; then
+              echo "ERROR: retired Build59 button still visible: $retired"
+              exit 1
+            fi
+          done
+          if grep -Fq "A11Y_WINDOW_TRACE" /tmp/build60-dex-strings.txt; then
             echo "ERROR: retired privacy-invasive A11Y_WINDOW_TRACE exists in compiled APK"
             exit 1
           fi
 
           mkdir -p verified
-          cp "$APK" verified/BYDMate-DiLink3-build59.apk
-          sha256sum verified/BYDMate-DiLink3-build59.apk | tee verified/BYDMate-DiLink3-build59.sha256
+          cp "$APK" verified/BYDMate-DiLink3-build60.apk
+          sha256sum verified/BYDMate-DiLink3-build60.apk | tee verified/BYDMate-DiLink3-build60.sha256
           {
             echo "package=com.bydmate.app.dilink3diag"
-            echo "versionCode=60008"
+            echo "versionCode=60009"
             echo "signerSha256=c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb"
-            echo "previousDistributedVersionCode=60007"
+            echo "previousDistributedVersionCode=60008"
             echo "updateMustInstallOverPrevious=true"
-          } | tee verified/BYDMate-DiLink3-build59-metadata.txt
+          } | tee verified/BYDMate-DiLink3-build60-metadata.txt
 
-      - name: Upload verified Build59 APK
+      - name: Upload verified Build60 APK
         uses: actions/upload-artifact@v7
         with:
-          name: bydmate-dilink3-build59-diagnostic-lab
+          name: bydmate-dilink3-build60-auto-voice-trace
           path: verified/*
           if-no-files-found: error
           retention-days: 14
