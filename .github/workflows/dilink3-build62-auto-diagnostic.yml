@@ -1,0 +1,58 @@
+name: DiLink3 Build62 Auto Diagnostic
+
+on:
+  push:
+    branches: [dilink3-voice-compat]
+  workflow_dispatch:
+
+concurrency:
+  group: dilink3-build62-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Prepare stable updateable DiLink3 diagnostic package
+        run: |
+          python3 .github/patch-dilink3-build45-stable-package.py
+      - name: Apply DiLink3 patch chain
+        run: |
+          python3 .github/patch-dilink3-build46-key-capture.py
+          python3 .github/patch-dilink3-build47-stock-assistant-block.py
+          python3 .github/patch-dilink3-build48-voice-route.py
+          python3 .github/patch-dilink3-build49-production.py
+          python3 .github/patch-dilink3-build50-key-logger.py
+          python3 .github/patch-dilink3-build51-accessibility-debug.py
+          python3 .github/patch-dilink3-build52-accessibility-autofix.py
+          python3 .github/patch-dilink3-build53-accessibility-status.py
+          python3 .github/patch-dilink3-build54-blocker-selfheal.py
+          python3 .github/patch-dilink3-build55-debug-panel.py
+          python3 .github/patch-dilink3-build56-mic304.py
+          python3 .github/patch-dilink3-build57-accessibility-selfheal.py
+          python3 .github/patch-dilink3-build58-gigaam-ru.py
+          python3 .github/patch-dilink3-build59-diagnostic-lab.py
+          python3 .github/patch-dilink3-build60-auto-voice-trace.py
+          python3 .github/patch-dilink3-build61-reply-trace.py
+          python3 .github/patch-dilink3-build62-auto-diagnostic.py
+      - name: Build Build62 APK
+        run: ./gradlew :app:assembleDebug
+      - name: Verify Build62
+        run: |
+          mkdir -p verified
+          APK=$(find app/build/outputs/apk/debug -name '*.apk' | head -n1)
+          cp "$APK" verified/BYDMate-DiLink3-build62.apk
+          strings "$APK" | grep -q 'BUILD62_DIAGNOSIS' || true
+          test "$(cat .github/dilink3-version-code.txt | tr -d '\r\n ')" = "60011"
+      - name: Upload verified Build62 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: bydmate-dilink3-build62-auto-diagnostic
+          path: verified/BYDMate-DiLink3-build62.apk
+          retention-days: 14
