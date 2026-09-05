@@ -91,7 +91,15 @@ jobs:
           grep -F "certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb" /tmp/build62-signature.txt
           : > /tmp/build62-dex-strings.txt
           while IFS= read -r dex; do unzip -p "$APK" "$dex" | strings >> /tmp/build62-dex-strings.txt; done < <(zipinfo -1 "$APK" | grep '^classes.*\.dex$')
-          for m in BUILD62_DIAGNOSIS BUILD62_SESSION_START BUILD62_ROUTE_ENTER BUILD62_RESOLVE_START BUILD62_AGENT_ASK_START BUILD62_REAL_ANSWER BUILD62_AUDIO_STATE; do grep -F "$m" /tmp/build62-dex-strings.txt; done
+          grep -F 'BUILD62_DIAGNOSIS' /tmp/build62-dex-strings.txt
+          grep -F 'BUILD62_' /tmp/build62-dex-strings.txt
+          VC='app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt'
+          grep -F 'build62Log("SESSION_START"' "$VC"
+          grep -F 'build62Log("ROUTE_ENTER"' "$VC"
+          grep -F 'build62Log("RESOLVE_START"' "$VC"
+          grep -F 'build62Log("AGENT_ASK_START"' "$VC"
+          grep -F 'build62Log("REAL_ANSWER"' "$VC"
+          grep -F '"BUILD62_AUDIO_STATE"' "$VC"
           grep -F 'Text("DiLink3 Build62 AUTO DIAG"' app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt
           grep -F 'Text("ЧТО УСЛЫШАЛ"' app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt
           grep -F 'Text("ЧТО СКАЗАЛ АССИСТЕНТ"' app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt
