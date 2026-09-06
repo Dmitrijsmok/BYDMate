@@ -30,7 +30,6 @@ fields = '''    @Volatile private var build64PttSeq: Int = 0
 '''
 s = s.replace(field_anchor, field_anchor + fields, 1)
 
-# Public source-aware seam used by BOTH steering-wheel and debug-screen PTT.
 method_anchor = '    fun sessionActive(): Boolean = listening.value || busy.get()\n'
 if method_anchor not in s:
     raise SystemExit('Build64: sessionActive anchor not found')
@@ -87,7 +86,6 @@ method = r'''
 '''
 s = s.replace(method_anchor, method_anchor + method, 1)
 
-# Correlate first PCM with the PTT source/sequence and latency.
 pcm_anchor = '''                        if (build59FirstPcm) {
                             build59FirstPcm = false
                             DiLink3DebugLog.log(context, "BUILD59_PCM_FIRST_FRAME", "samples=${it.size}")
@@ -135,7 +133,6 @@ utterance_new = utterance_anchor + '''                            build64Utteran
 '''
 s = s.replace(utterance_anchor, utterance_new, 1)
 
-# Exact agent error text in the exported DiLink log.
 agent_error_anchor = '''            is AgentResult.Error -> {
                 earcon.fail(); _state.value = VoiceUiState.Blocked(result.message)
 '''
@@ -151,7 +148,6 @@ agent_error_new = '''            is AgentResult.Error -> {
 '''
 s = s.replace(agent_error_anchor, agent_error_new, 1)
 
-# TTS success has not guaranteed audible output in-car. Log logical and physical playback state.
 tts_end_anchor = '''        DiLink3DebugLog.log(
             context,
             "BUILD60_TTS_TRACE",
@@ -176,8 +172,6 @@ tts_end_new = '''        DiLink3DebugLog.log(
 '''
 s = s.replace(tts_end_anchor, tts_end_new, 1)
 
-# After one route has completed, close ONLY the capture session. Do not use stopContinuousSession(),
-# because that would cancel the route/TTS/agent pipeline. At this point routeUtterance has returned.
 route_final_anchor = '''                                    routingJob = null
                                     processingUtterance = false
                                     runCatching { updateListeningOverlay(context.getString(R.string.voice_listening)) }
@@ -221,14 +215,13 @@ s = p.read_text()
 
 s = s.replace('DiLink3 Build63 ROUTER GUARD FIX', 'DiLink3 Build64 INPUT PARITY DIAG', 1)
 
-# Clear stale cards once when this screen enters composition, before the collapsed early return.
-context_anchor = '''    val context = LocalContext.current
-    val voiceState by voiceController.state.collectAsState()
-'''
+# Earlier patch levels can insert declarations between context and voiceState, so only
+# anchor the one stable line. Fully qualify LaunchedEffect to avoid import sensitivity.
+context_anchor = '    val context = LocalContext.current\n'
 if context_anchor not in s:
-    raise SystemExit('Build64: panel context anchor not found')
+    raise SystemExit('Build64: panel LocalContext anchor not found')
 context_new = '''    val context = LocalContext.current
-    LaunchedEffect(Unit) {
+    androidx.compose.runtime.LaunchedEffect(Unit) {
         context.getSharedPreferences("build61_voice_trace", Context.MODE_PRIVATE)
             .edit()
             .remove("last_heard")
@@ -239,11 +232,9 @@ context_new = '''    val context = LocalContext.current
             .apply()
         DiLink3DebugLog.log(context, "BUILD64_TRACE_FIELDS_RESET", "reason=panel_composition")
     }
-    val voiceState by voiceController.state.collectAsState()
 '''
 s = s.replace(context_anchor, context_new, 1)
 
-# Put the screen trigger immediately below the Build64 title so it is easy to find.
 title_anchor = '            Text("DiLink3 Build64 INPUT PARITY DIAG", style = MaterialTheme.typography.titleLarge)\n\n'
 if title_anchor not in s:
     raise SystemExit('Build64: Build64 title anchor not found after rename')
@@ -265,7 +256,6 @@ controls = '''            Text("DiLink3 Build64 INPUT PARITY DIAG", style = Mate
 '''
 s = s.replace(title_anchor, controls, 1)
 
-# Replace Build63 explanation with current field finding.
 s = s.replace(
     'Build63 убирает диагностическое «Я услышал» перед маршрутизацией, потому что оно могло активировать SelfEchoFilter. Перед resolver теперь отдельно логируется точный echo-guard и любой ранний возврат. Поля «Что услышал» и «Что сказал ассистент» обновляются сразу через listener, без Share/Clear log.',
     'Build64 сравнивает физическую кнопку и кнопку на экране через один и тот же PTT-вход. Первый press трассируется до PCM, SpeechStart и Utterance с задержками. Также логируется точный AgentResult.Error и состояние TTS. Старые карточки очищаются при открытии экрана.',
