@@ -90,6 +90,21 @@ jobs:
           python3 .github/patch-dilink3-build62-auto-diagnostic.py
           python3 .github/patch-dilink3-build63-router-guard-fix.py
           python3 .github/patch-dilink3-build64-input-parity-diagnostics.py
+          # Later cleanup patches removed the original aihubmixStatus state while the Build65
+          # patch deliberately uses it only as a stable insertion marker. Re-create that harmless
+          # local marker immediately beside e2eBridge before applying Build65.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt')
+          s = p.read_text()
+          marker = '    var aihubmixStatus by remember { mutableStateOf("not configured") }\n'
+          if marker not in s:
+              anchor = '    val e2eBridge = remember { DiLink3E2EBridge(context.applicationContext) }\n'
+              if anchor not in s:
+                  raise SystemExit('Build65 workflow: e2eBridge marker anchor not found')
+              s = s.replace(anchor, anchor + marker, 1)
+              p.write_text(s)
+          PY
           python3 .github/patch-dilink3-build65-production-wizard.py
 
       - name: Build Build65 APK
