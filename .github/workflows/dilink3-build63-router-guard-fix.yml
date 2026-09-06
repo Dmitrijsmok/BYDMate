@@ -24,18 +24,31 @@ jobs:
       - name: Prepare stable updateable DiLink3 diagnostic package
         run: |
           set -euo pipefail
+          base64 -d .github/dilink3-debug.keystore.b64 > .github/dilink3-debug.keystore
           python3 - <<'PY'
           from pathlib import Path
-          w = Path('.github/workflows/dilink3-build61-reply-trace.yml').read_text()
-          a = w.index('      - name: Prepare stable updateable DiLink3 diagnostic package')
-          a = w.index('        run: |', a) + len('        run: |\n')
-          b = w.index('\n      - name: Apply DiLink3 patch chain', a)
-          block = w[a:b]
-          lines = [(x[10:] if x.startswith('          ') else x) for x in block.splitlines()]
-          script = '\n'.join(lines).replace('60010', '60012').replace('Build61', 'Build63') + '\n'
-          Path('/tmp/build63-prepare.sh').write_text(script)
+          gradle = Path('app/build.gradle.kts')
+          text = gradle.read_text()
+          signing_needle = '''    signingConfigs {\n        if (keystorePropsFile.exists()) {'''
+          signing_replacement = '''    signingConfigs {\n        create("dilink3Diag") {\n            storeFile = rootProject.file(".github/dilink3-debug.keystore")\n            storePassword = "dilink3debug"\n            keyAlias = "dilink3debug"\n            keyPassword = "dilink3debug"\n        }\n        if (keystorePropsFile.exists()) {'''
+          if signing_needle not in text: raise SystemExit('signingConfigs insertion point not found')
+          text = text.replace(signing_needle, signing_replacement, 1)
+          build_types_needle = '''    buildTypes {\n        release {'''
+          build_types_replacement = '''    buildTypes {\n        debug {\n            applicationIdSuffix = ".dilink3diag"\n            versionNameSuffix = "-dilink3diag"\n            signingConfig = signingConfigs.getByName("dilink3Diag")\n        }\n        release {'''
+          if build_types_needle not in text: raise SystemExit('buildTypes insertion point not found')
+          text = text.replace(build_types_needle, build_types_replacement, 1)
+          diag_version_code = int(Path('.github/dilink3-version-code.txt').read_text().strip())
+          if diag_version_code != 60012: raise SystemExit(f'Build63 requires versionCode 60012, ledger has {diag_version_code}')
+          old_version = '        versionCode = 433'
+          if old_version not in text: raise SystemExit('versionCode insertion point not found')
+          text = text.replace(old_version, f'        versionCode = {diag_version_code}', 1)
+          gradle.write_text(text)
+          manifest = Path('app/src/main/AndroidManifest.xml')
+          m = manifest.read_text()
+          old = 'android:label="BYDMate"'
+          if old not in m: raise SystemExit('application label not found')
+          manifest.write_text(m.replace(old, 'android:label="BYDMate DiLink3 Build63"', 1))
           PY
-          bash /tmp/build63-prepare.sh
 
       - name: Apply DiLink3 patch chain through Build63
         run: |
