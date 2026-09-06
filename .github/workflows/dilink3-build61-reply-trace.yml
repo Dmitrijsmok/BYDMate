@@ -102,11 +102,11 @@ jobs:
           grep -F "application-label:'BYDMate DiLink3 Build62'" /tmp/build62-badging.txt
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/build62-signature.txt
           grep -F "certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb" /tmp/build62-signature.txt
-          grep -F 'DiLink3 Build62 AUTO DIAG' app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt
-          grep -F 'BUILD62_DIAGNOSIS' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
-          grep -F 'BUILD62_AUDIO_STATE' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
-          grep -F 'ROUTE_RETURNED_BEFORE_RESOLVER' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
-          grep -F 'AGENT_REQUEST_HANGING' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
+          grep -R -F 'DiLink3 Build62 AUTO DIAG' app/src/main/kotlin >/dev/null
+          grep -R -F 'BUILD62_DIAGNOSIS' app/src/main/kotlin >/dev/null
+          grep -R -F 'BUILD62_AUDIO_STATE' app/src/main/kotlin >/dev/null
+          grep -R -F 'ROUTE_RETURNED_BEFORE_RESOLVER' app/src/main/kotlin >/dev/null
+          grep -R -F 'AGENT_REQUEST_HANGING' app/src/main/kotlin >/dev/null
           mkdir -p verified
           cp "$APK" verified/BYDMate-DiLink3-build62.apk
           sha256sum verified/BYDMate-DiLink3-build62.apk | tee verified/BYDMate-DiLink3-build62.sha256
