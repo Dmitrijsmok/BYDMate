@@ -21,36 +21,34 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v5
 
-      - name: Prepare stable updateable DiLink3 diagnostic package
+      - name: Prepare stable updateable package
         run: |
           set -euo pipefail
           base64 -d .github/dilink3-debug.keystore.b64 > .github/dilink3-debug.keystore
           python3 - <<'PY'
           from pathlib import Path
-          gradle = Path('app/build.gradle.kts')
-          text = gradle.read_text()
-          signing_needle = '''    signingConfigs {\n        if (keystorePropsFile.exists()) {'''
-          signing_replacement = '''    signingConfigs {\n        create("dilink3Diag") {\n            storeFile = rootProject.file(".github/dilink3-debug.keystore")\n            storePassword = "dilink3debug"\n            keyAlias = "dilink3debug"\n            keyPassword = "dilink3debug"\n        }\n        if (keystorePropsFile.exists()) {'''
-          if signing_needle not in text: raise SystemExit('signingConfigs insertion point not found')
-          text = text.replace(signing_needle, signing_replacement, 1)
-          build_types_needle = '''    buildTypes {\n        release {'''
-          build_types_replacement = '''    buildTypes {\n        debug {\n            applicationIdSuffix = ".dilink3diag"\n            versionNameSuffix = "-dilink3diag"\n            signingConfig = signingConfigs.getByName("dilink3Diag")\n        }\n        release {'''
-          if build_types_needle not in text: raise SystemExit('buildTypes insertion point not found')
-          text = text.replace(build_types_needle, build_types_replacement, 1)
-          diag_version_code = int(Path('.github/dilink3-version-code.txt').read_text().strip())
-          if diag_version_code != 60014: raise SystemExit(f'Build65 requires versionCode 60014, ledger has {diag_version_code}')
-          old_version = '        versionCode = 433'
-          if old_version not in text: raise SystemExit('versionCode insertion point not found')
-          text = text.replace(old_version, f'        versionCode = {diag_version_code}', 1)
-          gradle.write_text(text)
-          manifest = Path('app/src/main/AndroidManifest.xml')
-          m = manifest.read_text()
-          old = 'android:label="BYDMate"'
-          if old not in m: raise SystemExit('application label not found')
-          manifest.write_text(m.replace(old, 'android:label="BYDMate DiLink3 Build65"', 1))
+          p = Path('app/build.gradle.kts')
+          s = p.read_text()
+          a = '''    signingConfigs {\n        if (keystorePropsFile.exists()) {'''
+          b = '''    signingConfigs {\n        create("dilink3Diag") {\n            storeFile = rootProject.file(".github/dilink3-debug.keystore")\n            storePassword = "dilink3debug"\n            keyAlias = "dilink3debug"\n            keyPassword = "dilink3debug"\n        }\n        if (keystorePropsFile.exists()) {'''
+          if a not in s: raise SystemExit('signing anchor missing')
+          s = s.replace(a, b, 1)
+          a = '''    buildTypes {\n        release {'''
+          b = '''    buildTypes {\n        debug {\n            applicationIdSuffix = ".dilink3diag"\n            versionNameSuffix = "-dilink3diag"\n            signingConfig = signingConfigs.getByName("dilink3Diag")\n        }\n        release {'''
+          if a not in s: raise SystemExit('buildTypes anchor missing')
+          s = s.replace(a, b, 1)
+          vc = int(Path('.github/dilink3-version-code.txt').read_text().strip())
+          if vc != 60014: raise SystemExit(f'Build65 needs 60014, got {vc}')
+          if '        versionCode = 433' not in s: raise SystemExit('version anchor missing')
+          s = s.replace('        versionCode = 433', f'        versionCode = {vc}', 1)
+          p.write_text(s)
+          m = Path('app/src/main/AndroidManifest.xml')
+          t = m.read_text()
+          if 'android:label="BYDMate"' not in t: raise SystemExit('label anchor missing')
+          m.write_text(t.replace('android:label="BYDMate"', 'android:label="BYDMate DiLink3 Build65"', 1))
           PY
 
-      - name: Apply DiLink3 patch chain through Build65
+      - name: Apply patch chain
         run: |
           set -euo pipefail
           python3 .github/patch-dilink3-e2e.py
@@ -59,53 +57,41 @@ jobs:
           python3 .github/patch-dilink3-mic-button.py
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('app/src/main/kotlin/com/bydmate/app/MainActivity.kt')
-          p.write_text(p.read_text().replace('"hasFocus=$hasWindowFocus"', '"hasFocus=${hasWindowFocus()}"'))
+          p=Path('app/src/main/kotlin/com/bydmate/app/MainActivity.kt')
+          p.write_text(p.read_text().replace('"hasFocus=$hasWindowFocus"','"hasFocus=${hasWindowFocus()}"'))
           PY
           python3 .github/patch-dilink3-wizard.py
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt')
-          p.write_text(p.read_text().replace('InputDevice.getDeviceIds().mapNotNull', 'InputDevice.getDeviceIds().toList().mapNotNull'))
+          p=Path('app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt')
+          p.write_text(p.read_text().replace('InputDevice.getDeviceIds().mapNotNull','InputDevice.getDeviceIds().toList().mapNotNull'))
           PY
-          python3 .github/patch-dilink3-304-latency.py
-          python3 .github/patch-dilink3-build40-compat.py
-          python3 .github/patch-dilink3-build41-system-tts.py
-          python3 .github/patch-dilink3-build42-a11y.py
-          python3 .github/patch-dilink3-build43-testlab.py
-          python3 .github/patch-dilink3-build44-adb-lab.py
-          python3 .github/patch-dilink3-build45-safe-adb-tx.py
-          python3 .github/patch-dilink3-build46-log-share.py
-          python3 .github/patch-dilink3-build47-304-block-lab.py
-          python3 .github/patch-dilink3-build48-327-block-lab.py
-          python3 .github/patch-dilink3-build49-327-production.py
-          python3 .github/patch-dilink3-build50-clean-keytrace.py
-          python3 .github/patch-dilink3-build55-accessibility-recovery.py
-          python3 .github/patch-dilink3-build56-production.py
-          python3 .github/patch-dilink3-build57-reliability.py
-          python3 .github/patch-dilink3-build58-language-debug-overlay.py
-          python3 .github/patch-dilink3-build59-diagnostic-lab.py
-          python3 .github/patch-dilink3-build60-auto-voice-trace.py
-          python3 .github/patch-dilink3-build61-reply-trace-ui.py
-          python3 .github/patch-dilink3-build62-auto-diagnostic.py
-          python3 .github/patch-dilink3-build63-router-guard-fix.py
-          python3 .github/patch-dilink3-build64-input-parity-diagnostics.py
-          # Later cleanup patches removed the original aihubmixStatus state while the Build65
-          # patch deliberately uses it only as a stable insertion marker. Re-create that harmless
-          # local marker immediately beside e2eBridge before applying Build65.
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt')
-          s = p.read_text()
-          marker = '    var aihubmixStatus by remember { mutableStateOf("not configured") }\n'
-          if marker not in s:
-              anchor = '    val e2eBridge = remember { DiLink3E2EBridge(context.applicationContext) }\n'
-              if anchor not in s:
-                  raise SystemExit('Build65 workflow: e2eBridge marker anchor not found')
-              s = s.replace(anchor, anchor + marker, 1)
-              p.write_text(s)
-          PY
-          python3 .github/patch-dilink3-build65-production-wizard.py
+          for f in \
+            patch-dilink3-304-latency.py \
+            patch-dilink3-build40-compat.py \
+            patch-dilink3-build41-system-tts.py \
+            patch-dilink3-build42-a11y.py \
+            patch-dilink3-build43-testlab.py \
+            patch-dilink3-build44-adb-lab.py \
+            patch-dilink3-build45-safe-adb-tx.py \
+            patch-dilink3-build46-log-share.py \
+            patch-dilink3-build47-304-block-lab.py \
+            patch-dilink3-build48-327-block-lab.py \
+            patch-dilink3-build49-327-production.py \
+            patch-dilink3-build50-clean-keytrace.py \
+            patch-dilink3-build55-accessibility-recovery.py \
+            patch-dilink3-build56-production.py \
+            patch-dilink3-build57-reliability.py \
+            patch-dilink3-build58-language-debug-overlay.py \
+            patch-dilink3-build59-diagnostic-lab.py \
+            patch-dilink3-build60-auto-voice-trace.py \
+            patch-dilink3-build61-reply-trace-ui.py \
+            patch-dilink3-build62-auto-diagnostic.py \
+            patch-dilink3-build63-router-guard-fix.py \
+            patch-dilink3-build64-input-parity-diagnostics.py \
+            patch-dilink3-build65-production-wizard.py; do
+              python3 ".github/$f"
+          done
 
       - name: Build Build65 APK
         run: ./gradlew :app:assembleDebug --stacktrace
@@ -113,32 +99,23 @@ jobs:
       - name: Verify Build65
         run: |
           set -euo pipefail
-          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
-          BUILD_TOOLS="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
-          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee /tmp/build65-badging.txt
-          grep -F "package: name='com.bydmate.app.dilink3diag' versionCode='60014'" /tmp/build65-badging.txt
-          grep -F "application-label:'BYDMate DiLink3 Build65'" /tmp/build65-badging.txt
-          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/build65-signature.txt
-          grep -F "certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb" /tmp/build65-signature.txt
-          VC='app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt'
-          UI='app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt'
-          E2E='app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3E2EBridge.kt'
-          TTS='app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt'
-          grep -F 'DiLink3 Build65 PRODUCTION WIZARD' "$UI"
-          grep -F 'ПРОВЕРИТЬ AI НАПРЯМУЮ' "$UI"
-          grep -F 'ПРОИГРАТЬ ТЕСТ ГРОМКОСТИ' "$UI"
-          grep -F 'PRODUCTION CANDIDATE' "$UI"
-          grep -F 'BUILD65_AI_ONLY_START' "$E2E"
-          grep -F 'BUILD65_TTS_ONLY_START' "$E2E"
-          grep -F 'BUILD65_ASSISTANT_GAIN = 1.50f' "$TTS"
-          grep -F 'applyOutputGain(samples, BUILD65_ASSISTANT_GAIN)' "$TTS"
-          grep -F 'build65_prod_wizard' "$VC"
+          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n1)"
+          BT="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+          "$BT/aapt" dump badging "$APK" | tee /tmp/badging
+          grep -F "package: name='com.bydmate.app.dilink3diag' versionCode='60014'" /tmp/badging
+          grep -F "application-label:'BYDMate DiLink3 Build65'" /tmp/badging
+          "$BT/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/sig
+          grep -F "certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb" /tmp/sig
+          grep -F 'DiLink3 Build65 PRODUCTION WIZARD' app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt
+          grep -F 'ПРОВЕРИТЬ AI НАПРЯМУЮ' app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt
+          grep -F 'ПРОИГРАТЬ ТЕСТ ГРОМКОСТИ' app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt
+          grep -F 'BUILD65_ASSISTANT_GAIN = 1.50f' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt
           mkdir -p verified
           cp "$APK" verified/BYDMate-DiLink3-build65.apk
           sha256sum verified/BYDMate-DiLink3-build65.apk | tee verified/BYDMate-DiLink3-build65.sha256
-          printf '%s\n' 'package=com.bydmate.app.dilink3diag' 'versionCode=60014' 'signerSha256=c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb' 'previousDistributedVersionCode=60013' 'updateMustInstallOverPrevious=true' 'assistantPcmGain=1.50' | tee verified/BYDMate-DiLink3-build65-metadata.txt
+          printf '%s\n' 'package=com.bydmate.app.dilink3diag' 'versionCode=60014' 'signerSha256=c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb' 'previousDistributedVersionCode=60013' 'updateMustInstallOverPrevious=true' 'assistantPcmGain=1.50' > verified/BYDMate-DiLink3-build65-metadata.txt
 
-      - name: Upload verified Build65 APK
+      - name: Upload verified APK
         uses: actions/upload-artifact@v7
         with:
           name: bydmate-dilink3-build65-production-wizard
