@@ -1,0 +1,116 @@
+name: DiLink3 Build63 Router Guard Fix
+
+on:
+  push:
+    branches: [dilink3-voice-compat]
+  workflow_dispatch:
+
+concurrency:
+  group: dilink3-build63-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Prepare stable updateable DiLink3 diagnostic package
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          w = Path('.github/workflows/dilink3-build61-reply-trace.yml').read_text()
+          a = w.index('      - name: Prepare stable updateable DiLink3 diagnostic package')
+          a = w.index('        run: |', a) + len('        run: |\n')
+          b = w.index('\n      - name: Apply DiLink3 patch chain', a)
+          block = w[a:b]
+          lines = [(x[10:] if x.startswith('          ') else x) for x in block.splitlines()]
+          script = '\n'.join(lines).replace('60010', '60012').replace('Build61', 'Build63') + '\n'
+          Path('/tmp/build63-prepare.sh').write_text(script)
+          PY
+          bash /tmp/build63-prepare.sh
+
+      - name: Apply DiLink3 patch chain through Build63
+        run: |
+          set -euo pipefail
+          python3 .github/patch-dilink3-e2e.py
+          python3 .github/patch-dilink3-aihubmix.py
+          python3 .github/patch-dilink3-logging.py
+          python3 .github/patch-dilink3-mic-button.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/kotlin/com/bydmate/app/MainActivity.kt')
+          p.write_text(p.read_text().replace('"hasFocus=$hasWindowFocus"', '"hasFocus=${hasWindowFocus()}"'))
+          PY
+          python3 .github/patch-dilink3-wizard.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt')
+          p.write_text(p.read_text().replace('InputDevice.getDeviceIds().mapNotNull', 'InputDevice.getDeviceIds().toList().mapNotNull'))
+          PY
+          python3 .github/patch-dilink3-304-latency.py
+          python3 .github/patch-dilink3-build40-compat.py
+          python3 .github/patch-dilink3-build41-system-tts.py
+          python3 .github/patch-dilink3-build42-a11y.py
+          python3 .github/patch-dilink3-build43-testlab.py
+          python3 .github/patch-dilink3-build44-adb-lab.py
+          python3 .github/patch-dilink3-build45-safe-adb-tx.py
+          python3 .github/patch-dilink3-build46-log-share.py
+          python3 .github/patch-dilink3-build47-304-block-lab.py
+          python3 .github/patch-dilink3-build48-327-block-lab.py
+          python3 .github/patch-dilink3-build49-327-production.py
+          python3 .github/patch-dilink3-build50-clean-keytrace.py
+          python3 .github/patch-dilink3-build55-accessibility-recovery.py
+          python3 .github/patch-dilink3-build56-production.py
+          python3 .github/patch-dilink3-build57-reliability.py
+          python3 .github/patch-dilink3-build58-language-debug-overlay.py
+          python3 .github/patch-dilink3-build59-diagnostic-lab.py
+          python3 .github/patch-dilink3-build60-auto-voice-trace.py
+          python3 .github/patch-dilink3-build61-reply-trace-ui.py
+          python3 .github/patch-dilink3-build62-auto-diagnostic.py
+          python3 .github/patch-dilink3-build63-router-guard-fix.py
+
+      - name: Build Build63 APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Verify Build63
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          BUILD_TOOLS="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee /tmp/build63-badging.txt
+          grep -F "package: name='com.bydmate.app.dilink3diag' versionCode='60012'" /tmp/build63-badging.txt
+          grep -F "application-label:'BYDMate DiLink3 Build63'" /tmp/build63-badging.txt
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/build63-signature.txt
+          grep -F "certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb" /tmp/build63-signature.txt
+          VC='app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt'
+          UI='app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt'
+          grep -F 'BUILD63_PRE_ROUTE_TTS_SKIPPED' "$VC"
+          grep -F 'BUILD63_PRE_RESOLVER_GUARD' "$VC"
+          grep -F 'BUILD63_EARLY_RETURN' "$VC"
+          grep -F 'SELF_ECHO_GUARD' "$VC"
+          grep -F 'registerOnSharedPreferenceChangeListener' "$UI"
+          grep -F 'DiLink3 Build63 ROUTER GUARD FIX' "$UI"
+          if grep -F 'build60SpeakTrace("heard_echo"' "$VC"; then
+            echo 'Build63 verification failed: pre-route heard_echo TTS still present' >&2
+            exit 1
+          fi
+          mkdir -p verified
+          cp "$APK" verified/BYDMate-DiLink3-build63.apk
+          sha256sum verified/BYDMate-DiLink3-build63.apk | tee verified/BYDMate-DiLink3-build63.sha256
+          printf '%s\n' 'package=com.bydmate.app.dilink3diag' 'versionCode=60012' 'signerSha256=c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb' 'previousDistributedVersionCode=60011' 'updateMustInstallOverPrevious=true' | tee verified/BYDMate-DiLink3-build63-metadata.txt
+
+      - name: Upload verified Build63 APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: bydmate-dilink3-build63-router-guard-fix
+          path: verified/*
+          if-no-files-found: error
+          retention-days: 14
