@@ -31,7 +31,36 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          set +e
           git cherry-pick c825e1a758f0c5be4f47e6578154c1a88d444ca3
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            conflicts="$(git diff --name-only --diff-filter=U)"
+            expected="app/src/main/res/values/strings.xml"
+            test "$conflicts" = "$expected" || { echo "Unexpected cherry-pick conflicts:"; echo "$conflicts"; exit 1; }
+
+            # Keep every upstream v3.14.3 resource, then add only our two new strings.
+            git checkout --ours app/src/main/res/values/strings.xml
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/res/values/strings.xml')
+          s = p.read_text(encoding='utf-8')
+          if 'settings_dilink3_steering_assistant_title' not in s:
+              addition = '''    <!-- DiLink3 steering microphone takeover -->
+              <string name="settings_dilink3_steering_assistant_title">Кнопка микрофона DiLink 3</string>
+              <string name="settings_dilink3_steering_assistant_desc">Включено: кнопка микрофона на руле запускает ассистента BYDMate, а штатный BYD Assistant не открывается. Выключено: кнопка полностью возвращается штатному ассистенту.</string>
+          '''
+              addition = '\n'.join(line[14:] if line.startswith('              ') else line for line in addition.splitlines()) + '\n'
+              if '</resources>' not in s:
+                  raise SystemExit('strings.xml has no closing resources tag')
+              s = s.replace('</resources>', addition + '</resources>', 1)
+              p.write_text(s, encoding='utf-8')
+          PY
+            git add app/src/main/res/values/strings.xml
+            GIT_EDITOR=true git cherry-pick --continue
+          fi
           git diff HEAD^ --check
 
       - name: Verify takeover and upstream Android 10 recovery coexist
@@ -41,6 +70,7 @@ jobs:
           grep -q 'DILINK3_MIC_KEYCODE = 304' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt
           grep -q 'DILINK3_STOCK_ASSISTANT_KEYCODE = 327' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt
           grep -q 'diLink3AssistantDecision' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -q 'settings_dilink3_steering_assistant_title' app/src/main/res/values/strings.xml
           grep -q 'A11yRecoveryGate.markBound' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
           grep -q 'override fun onProviderDisabled' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
           grep -q 'recoverAccessibilityService' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
