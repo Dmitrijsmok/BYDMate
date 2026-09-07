@@ -1,0 +1,150 @@
+name: DiLink3 Build65 Rebuild
+
+on:
+  push:
+    branches: [dilink3-build65-rebuild]
+  workflow_dispatch:
+
+concurrency:
+  group: dilink3-build65-rebuild-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Prepare updateable package
+        run: |
+          set -euo pipefail
+          base64 -d .github/dilink3-debug.keystore.b64 > .github/dilink3-debug.keystore
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/build.gradle.kts')
+          s = p.read_text()
+          a = '''    signingConfigs {\n        if (keystorePropsFile.exists()) {'''
+          b = '''    signingConfigs {\n        create("dilink3Diag") {\n            storeFile = rootProject.file(".github/dilink3-debug.keystore")\n            storePassword = "dilink3debug"\n            keyAlias = "dilink3debug"\n            keyPassword = "dilink3debug"\n        }\n        if (keystorePropsFile.exists()) {'''
+          if a not in s: raise SystemExit('signing anchor missing')
+          s = s.replace(a, b, 1)
+          a = '''    buildTypes {\n        release {'''
+          b = '''    buildTypes {\n        debug {\n            applicationIdSuffix = ".dilink3diag"\n            versionNameSuffix = "-dilink3diag-build65r1"\n            signingConfig = signingConfigs.getByName("dilink3Diag")\n        }\n        release {'''
+          if a not in s: raise SystemExit('buildTypes anchor missing')
+          s = s.replace(a, b, 1)
+          if '        versionCode = 433' not in s: raise SystemExit('version anchor missing')
+          s = s.replace('        versionCode = 433', '        versionCode = 60015', 1)
+          p.write_text(s)
+          m = Path('app/src/main/AndroidManifest.xml')
+          t = m.read_text()
+          if 'android:label="BYDMate"' not in t: raise SystemExit('label anchor missing')
+          m.write_text(t.replace('android:label="BYDMate"', 'android:label="BYDMate DiLink3 Build65R"', 1))
+          PY
+
+      - name: Apply Build65 patch chain
+        run: |
+          set -euo pipefail
+          python3 .github/patch-dilink3-e2e.py
+          python3 .github/patch-dilink3-aihubmix.py
+          python3 .github/patch-dilink3-logging.py
+          python3 .github/patch-dilink3-mic-button.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/kotlin/com/bydmate/app/MainActivity.kt')
+          p.write_text(p.read_text().replace('"hasFocus=$hasWindowFocus"','"hasFocus=${hasWindowFocus()}"'))
+          PY
+          python3 .github/patch-dilink3-wizard.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt')
+          p.write_text(p.read_text().replace('InputDevice.getDeviceIds().mapNotNull','InputDevice.getDeviceIds().toList().mapNotNull'))
+          PY
+          for f in \
+            patch-dilink3-304-latency.py \
+            patch-dilink3-build40-compat.py \
+            patch-dilink3-build41-system-tts.py \
+            patch-dilink3-build42-a11y.py \
+            patch-dilink3-build43-testlab.py \
+            patch-dilink3-build44-adb-lab.py \
+            patch-dilink3-build45-safe-adb-tx.py \
+            patch-dilink3-build46-log-share.py \
+            patch-dilink3-build47-304-block-lab.py \
+            patch-dilink3-build48-327-block-lab.py \
+            patch-dilink3-build49-327-production.py \
+            patch-dilink3-build50-clean-keytrace.py \
+            patch-dilink3-build55-accessibility-recovery.py \
+            patch-dilink3-build56-production.py \
+            patch-dilink3-build57-reliability.py \
+            patch-dilink3-build58-language-debug-overlay.py \
+            patch-dilink3-build59-diagnostic-lab.py \
+            patch-dilink3-build60-auto-voice-trace.py \
+            patch-dilink3-build61-reply-trace-ui.py \
+            patch-dilink3-build62-auto-diagnostic.py \
+            patch-dilink3-build63-router-guard-fix.py \
+            patch-dilink3-build64-input-parity-diagnostics.py \
+            patch-dilink3-build65-production-wizard.py; do
+              python3 ".github/$f"
+          done
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/kotlin/com/bydmate/app/ui/diagnostics/DiLink3VoiceDebugPanel.kt')
+          s = p.read_text().replace('mutableLongStateOf(0L)', 'mutableStateOf(0)')
+          start = '            Text("DiLink3 Build65 PRODUCTION WIZARD", style = MaterialTheme.typography.titleLarge)\n'
+          end = '''            Button(\n                onClick = {\n                    DiLink3DebugLog.log(context, "BUILD64_SCREEN_PTT_BUTTON", "action=press")\n'''
+          i = s.find(start)
+          j = s.find(end, i)
+          if i < 0 or j < 0:
+              raise SystemExit('Build65 compatibility: wizard block boundaries not found')
+          safe = '''            Text("DiLink3 Build65 PRODUCTION WIZARD", style = MaterialTheme.typography.titleLarge)\n\n            val b65 = context.getSharedPreferences("build65_prod_wizard", Context.MODE_PRIVATE)\n            val b61 = context.getSharedPreferences("build61_voice_trace", Context.MODE_PRIVATE)\n            val b65Tick = build65Refresh\n            val pttSource = b65.getString("last_ptt_source", "").orEmpty()\n            val pcmOk = b65.getBoolean("pcm_seen", false)\n            val speechOk = b65.getBoolean("speech_seen", false)\n            val utteranceOk = b65.getBoolean("utterance_seen", false)\n            val utteranceText = b65.getString("utterance_text", "").orEmpty()\n            val agentError = b65.getString("agent_error", "").orEmpty()\n            val assistantText = b61.getString("last_assistant", "").orEmpty()\n            val steeringOk = com.bydmate.app.cluster.SteeringWheelKeyService.isConnected\n            val aiOk = build65Snapshot?.let { it.enabled && it.provider == "custom" && it.baseUrl.isNotBlank() && it.model.isNotBlank() && it.credentialsPresent } ?: false\n            val productionOk = steeringOk && aiOk && build65AiStatus.startsWith("PASS") && build65TtsPassed && pcmOk && speechOk && utteranceOk && agentError.isBlank()\n\n            Text("PRODUCTION READINESS", style = MaterialTheme.typography.titleMedium)\n            Text("1. Steering service: ${if (steeringOk) "PASS" else "FAIL"}")\n            Text("2. AI provider: ${build65Snapshot?.let { if (aiOk) "PASS - ${it.provider}/${it.model}" else "FAIL - Настройки > Интеграции" } ?: "checking..."}")\n            Text("3. Microphone/PCM: ${if (pcmOk) "PASS" else "waiting"}")\n            Text("4. Speech/VAD: ${if (speechOk) "PASS" else "waiting"}")\n            Text("5. GigaAM utterance: ${if (utteranceOk) "PASS - $utteranceText" else "waiting"}")\n            Text("6. Agent route: ${if (agentError.isBlank() && utteranceOk) "no captured error" else agentError.ifBlank { "waiting" }}")\n\n            Button(onClick = { build65Refresh++ }, modifier = Modifier.fillMaxWidth()) { Text("ОБНОВИТЬ СТАТУС ВИЗАРДА") }\n\n            Text("TEST A - AI БЕЗ МИКРОФОНА", style = MaterialTheme.typography.titleMedium)\n            Button(enabled = aiOk, onClick = {\n                build65AiStatus = "testing..."; build65AiAnswer = ""\n                scope.launch {\n                    val r = build65Bridge.askOnly("Ответь одним коротким словом: готово")\n                    if (r.error != null) build65AiStatus = "FAIL: ${r.error}" else { build65AiStatus = "PASS"; build65AiAnswer = r.answer.orEmpty() }\n                }\n            }, modifier = Modifier.fillMaxWidth()) { Text("ПРОВЕРИТЬ AI НАПРЯМУЮ") }\n            Text("AI test: $build65AiStatus")\n            Text("AI answer: ${build65AiAnswer.ifBlank { "<none>" }}")\n\n            Text("TEST B - ГРОМКОСТЬ TTS", style = MaterialTheme.typography.titleMedium)\n            Text("Речь ассистента усилена x1.50 (~+3.5 dB), музыка не меняется.", style = MaterialTheme.typography.bodySmall)\n            Button(onClick = {\n                build65TtsStatus = "testing..."; build65TtsPassed = false\n                scope.launch {\n                    val r = build65Bridge.testTtsOnly()\n                    build65TtsPassed = r.error == null\n                    build65TtsStatus = if (r.error == null) "PASS - сравни со штатным ассистентом" else "FAIL: ${r.error}"\n                }\n            }, modifier = Modifier.fillMaxWidth()) { Text("ПРОИГРАТЬ ТЕСТ ГРОМКОСТИ") }\n            Text("TTS test: $build65TtsStatus")\n\n            Text("TEST C - SCREEN PTT", style = MaterialTheme.typography.titleMedium)\n            Button(enabled = !voiceController.sessionActive(), onClick = { voiceController.build64PttFrom("build65_wizard_screen") }, modifier = Modifier.fillMaxWidth()) { Text("ЗАПУСТИТЬ КОМАНДУ С ЭКРАНА") }\n\n            Text("TEST D - STEERING PTT", style = MaterialTheme.typography.titleMedium)\n            Text("Нажми микрофон на руле один раз, скажи вопрос и обнови статус.", style = MaterialTheme.typography.bodySmall)\n            Text("PTT source: ${pttSource.ifBlank { "<none>" }}")\n            Text("Assistant text: ${assistantText.ifBlank { "<none>" }}")\n            Text("PRODUCTION CANDIDATE: ${if (productionOk) "READY" else "NOT READY"}", style = MaterialTheme.typography.titleMedium)\n            Text("Production UX: одно нажатие = одна команда; beep; Слушаю/Думаю/Ответ; авто-закрытие после одной фразы; второе нажатие = barge-in; видимый распознанный текст и ответ; конкретная AI-ошибка; отдельная громкость речи без изменения музыки.", style = MaterialTheme.typography.bodySmall)\n\n'''
+          s = s[:i] + safe + s[j:]
+          p.write_text(s)
+
+          p = Path('app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt')
+          s = p.read_text()
+          if 'internal const val BUILD65_ASSISTANT_GAIN = 1.50f' not in s:
+              anchor = '        private const val DRAIN_POLL_MS = 20L\n'
+              if anchor not in s:
+                  raise SystemExit('Build65 compatibility: TTS constant anchor not found')
+              defs = '''        internal const val BUILD65_ASSISTANT_GAIN = 1.50f\n        internal fun applyOutputGain(samples: FloatArray, gain: Float): FloatArray {\n            val g = if (gain.isFinite()) gain.coerceIn(0.5f, 2.0f) else 1.0f\n            if (g == 1.0f) return samples\n            return FloatArray(samples.size) { idx -> (samples[idx] * g).coerceIn(-0.98f, 0.98f) }\n        }\n\n'''
+              s = s.replace(anchor, defs + anchor, 1)
+          p.write_text(s)
+          PY
+
+      - name: Build APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Verify install identity
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n1)"
+          BT="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+          "$BT/aapt" dump badging "$APK" | tee /tmp/badging
+          grep -F "package: name='com.bydmate.app.dilink3diag' versionCode='60015'" /tmp/badging
+          grep -F "application-label:'BYDMate DiLink3 Build65R'" /tmp/badging
+          "$BT/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/sig
+          grep -F "certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb" /tmp/sig
+          mkdir -p verified
+          cp "$APK" verified/BYDMate-DiLink3-build65-rebuild.apk
+          sha256sum verified/BYDMate-DiLink3-build65-rebuild.apk | tee verified/BYDMate-DiLink3-build65-rebuild.sha256
+          printf '%s\n' \
+            'package=com.bydmate.app.dilink3diag' \
+            'versionCode=60015' \
+            'signerSha256=c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb' \
+            'previousDistributedVersionCode=60013' \
+            'build65OriginalVersionCode=60014' \
+            'updateMustInstallOverPrevious=true' \
+            'assistantPcmGain=1.50' > verified/BYDMate-DiLink3-build65-rebuild-metadata.txt
+
+      - name: Upload verified APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: bydmate-dilink3-build65-rebuild
+          path: verified/*
+          if-no-files-found: error
+          retention-days: 14
