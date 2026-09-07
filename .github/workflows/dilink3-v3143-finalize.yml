@@ -1,0 +1,423 @@
+name: Finalize DiLink3 production voice flow
+
+on:
+  push:
+    branches: [dilink3-v3143-finalize-migration]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  finalize-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout production branch
+        uses: actions/checkout@v4
+        with:
+          ref: dilink3-production-v3143
+          fetch-depth: 0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Apply final DiLink3 production cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          # -----------------------------------------------------------------
+          # Pure platform + 304/327 decision layer.
+          # -----------------------------------------------------------------
+          p = Path('app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt')
+          s = p.read_text(encoding='utf-8')
+          anchor = 'const val DILINK3_STOCK_ASSISTANT_KEYCODE = 327\n\n'
+          if anchor not in s:
+              raise SystemExit('DiLink3 keycode anchor missing')
+          if 'fun diLink3TakeoverSupported(' not in s:
+              s = s.replace(anchor, anchor + '''/**
+           * The validated 304/327 takeover belongs to the Android 10 DiLink 3/4 generation.
+           * Keep newer DiLink generations on their existing learnable-key path.
+           */
+          fun diLink3TakeoverSupported(sdkInt: Int): Boolean = sdkInt <= 29
+
+          '''.replace('          ', ''), 1)
+          p.write_text(s, encoding='utf-8')
+
+          # -----------------------------------------------------------------
+          # Accessibility service: hard platform gate + steering-only one-shot entry.
+          # -----------------------------------------------------------------
+          p = Path('app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt')
+          s = p.read_text(encoding='utf-8')
+          old = '''        val diLink3Takeover = voicePrefs.getBoolean(
+              SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, false
+          )
+          '''
+          old = '\n'.join(line[10:] if line.startswith('          ') else line for line in old.splitlines()) + '\n'
+          new = '''        val diLink3Takeover =
+              diLink3TakeoverSupported(android.os.Build.VERSION.SDK_INT) &&
+                  voicePrefs.getBoolean(SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, false)
+          '''
+          new = '\n'.join(line[10:] if line.startswith('          ') else line for line in new.splitlines()) + '\n'
+          if old not in s:
+              raise SystemExit('Steering takeover preference anchor missing')
+          s = s.replace(old, new, 1)
+
+          trigger_block = '''            DiLink3AssistantDecision.TRIGGER_VOICE -> {
+                  entryPoint().voiceController().onPttPressed()
+                  return true
+              }
+          '''
+          trigger_block = '\n'.join(line[10:] if line.startswith('          ') else line for line in trigger_block.splitlines()) + '\n'
+          trigger_new = '''            DiLink3AssistantDecision.TRIGGER_VOICE -> {
+                  // DiLink3 physical mic is one command per press. The normal BYDMate PTT path
+                  // stays continuous/multi-turn for the app UI and newer learnable steering keys.
+                  entryPoint().voiceController().onSteeringPttPressed()
+                  return true
+              }
+          '''
+          trigger_new = '\n'.join(line[10:] if line.startswith('          ') else line for line in trigger_new.splitlines()) + '\n'
+          if trigger_block not in s:
+              raise SystemExit('DiLink3 steering trigger call anchor missing')
+          s = s.replace(trigger_block, trigger_new, 1)
+          p.write_text(s, encoding='utf-8')
+
+          # -----------------------------------------------------------------
+          # VoiceController: localize Build64's proven one-utterance close to steering only.
+          # -----------------------------------------------------------------
+          p = Path('app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt')
+          s = p.read_text(encoding='utf-8')
+          field_anchor = '    private val stopRequested = AtomicBoolean(false)\n'
+          if field_anchor not in s:
+              raise SystemExit('VoiceController stopRequested anchor missing')
+          if 'steeringOneShotRequested' not in s:
+              s = s.replace(
+                  field_anchor,
+                  field_anchor + '    private val steeringOneShotRequested = AtomicBoolean(false)\n',
+                  1,
+              )
+
+          ptt_anchor = '    fun onPttPressed() {\n'
+          if ptt_anchor not in s:
+              raise SystemExit('VoiceController onPttPressed anchor missing')
+          steering_method = '''    /**
+           * DiLink3 steering PTT: one physical press owns exactly one routed utterance.
+           * The regular [onPttPressed] remains the upstream continuous/multi-turn mode.
+           */
+          fun onSteeringPttPressed() {
+              if (!_listening.value) steeringOneShotRequested.set(true)
+              onPttPressed()
+              // Gate/model failures do not start a session, so never leak the one-shot request
+              // into a later screen/widget PTT.
+              if (!_listening.value) steeringOneShotRequested.set(false)
+          }
+
+          '''
+          steering_method = '\n'.join(line[10:] if line.startswith('          ') else line for line in steering_method.splitlines()) + '\n'
+          if 'fun onSteeringPttPressed()' not in s:
+              s = s.replace(ptt_anchor, steering_method + ptt_anchor, 1)
+
+          start_anchor = '''    private fun startContinuousSession() {
+              if (!busy.compareAndSet(false, true)) return
+              ensureSupertonicStressDict()
+          '''
+          start_anchor = '\n'.join(line[10:] if line.startswith('          ') else line for line in start_anchor.splitlines()) + '\n'
+          start_new = '''    private fun startContinuousSession() {
+              if (!busy.compareAndSet(false, true)) return
+              val oneShotAfterFirstUtterance = steeringOneShotRequested.getAndSet(false)
+              ensureSupertonicStressDict()
+          '''
+          start_new = '\n'.join(line[10:] if line.startswith('          ') else line for line in start_new.splitlines()) + '\n'
+          if start_anchor not in s:
+              raise SystemExit('VoiceController continuous start anchor missing')
+          s = s.replace(start_anchor, start_new, 1)
+
+          finally_anchor = '''                                    routingJob = null
+                                      processingUtterance = false
+                                      runCatching { updateListeningOverlay(context.getString(R.string.voice_listening)) }
+                                      if (stopRequested.get()) session?.cancel()
+          '''
+          finally_anchor = '\n'.join(line[10:] if line.startswith('          ') else line for line in finally_anchor.splitlines()) + '\n'
+          # Be whitespace-tolerant around the already-upstream block.
+          finally_pattern = re.compile(
+              r'                                    routingJob = null\n'
+              r'                                    processingUtterance = false\n'
+              r'                                    runCatching \{ updateListeningOverlay\(context\.getString\(R\.string\.voice_listening\)\) \}\n'
+              r'                                    if \(stopRequested\.get\(\)\) session\?\.cancel\(\)\n'
+          )
+          finally_new = '''                                    routingJob = null
+                                      processingUtterance = false
+                                      if (oneShotAfterFirstUtterance || stopRequested.get()) {
+                                          session?.cancel()
+                                      } else {
+                                          runCatching { updateListeningOverlay(context.getString(R.string.voice_listening)) }
+                                      }
+          '''
+          finally_new = '\n'.join(line[10:] if line.startswith('          ') else line for line in finally_new.splitlines()) + '\n'
+          s, n = finally_pattern.subn(finally_new, s, count=1)
+          if n != 1:
+              raise SystemExit(f'VoiceController routing-finally replacement count={n}')
+          p.write_text(s, encoding='utf-8')
+
+          # -----------------------------------------------------------------
+          # Settings: Android 10 shows one exclusive Stock/BYDMate choice; newer DiLink
+          # keeps upstream's learnable steering-key UI. No second assistant-disable toggle.
+          # -----------------------------------------------------------------
+          p = Path('app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt')
+          s = p.read_text(encoding='utf-8')
+          ui_pattern = re.compile(
+              r'    // DiLink3 steering microphone ownership\. Disabled unless the voice pipeline is ON;\n'
+              r'.*?'
+              r'    // Contacts permission \(call_contact tool\)\n',
+              re.S,
+          )
+          ui_new = '''    val diLink3TakeoverAvailable = remember {
+              com.bydmate.app.cluster.diLink3TakeoverSupported(android.os.Build.VERSION.SDK_INT)
+          }
+          if (diLink3TakeoverAvailable) {
+              // One exclusive choice instead of independent "intercept" + "disable stock" switches.
+              Card(
+                  shape = RoundedCornerShape(12.dp),
+                  colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
+                  modifier = Modifier.fillMaxWidth(),
+              ) {
+                  Column(modifier = Modifier.padding(horizontal = 12.dp)) {
+                      SettingChipRow(
+                          title = stringResource(R.string.settings_dilink3_steering_assistant_title),
+                          description = stringResource(R.string.settings_dilink3_steering_assistant_desc),
+                          options = listOf("BYD Assistant", "BYDMate"),
+                          selectedIndex = if (state.dilink3SteeringAssistant) 1 else 0,
+                          onSelect = { index -> viewModel.setDiLink3SteeringAssistant(index == 1) },
+                          enabled = state.voiceEnabled,
+                      )
+                  }
+              }
+          } else {
+              // Upstream/newer DiLink path: keep the learnable voice key unchanged.
+              var learningVoiceKey by remember { mutableStateOf(false) }
+              Card(
+                  shape = RoundedCornerShape(12.dp),
+                  colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
+                  modifier = Modifier.fillMaxWidth(),
+              ) {
+                  Column(modifier = Modifier.padding(horizontal = 12.dp)) {
+                      val keyLabel = steeringButtonLabel(
+                          if (state.voiceKeycode == 0) DEFAULT_VOICE_KEYCODE else state.voiceKeycode
+                      )
+                      SettingValueRow(
+                          title = stringResource(R.string.settings_voice_button_label),
+                          value = stringResource(R.string.settings_voice_button_current, keyLabel),
+                          onClick = { learningVoiceKey = true },
+                      )
+                  }
+              }
+
+              if (learningVoiceKey) {
+                  LearnButtonDialog(
+                      onSave = { code ->
+                          viewModel.saveVoiceKeycode(code)
+                          learningVoiceKey = false
+                      },
+                      onDismiss = { learningVoiceKey = false },
+                  )
+              }
+          }
+
+          // Contacts permission (call_contact tool)
+          '''
+          ui_new = '\n'.join(line[10:] if line.startswith('          ') else line for line in ui_new.splitlines()) + '\n'
+          s, n = ui_pattern.subn(ui_new, s, count=1)
+          if n != 1:
+              raise SystemExit(f'Settings DiLink3 UI replacement count={n}')
+          p.write_text(s, encoding='utf-8')
+
+          # -----------------------------------------------------------------
+          # Legacy package-disable API: fail-safe compatibility only, can never disable stock.
+          # -----------------------------------------------------------------
+          p = Path('app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt')
+          s = p.read_text(encoding='utf-8')
+          setter_pattern = re.compile(
+              r'    /\*\*\n'
+              r'     \* Toggle the native BYD voice assistant\..*?\n'
+              r'    fun setDisableNativeAssistant\(disabled: Boolean\) \{.*?\n'
+              r'    \}\n',
+              re.S,
+          )
+          setter_new = '''    /**
+           * Legacy compatibility only. Package-level disabling is no longer supported: DiLink3
+           * takeover consumes event 327 while OFF restores the factory assistant immediately.
+           */
+          @Deprecated("Use DiLink3 steering takeover; stock assistant package must stay enabled")
+          fun setDisableNativeAssistant(disabled: Boolean) {
+              _uiState.update { it.copy(disableNativeAssistant = false) }
+              viewModelScope.launch {
+                  settingsRepository.setString(SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, "false")
+                  if (helperBootstrap.ensureRunning()) {
+                      helperClient.setAppHidden("com.byd.autovoice", false)
+                  }
+                  if (disabled) Log.i(TAG, "Ignored legacy request to disable stock BYD Assistant")
+              }
+          }
+          '''
+          setter_new = '\n'.join(line[10:] if line.startswith('          ') else line for line in setter_new.splitlines()) + '\n'
+          s, n = setter_pattern.subn(setter_new, s, count=1)
+          if n != 1:
+              raise SystemExit(f'legacy assistant setter replacement count={n}')
+          p.write_text(s, encoding='utf-8')
+
+          # -----------------------------------------------------------------
+          # Startup migration: if an older build left autovoice disabled, restore it once.
+          # -----------------------------------------------------------------
+          p = Path('app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt')
+          s = p.read_text(encoding='utf-8')
+          legacy_pattern = re.compile(
+              r'                if \(ok\) \{\n'
+              r'                    val pref = settingsRepository\.getString\(\n'
+              r'                        com\.bydmate\.app\.data\.repository\.SettingsRepository\.KEY_DISABLE_NATIVE_ASSISTANT,\n'
+              r'                        ""\)\n'
+              r'                    if \(pref\.isNotEmpty\(\)\) \{\n'
+              r'                        helperClient\.setAppHidden\("com\.byd\.autovoice", pref == "true"\)\n'
+              r'                    \}\n'
+              r'                \}\n'
+          )
+          legacy_new = '''                if (ok) {
+                      val legacyPref = settingsRepository.getString(
+                          SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, "")
+                      if (legacyPref == "true") {
+                          val restored = helperClient.setAppHidden("com.byd.autovoice", false)
+                          if (restored) {
+                              settingsRepository.setString(SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, "false")
+                              Log.i(TAG, "Restored stock BYD Assistant from legacy package-disable setting")
+                          } else {
+                              Log.w(TAG, "Could not restore stock BYD Assistant from legacy setting")
+                          }
+                      }
+                  }
+          '''
+          legacy_new = '\n'.join(line[10:] if line.startswith('          ') else line for line in legacy_new.splitlines()) + '\n'
+          s, n = legacy_pattern.subn(legacy_new, s, count=1)
+          if n != 1:
+              raise SystemExit(f'TrackingService legacy migration replacement count={n}')
+          p.write_text(s, encoding='utf-8')
+
+          # -----------------------------------------------------------------
+          # Regression tests: platform gate + steering one-shot, while generic PTT remains continuous.
+          # -----------------------------------------------------------------
+          p = Path('app/src/test/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecisionTest.kt')
+          s = p.read_text(encoding='utf-8')
+          test_anchor = '    @Test fun `dilink3 field keycodes stay pinned to 304 and 327`() {\n'
+          if test_anchor not in s:
+              raise SystemExit('Steering decision test anchor missing')
+          platform_tests = '''    @Test fun `dilink3 takeover is limited to Android 10 generation`() {
+              assertTrue(diLink3TakeoverSupported(29))
+              assertFalse(diLink3TakeoverSupported(30))
+              assertFalse(diLink3TakeoverSupported(31))
+              assertFalse(diLink3TakeoverSupported(35))
+          }
+
+          '''
+          platform_tests = '\n'.join(line[10:] if line.startswith('          ') else line for line in platform_tests.splitlines()) + '\n'
+          s = s.replace(test_anchor, platform_tests + test_anchor, 1)
+          p.write_text(s, encoding='utf-8')
+
+          p = Path('app/src/test/kotlin/com/bydmate/app/voice/VoiceControllerAgentFallbackTest.kt')
+          s = p.read_text(encoding='utf-8')
+          agent_test_anchor = '    @Test fun `agent Answer becomes AgentAnswer state, earcon ok, orchestrator called once`() {\n'
+          if agent_test_anchor not in s:
+              raise SystemExit('VoiceController agent-test anchor missing')
+          oneshot_test = '''    @Test fun `steering PTT closes after one routed utterance but generic PTT stays continuous`() {
+              val agentOrchestrator = mockk<AgentOrchestrator>()
+              coEvery { agentOrchestrator.ask(any(), any()) } returns AgentResult.Answer("готово")
+
+              val steeringAsr = FakeContinuousAsr()
+              val steering = makeController(agentOrchestrator = agentOrchestrator, continuousAsr = steeringAsr)
+              steering.onSteeringPttPressed()
+              awaitTrue { steering.listening.value }
+              awaitSubscribed(steeringAsr.events)
+              steeringAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+              awaitTrue { !steering.listening.value }
+
+              val genericAsr = FakeContinuousAsr()
+              val generic = makeController(agentOrchestrator = agentOrchestrator, continuousAsr = genericAsr)
+              generic.onPttPressed()
+              awaitTrue { generic.listening.value }
+              awaitSubscribed(genericAsr.events)
+              genericAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+              awaitTrue { generic.routingJobForTest() == null }
+              assertEquals(true, generic.listening.value)
+              generic.onPttPressed() // cleanly stop the test session
+              awaitTrue { !generic.listening.value }
+          }
+
+          '''
+          oneshot_test = '\n'.join(line[10:] if line.startswith('          ') else line for line in oneshot_test.splitlines()) + '\n'
+          s = s.replace(agent_test_anchor, oneshot_test + agent_test_anchor, 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Verify clean production invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          changed="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt \
+            app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt \
+            app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt \
+            app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt \
+            app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt \
+            app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt \
+            app/src/test/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecisionTest.kt \
+            app/src/test/kotlin/com/bydmate/app/voice/VoiceControllerAgentFallbackTest.kt | sort)"
+          test "$changed" = "$expected" || { echo 'Unexpected scope:'; echo "$changed"; exit 1; }
+
+          grep -q 'DILINK3_MIC_KEYCODE = 304' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt
+          grep -q 'DILINK3_STOCK_ASSISTANT_KEYCODE = 327' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt
+          grep -q 'diLink3TakeoverSupported(android.os.Build.VERSION.SDK_INT)' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -q 'onSteeringPttPressed' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
+          grep -q 'oneShotAfterFirstUtterance' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
+          grep -Fq 'options = listOf("BYD Assistant", "BYDMate")' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt
+          grep -q 'if (diLink3TakeoverAvailable)' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt
+          grep -Fq 'setAppHidden("com.byd.autovoice", false)' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
+          grep -Fq 'setAppHidden("com.byd.autovoice", false)' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt
+          ! grep -F 'setAppHidden("com.byd.autovoice", pref == "true")' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
+          ! grep -F 'setAppHidden("com.byd.autovoice", disabled)' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt
+          ! grep -R 'BUILD6[0-9]_' app/src/main/kotlin/com/bydmate/app/cluster app/src/main/kotlin/com/bydmate/app/voice app/src/main/kotlin/com/bydmate/app/ui/settings
+
+      - name: Compile and run focused production regressions
+        run: |
+          ./gradlew --no-daemon \
+            :app:compileDebugKotlin \
+            :app:testDebugUnitTest \
+            --tests 'com.bydmate.app.cluster.SteeringWheelKeyDecisionTest' \
+            --tests 'com.bydmate.app.voice.VoiceControllerAgentFallbackTest' \
+            --tests 'com.bydmate.app.voice.GigaAmModelManagerTest' \
+            --tests 'com.bydmate.app.service.A11yRecoveryGateTest' \
+            --tests 'com.bydmate.app.service.TrackingServiceLocationListenerTest'
+
+      - name: Commit and push verified production cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt \
+            app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt \
+            app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt \
+            app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt \
+            app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt \
+            app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt \
+            app/src/test/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecisionTest.kt \
+            app/src/test/kotlin/com/bydmate/app/voice/VoiceControllerAgentFallbackTest.kt
+          git diff --cached --check
+          git commit -m "feat(dilink3): finalize production steering voice flow"
+          git push origin HEAD:dilink3-production-v3143
