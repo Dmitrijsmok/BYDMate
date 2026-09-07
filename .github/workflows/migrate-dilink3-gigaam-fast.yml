@@ -1,0 +1,85 @@
+name: Migrate DiLink3 GigaAM focused
+
+on:
+  push:
+    branches: [dilink3-gigaam-fast-migration]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate-gigaam-focused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout GigaAM staging branch
+        uses: actions/checkout@v4
+        with:
+          ref: dilink3-production-gigaam
+          fetch-depth: 0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Apply proven lifecycle-safe migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin dilink3-production-orchestrator:dilink3-production-orchestrator
+          git show dilink3-production-orchestrator:.github/workflows/dilink3-production-gigaam-v2.yml > /tmp/source.yml
+          python3 - <<'PY'
+          from pathlib import Path
+          lines = Path('/tmp/source.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(lines) if "python3 - <<'PY'" in line) + 1
+          end = next(i for i in range(start, len(lines)) if lines[i].strip() == 'PY')
+          block = lines[start:end]
+          # The original here-doc sits ten spaces inside YAML's run block.
+          normalized = [line[10:] if line.startswith('          ') else line for line in block]
+          Path('/tmp/apply_gigaam.py').write_text('\n'.join(normalized) + '\n')
+          PY
+          python3 /tmp/apply_gigaam.py
+
+      - name: Verify production scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          changed="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt \
+            app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt \
+            app/src/main/kotlin/com/bydmate/app/voice/GigaAmModelManager.kt | sort)"
+          test "$changed" = "$expected" || { echo 'Unexpected scope:'; echo "$changed"; exit 1; }
+          test -z "$(git diff --name-only -- app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt)"
+          test -z "$(git diff --name-only -- app/src/main/kotlin/com/bydmate/app/ui/diagnostics)"
+          grep -q 'ACTION_GIGAAM_DOWNLOAD' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
+          grep -q 'downloadToFileResume' app/src/main/kotlin/com/bydmate/app/voice/GigaAmModelManager.kt
+          grep -q 'observeGigaAmProvisioning' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt
+          ! grep -R 'BUILD57_' app/src/main/kotlin/com/bydmate/app/voice/GigaAmModelManager.kt
+
+      - name: Compile and run focused GigaAM tests
+        run: |
+          ./gradlew --no-daemon \
+            :app:compileDebugKotlin \
+            :app:testDebugUnitTest \
+            --tests 'com.bydmate.app.voice.GigaAmModelManagerTest' \
+            --tests 'com.bydmate.app.voice.GigaAmSegmenterTest' \
+            --tests 'com.bydmate.app.voice.GigaAmVadConfigTest'
+
+      - name: Commit production source only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            app/src/main/kotlin/com/bydmate/app/voice/GigaAmModelManager.kt \
+            app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt \
+            app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
+          git diff --cached --check
+          git commit -m "feat(dilink3): make GigaAM provisioning lifecycle-safe"
+          git push origin HEAD:dilink3-production-gigaam
