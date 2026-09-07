@@ -180,6 +180,23 @@ class SteeringWheelKeyDecisionTest {
         )
     }
 
+    @Test fun `dilink3 takeover is limited to Android 10 generation`() {
+        assertTrue(diLink3TakeoverSupported(29))
+        assertFalse(diLink3TakeoverSupported(30))
+        assertFalse(diLink3TakeoverSupported(35))
+    }
+
+    @Test fun `voice master off restores both DiLink3 physical events`() {
+        assertEquals(
+            DiLink3AssistantDecision.PASS_THROUGH,
+            diLink3AssistantDecision(DILINK3_MIC_KEYCODE, true, true, false),
+        )
+        assertEquals(
+            DiLink3AssistantDecision.PASS_THROUGH,
+            diLink3AssistantDecision(DILINK3_STOCK_ASSISTANT_KEYCODE, true, true, false),
+        )
+    }
+
     @Test fun `dilink3 field keycodes stay pinned to 304 and 327`() {
         assertEquals(304, DILINK3_MIC_KEYCODE)
         assertEquals(327, DILINK3_STOCK_ASSISTANT_KEYCODE)

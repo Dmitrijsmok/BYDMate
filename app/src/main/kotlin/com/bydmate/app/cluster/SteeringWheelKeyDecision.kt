@@ -73,6 +73,12 @@ const val DILINK3_MIC_KEYCODE = 304
 /** Companion edge from the same press that opens the stock BYD Assistant. */
 const val DILINK3_STOCK_ASSISTANT_KEYCODE = 327
 
+/**
+ * The field-validated 304/327 takeover belongs to the Android 10 DiLink 3/4 generation.
+ * Newer DiLink generations keep the upstream learnable steering-key path.
+ */
+fun diLink3TakeoverSupported(sdkInt: Int): Boolean = sdkInt <= 29
+
 enum class DiLink3AssistantDecision { TRIGGER_VOICE, CONSUME, PASS_THROUGH }
 
 /**
@@ -87,9 +93,9 @@ fun diLink3AssistantDecision(
     takeoverEnabled: Boolean,
     voiceEnabled: Boolean,
 ): DiLink3AssistantDecision {
-    if (!takeoverEnabled) return DiLink3AssistantDecision.PASS_THROUGH
+    if (!takeoverEnabled || !voiceEnabled) return DiLink3AssistantDecision.PASS_THROUGH
     if (keyCode == DILINK3_STOCK_ASSISTANT_KEYCODE) return DiLink3AssistantDecision.CONSUME
-    if (keyCode != DILINK3_MIC_KEYCODE || !voiceEnabled) return DiLink3AssistantDecision.PASS_THROUGH
+    if (keyCode != DILINK3_MIC_KEYCODE) return DiLink3AssistantDecision.PASS_THROUGH
     return if (isDown) DiLink3AssistantDecision.TRIGGER_VOICE else DiLink3AssistantDecision.CONSUME
 }
 

@@ -92,6 +92,7 @@ class VoiceController @Inject constructor(
     // half-commanded. processingUtterance is retained as a flag for the barge-in / busy-drop path.
     @Volatile private var processingUtterance = false
     private val stopRequested = AtomicBoolean(false)
+    private val steeringOneShotRequested = AtomicBoolean(false)
     // Anti-self-trigger mute window for the continuous session's mic capture. Stamped two ways:
     // (1) at call time, right after ttsEngine.speak() returns true (announce()/agent answer) --
     // this is the floor, since we always know when we start our own TTS, and it also covers a
@@ -214,6 +215,13 @@ class VoiceController @Inject constructor(
      *  session (#87): "model missing" when GigaAM isn't downloaded, "language not RU" when it
      *  is; a continuous session already listening -> stop it immediately (barge-in stops TTS
      *  too). */
+    /** DiLink3 physical steering microphone: one command per press. */
+    fun onSteeringPttPressed() {
+        if (!_listening.value) steeringOneShotRequested.set(true)
+        onPttPressed()
+        if (!_listening.value) steeringOneShotRequested.set(false)
+    }
+
     fun onPttPressed() {
         if (!gate.isEnabled()) return
         if (_listening.value) {
@@ -258,6 +266,7 @@ class VoiceController @Inject constructor(
      *  SILENCE_AUTOSTOP_MS of continuous silence (Wave P: no session cap). */
     private fun startContinuousSession() {
         if (!busy.compareAndSet(false, true)) return
+        val oneShotAfterFirstUtterance = steeringOneShotRequested.getAndSet(false)
         ensureSupertonicStressDict()
         // Barge-in: kill any ongoing TTS so it neither talks over the user nor bleeds into capture.
         runCatching { ttsEngine.stop() }
@@ -352,8 +361,11 @@ class VoiceController @Inject constructor(
                                 } finally {
                                     routingJob = null
                                     processingUtterance = false
-                                    runCatching { updateListeningOverlay(context.getString(R.string.voice_listening)) }
-                                    if (stopRequested.get()) session?.cancel()
+                                    if (oneShotAfterFirstUtterance || stopRequested.get()) {
+                                        session?.cancel()
+                                    } else {
+                                        runCatching { updateListeningOverlay(context.getString(R.string.voice_listening)) }
+                                    }
                                 }
                             }
                             routingJob = job

@@ -493,15 +493,16 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Toggle the native BYD voice assistant. Persists the choice and applies it immediately
-     * through the helper daemon: true -> pm disable-user, false -> pm enable. Reversible.
-     */
+    /** Legacy compatibility only: the stock BYD Assistant package must stay enabled. */
+    @Deprecated("Use DiLink3 steering takeover")
     fun setDisableNativeAssistant(disabled: Boolean) {
-        _uiState.update { it.copy(disableNativeAssistant = disabled) }
+        _uiState.update { it.copy(disableNativeAssistant = false) }
         viewModelScope.launch {
-            settingsRepository.setString(SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, disabled.toString())
-            helperClient.setAppHidden("com.byd.autovoice", disabled)
+            settingsRepository.setString(SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, "false")
+            if (helperBootstrap.ensureRunning()) {
+                helperClient.setAppHidden("com.byd.autovoice", false)
+            }
+            if (disabled) Log.i(TAG, "Ignored legacy request to disable stock BYD Assistant")
         }
     }
 

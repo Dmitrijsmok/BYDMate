@@ -2649,51 +2649,53 @@ private fun VoiceSettingsContent(
         }
     }
 
-    // DiLink3 steering microphone ownership. Disabled unless the voice pipeline is ON;
-    // turning Voice off also clears the persisted takeover in SettingsViewModel.
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp)) {
-            SettingToggleRow(
-                title = stringResource(R.string.settings_dilink3_steering_assistant_title),
-                description = stringResource(R.string.settings_dilink3_steering_assistant_desc),
-                checked = state.dilink3SteeringAssistant,
-                onCheckedChange = { viewModel.setDiLink3SteeringAssistant(it) },
-                enabled = state.voiceEnabled,
+    val diLink3TakeoverAvailable = remember {
+        com.bydmate.app.cluster.diLink3TakeoverSupported(android.os.Build.VERSION.SDK_INT)
+    }
+    if (diLink3TakeoverAvailable) {
+        Card(
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp)) {
+                SettingChipRow(
+                    title = stringResource(R.string.settings_dilink3_steering_assistant_title),
+                    description = stringResource(R.string.settings_dilink3_steering_assistant_desc),
+                    options = listOf("BYD Assistant", "BYDMate"),
+                    selectedIndex = if (state.dilink3SteeringAssistant) 1 else 0,
+                    onSelect = { index -> viewModel.setDiLink3SteeringAssistant(index == 1) },
+                    enabled = state.voiceEnabled,
+                )
+            }
+        }
+    } else {
+        var learningVoiceKey by remember { mutableStateOf(false) }
+        Card(
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp)) {
+                val keyLabel = steeringButtonLabel(
+                    if (state.voiceKeycode == 0) DEFAULT_VOICE_KEYCODE else state.voiceKeycode
+                )
+                SettingValueRow(
+                    title = stringResource(R.string.settings_voice_button_label),
+                    value = stringResource(R.string.settings_voice_button_current, keyLabel),
+                    onClick = { learningVoiceKey = true },
+                )
+            }
+        }
+        if (learningVoiceKey) {
+            LearnButtonDialog(
+                onSave = { code ->
+                    viewModel.saveVoiceKeycode(code)
+                    learningVoiceKey = false
+                },
+                onDismiss = { learningVoiceKey = false },
             )
         }
-    }
-
-    // Steering-button assignment (reuses LearnButtonDialog from DisplaySection)
-    var learningVoiceKey by remember { mutableStateOf(false) }
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp)) {
-            val keyLabel = steeringButtonLabel(
-                if (state.voiceKeycode == 0) DEFAULT_VOICE_KEYCODE else state.voiceKeycode
-            )
-            SettingValueRow(
-                title = stringResource(R.string.settings_voice_button_label),
-                value = stringResource(R.string.settings_voice_button_current, keyLabel),
-                onClick = { learningVoiceKey = true },
-            )
-        }
-    }
-
-    if (learningVoiceKey) {
-        LearnButtonDialog(
-            onSave = { code ->
-                viewModel.saveVoiceKeycode(code)
-                learningVoiceKey = false
-            },
-            onDismiss = { learningVoiceKey = false },
-        )
     }
 
     // Contacts permission (call_contact tool)

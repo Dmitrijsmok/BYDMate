@@ -91,27 +91,27 @@ class SteeringWheelKeyService : AccessibilityService() {
         // DiLink3 field-validated microphone takeover. One physical press emits 304 plus 327;
         // 304 is BYDMate's trigger while 327 is the stock-assistant companion event. The
         // preference is opt-in and defaults false, so every other vehicle keeps factory routing.
-        val diLink3Takeover = voicePrefs.getBoolean(
-            SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, false
-        )
+        val diLink3Platform = diLink3TakeoverSupported(android.os.Build.VERSION.SDK_INT)
+        val diLink3Takeover = diLink3Platform &&
+            voicePrefs.getBoolean(SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, false)
         when (diLink3AssistantDecision(event.keyCode, isDown, diLink3Takeover, voiceEnabled)) {
             DiLink3AssistantDecision.TRIGGER_VOICE -> {
-                entryPoint().voiceController().onPttPressed()
+                entryPoint().voiceController().onSteeringPttPressed()
                 return true
             }
             DiLink3AssistantDecision.CONSUME -> return true
             DiLink3AssistantDecision.PASS_THROUGH -> {}
         }
 
-        when (voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey)) {
-            VoiceKeyDecision.TRIGGER -> {
-                entryPoint().voiceController().onPttPressed()
-                return true
+        if (!diLink3Platform) {
+            when (voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey)) {
+                VoiceKeyDecision.TRIGGER -> {
+                    entryPoint().voiceController().onPttPressed()
+                    return true
+                }
+                VoiceKeyDecision.CONSUME -> return true
+                VoiceKeyDecision.IGNORE -> {}
             }
-            // Swallow the matching key's UP edge too — otherwise it falls through to the
-            // native BYD assistant, which owns the same hardware keycode (Finding 2).
-            VoiceKeyDecision.CONSUME -> return true
-            VoiceKeyDecision.IGNORE -> {}
         }
         // Volume-knob press: runs before the star decision, own switch, default off. The key is
         // consumed whenever the feature is on — even when no MediaSession answers — because the

@@ -104,6 +104,30 @@ class VoiceControllerAgentFallbackTest {
             selectedTtsVoice = { TtsVoiceCatalog.byId("dmitri") })
     }
 
+    @Test fun `steering PTT closes after one routed utterance while generic PTT stays continuous`() {
+        val agent = mockk<AgentOrchestrator>()
+        coEvery { agent.ask(any(), any()) } returns AgentResult.Answer("готово")
+
+        val steeringAsr = FakeContinuousAsr()
+        val steering = makeController(agentOrchestrator = agent, continuousAsr = steeringAsr)
+        steering.onSteeringPttPressed()
+        awaitTrue { steering.listening.value }
+        awaitSubscribed(steeringAsr.events)
+        steeringAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        awaitTrue { !steering.listening.value }
+
+        val normalAsr = FakeContinuousAsr()
+        val normal = makeController(agentOrchestrator = agent, continuousAsr = normalAsr)
+        normal.onPttPressed()
+        awaitTrue { normal.listening.value }
+        awaitSubscribed(normalAsr.events)
+        normalAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        awaitTrue { normal.routingJobForTest() == null }
+        assertEquals(true, normal.listening.value)
+        normal.onPttPressed()
+        awaitTrue { !normal.listening.value }
+    }
+
     @Test fun `agent Answer becomes AgentAnswer state, earcon ok, orchestrator called once`() {
         val agentOrchestrator = mockk<AgentOrchestrator>()
         coEvery { agentOrchestrator.ask(any(), any()) } returns AgentResult.Answer("Заряд 80%")

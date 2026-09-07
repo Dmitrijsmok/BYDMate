@@ -591,11 +591,16 @@ class TrackingService : Service(), LocationListener {
                 // Chained after ensureRunning() (not a separate coroutine) so it cannot race
                 // an unregistered binder on cold start.
                 if (ok) {
-                    val pref = settingsRepository.getString(
-                        com.bydmate.app.data.repository.SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT,
-                        "")
-                    if (pref.isNotEmpty()) {
-                        helperClient.setAppHidden("com.byd.autovoice", pref == "true")
+                    val legacyPref = settingsRepository.getString(
+                        SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, "")
+                    if (legacyPref == "true") {
+                        val restored = helperClient.setAppHidden("com.byd.autovoice", false)
+                        if (restored) {
+                            settingsRepository.setString(SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, "false")
+                            Log.i(TAG, "Restored stock BYD Assistant from legacy package-disable setting")
+                        } else {
+                            Log.w(TAG, "Could not restore stock BYD Assistant from legacy setting")
+                        }
                     }
                 }
                 // Power down a cluster compositor left "on" by a car shutdown mid-projection —
