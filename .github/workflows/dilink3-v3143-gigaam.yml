@@ -48,28 +48,34 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
+
           p = Path('app/src/test/kotlin/com/bydmate/app/voice/GigaAmModelManagerTest.kt')
           s = p.read_text(encoding='utf-8')
           if 'import android.content.SharedPreferences\n' not in s:
-              s = s.replace('import android.content.Context\n', 'import android.content.Context\nimport android.content.SharedPreferences\n', 1)
+              s = s.replace(
+                  'import android.content.Context\n',
+                  'import android.content.Context\nimport android.content.SharedPreferences\n',
+                  1,
+              )
 
-          old_manager = '''    private fun manager(filesDir: File): GigaAmModelManager {
-              val ctx = mockk<Context>()
-              every { ctx.filesDir } returns filesDir
-              every { ctx.cacheDir } returns filesDir
-              return GigaAmModelManager(ctx, OkHttpClient())
-          }
-          '''
-          old_manager = '\n'.join(line[10:] if line.startswith('          ') else line for line in old_manager.splitlines()) + '\n'
-          new_manager = '''    private fun contextFor(filesDir: File): Context {
+          manager_pattern = re.compile(
+              r'    private fun manager\(filesDir: File\): GigaAmModelManager \{\n'
+              r'        val ctx = mockk<Context>\(\)\n'
+              r'        every \{ ctx\.filesDir \} returns filesDir\n'
+              r'        every \{ ctx\.cacheDir \} returns filesDir\n'
+              r'        return GigaAmModelManager\(ctx, OkHttpClient\(\)\)\n'
+              r'    \}\n'
+          )
+          replacement = '''    private fun contextFor(filesDir: File): Context {
               val ctx = mockk<Context>()
               val prefs = mockk<SharedPreferences>(relaxed = true)
               val editor = mockk<SharedPreferences.Editor>(relaxed = true)
               every { ctx.filesDir } returns filesDir
               every { ctx.cacheDir } returns filesDir
               every { ctx.getSharedPreferences("gigaam_provisioning", Context.MODE_PRIVATE) } returns prefs
-              every { prefs.getInt(any(), any()) } answers { secondArg<Int>() }
-              every { prefs.getBoolean(any(), any()) } answers { secondArg<Boolean>() }
+              every { prefs.getInt(any(), any()) } returns -1
+              every { prefs.getBoolean(any(), any()) } returns false
               every { prefs.edit() } returns editor
               every { editor.putInt(any(), any()) } returns editor
               every { editor.putBoolean(any(), any()) } returns editor
@@ -80,26 +86,33 @@ jobs:
           private fun manager(filesDir: File): GigaAmModelManager =
               GigaAmModelManager(contextFor(filesDir), OkHttpClient())
           '''
-          new_manager = '\n'.join(line[10:] if line.startswith('          ') else line for line in new_manager.splitlines()) + '\n'
-          if old_manager not in s:
-              raise SystemExit('manager(filesDir) test helper anchor not found')
-          s = s.replace(old_manager, new_manager, 1)
+          replacement = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in replacement.splitlines()
+          ) + '\n'
+          s, n = manager_pattern.subn(replacement, s, count=1)
+          if n != 1:
+              raise SystemExit(f'manager(filesDir) test helper replacement count={n}')
 
-          old_with = '''    private fun managerWith(filesDir: File, http: OkHttpClient): GigaAmModelManager {
-              val ctx = mockk<Context>()
-              every { ctx.filesDir } returns filesDir
-              every { ctx.cacheDir } returns filesDir
-              return GigaAmModelManager(ctx, http)
-          }
-          '''
-          old_with = '\n'.join(line[10:] if line.startswith('          ') else line for line in old_with.splitlines()) + '\n'
-          new_with = '''    private fun managerWith(filesDir: File, http: OkHttpClient): GigaAmModelManager =
+          with_pattern = re.compile(
+              r'    private fun managerWith\(filesDir: File, http: OkHttpClient\): GigaAmModelManager \{\n'
+              r'        val ctx = mockk<Context>\(\)\n'
+              r'        every \{ ctx\.filesDir \} returns filesDir\n'
+              r'        every \{ ctx\.cacheDir \} returns filesDir\n'
+              r'        return GigaAmModelManager\(ctx, http\)\n'
+              r'    \}\n'
+          )
+          with_replacement = '''    private fun managerWith(filesDir: File, http: OkHttpClient): GigaAmModelManager =
               GigaAmModelManager(contextFor(filesDir), http)
           '''
-          new_with = '\n'.join(line[10:] if line.startswith('          ') else line for line in new_with.splitlines()) + '\n'
-          if old_with not in s:
-              raise SystemExit('managerWith test helper anchor not found')
-          s = s.replace(old_with, new_with, 1)
+          with_replacement = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in with_replacement.splitlines()
+          ) + '\n'
+          s, n = with_pattern.subn(with_replacement, s, count=1)
+          if n != 1:
+              raise SystemExit(f'managerWith test helper replacement count={n}')
+
           p.write_text(s, encoding='utf-8')
           PY
 
@@ -116,7 +129,7 @@ jobs:
             app/src/test/kotlin/com/bydmate/app/voice/GigaAmModelManagerTest.kt | sort)"
           test "$changed" = "$expected" || { echo 'Unexpected scope:'; echo "$changed"; exit 1; }
           grep -q 'downloadToFileResume' app/src/main/kotlin/com/bydmate/app/voice/GigaAmModelManager.kt
-          grep -q 'header("Range", "bytes=$existing-")' app/src/main/kotlin/com/bydmate/app/voice/GigaAmModelManager.kt
+          grep -Fq 'header("Range", "bytes=$existing-")' app/src/main/kotlin/com/bydmate/app/voice/GigaAmModelManager.kt
           grep -q 'ACTION_GIGAAM_DOWNLOAD' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
           grep -q 'START_STICKY' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
           grep -q 'observeGigaAmProvisioning' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt
