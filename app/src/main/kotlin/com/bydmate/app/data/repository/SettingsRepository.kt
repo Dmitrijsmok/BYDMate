@@ -118,6 +118,8 @@ open class SettingsRepository @Inject constructor(
         /** "" = follow app language; "RU" or "EN" to override */
         const val KEY_VOICE_LANG = "voice_lang"
         const val KEY_VOICE_KEYCODE = "voice_keycode"
+        /** DiLink3: steering microphone button belongs to BYDMate instead of stock BYD Assistant. */
+        const val KEY_DILINK3_STEERING_ASSISTANT = "dilink3_steering_assistant"
         /** Offline TTS for agent replies; also mirrored into SharedPreferences("voice") for VoiceGate. */
         const val KEY_TTS_ENABLED = "tts_enabled"
         // Wave N: online TTS backends (provider selection is wired in a later task)

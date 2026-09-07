@@ -9,6 +9,7 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import com.bydmate.app.media.KnobPlayPause
+import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.navdata.NavA11yFeed
 import com.bydmate.app.service.TrackingService
 import dagger.hilt.android.EntryPointAccessors
@@ -86,6 +87,22 @@ class SteeringWheelKeyService : AccessibilityService() {
         val voicePrefs = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
         val voiceEnabled = voicePrefs.getBoolean("voice_enabled", false)
         val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)
+
+        // DiLink3 field-validated microphone takeover. One physical press emits 304 plus 327;
+        // 304 is BYDMate's trigger while 327 is the stock-assistant companion event. The
+        // preference is opt-in and defaults false, so every other vehicle keeps factory routing.
+        val diLink3Takeover = voicePrefs.getBoolean(
+            SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, false
+        )
+        when (diLink3AssistantDecision(event.keyCode, isDown, diLink3Takeover, voiceEnabled)) {
+            DiLink3AssistantDecision.TRIGGER_VOICE -> {
+                entryPoint().voiceController().onPttPressed()
+                return true
+            }
+            DiLink3AssistantDecision.CONSUME -> return true
+            DiLink3AssistantDecision.PASS_THROUGH -> {}
+        }
+
         when (voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey)) {
             VoiceKeyDecision.TRIGGER -> {
                 entryPoint().voiceController().onPttPressed()
