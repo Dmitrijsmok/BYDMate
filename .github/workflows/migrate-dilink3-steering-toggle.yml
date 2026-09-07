@@ -1,0 +1,179 @@
+name: Migrate DiLink3 steering takeover
+
+on:
+  push:
+    branches: [dilink3-steering-toggle-migration]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate-steering-toggle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout production staging branch
+        uses: actions/checkout@v4
+        with:
+          ref: dilink3-production-steering-toggle
+          fetch-depth: 0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Patch production sources
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new, label):
+              p = Path(path)
+              s = p.read_text()
+              if old not in s:
+                  raise SystemExit(f'{label}: anchor not found in {path}')
+              p.write_text(s.replace(old, new, 1))
+
+          # 1) Persistent key. Keep it in the normal SettingsRepository so config backup/restore
+          # carries the toggle, and mirror it into SharedPreferences("voice") for the a11y service.
+          replace_once(
+              'app/src/main/kotlin/com/bydmate/app/data/repository/SettingsRepository.kt',
+              '        const val KEY_VOICE_KEYCODE = "voice_keycode"\n',
+              '        const val KEY_VOICE_KEYCODE = "voice_keycode"\n'
+              '        /** DiLink3: steering microphone button belongs to BYDMate instead of stock BYD Assistant. */\n'
+              '        const val KEY_DILINK3_STEERING_ASSISTANT = "dilink3_steering_assistant"\n',
+              'settings key',
+          )
+
+          # 2) Pure decision logic. Field tests established one physical press as 304/290 + 327/294.
+          decision = 'app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt'
+          replace_once(
+              decision,
+              'const val DEFAULT_VOICE_KEYCODE = 320  // steering "voice" button on Leopard 3 (learnable)\n\n',
+              '''const val DEFAULT_VOICE_KEYCODE = 320  // steering "voice" button on Leopard 3 (learnable)\n\n/** DiLink3 physical microphone press: BYDMate edge observed in the vehicle. */\nconst val DILINK3_MIC_KEYCODE = 304\n/** Companion edge from the same press that opens the stock BYD Assistant. */\nconst val DILINK3_STOCK_ASSISTANT_KEYCODE = 327\n\nenum class DiLink3AssistantDecision { TRIGGER_VOICE, CONSUME, PASS_THROUGH }\n\n/**\n * Ownership gate for the DiLink3 steering microphone button. When takeover is OFF every\n * event passes through, restoring factory behaviour. When ON, 304 starts BYDMate (only if\n * voice is enabled) and both edges are consumed; 327 is always consumed so the stock\n * assistant cannot open from the companion event.\n */\nfun diLink3AssistantDecision(\n    keyCode: Int,\n    isDown: Boolean,\n    takeoverEnabled: Boolean,\n    voiceEnabled: Boolean,\n): DiLink3AssistantDecision {\n    if (!takeoverEnabled) return DiLink3AssistantDecision.PASS_THROUGH\n    if (keyCode == DILINK3_STOCK_ASSISTANT_KEYCODE) return DiLink3AssistantDecision.CONSUME\n    if (keyCode != DILINK3_MIC_KEYCODE || !voiceEnabled) return DiLink3AssistantDecision.PASS_THROUGH\n    return if (isDown) DiLink3AssistantDecision.TRIGGER_VOICE else DiLink3AssistantDecision.CONSUME\n}\n\n''',
+              'decision logic',
+          )
+
+          # 3) Intercept before the generic learned voice key. No debug logging and no package disable.
+          service = 'app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt'
+          replace_once(
+              service,
+              'import com.bydmate.app.media.KnobPlayPause\n',
+              'import com.bydmate.app.media.KnobPlayPause\nimport com.bydmate.app.data.repository.SettingsRepository\n',
+              'service import',
+          )
+          replace_once(
+              service,
+              '''        val voiceEnabled = voicePrefs.getBoolean("voice_enabled", false)\n        val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)\n        when (voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey)) {\n''',
+              '''        val voiceEnabled = voicePrefs.getBoolean("voice_enabled", false)\n        val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)\n\n        // DiLink3 field-validated microphone takeover. One physical press emits 304 plus 327;\n        // 304 is BYDMate's trigger while 327 is the stock-assistant companion event. The\n        // preference is opt-in and defaults false, so every other vehicle keeps factory routing.\n        val diLink3Takeover = voicePrefs.getBoolean(\n            SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, false\n        )\n        when (diLink3AssistantDecision(event.keyCode, isDown, diLink3Takeover, voiceEnabled)) {\n            DiLink3AssistantDecision.TRIGGER_VOICE -> {\n                entryPoint().voiceController().onPttPressed()\n                return true\n            }\n            DiLink3AssistantDecision.CONSUME -> return true\n            DiLink3AssistantDecision.PASS_THROUGH -> {}\n        }\n\n        when (voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey)) {\n''',
+              'service gate',
+          )
+
+          # 4) ViewModel state + persistence + safety: turning Voice off also releases the button.
+          vm = 'app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt'
+          replace_once(
+              vm,
+              '    val voiceKeycode: Int = 0,\n',
+              '    val voiceKeycode: Int = 0,\n    val dilink3SteeringAssistant: Boolean = false,\n',
+              'ui state',
+          )
+          replace_once(
+              vm,
+              '''            val voiceKeycode = settingsRepository.getVoiceKeycode().let {\n                if (it == 0) DEFAULT_VOICE_KEYCODE else it\n            }\n\n            val ttsEnabled = settingsRepository.isTtsEnabled()\n''',
+              '''            val voiceKeycode = settingsRepository.getVoiceKeycode().let {\n                if (it == 0) DEFAULT_VOICE_KEYCODE else it\n            }\n            val dilink3SteeringAssistant = settingsRepository.getString(\n                SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, "false"\n            ) == "true"\n            // AccessibilityService reads the synchronous mirror, while Room remains the\n            // canonical setting used by config backup/restore.\n            appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)\n                .edit().putBoolean(\n                    SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT,\n                    dilink3SteeringAssistant,\n                ).apply()\n\n            val ttsEnabled = settingsRepository.isTtsEnabled()\n''',
+              'load takeover',
+          )
+          replace_once(
+              vm,
+              '                    voiceKeycode = voiceKeycode,\n                    ttsEnabled = ttsEnabled,\n',
+              '                    voiceKeycode = voiceKeycode,\n                    dilink3SteeringAssistant = dilink3SteeringAssistant,\n                    ttsEnabled = ttsEnabled,\n',
+              'copy takeover',
+          )
+          replace_once(
+              vm,
+              '''            appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)\n                .edit().putBoolean(SettingsRepository.KEY_VOICE_ENABLED, enabled).apply()\n            // Best-effort re-bind of the a11y key service (PTT is dead without it), same\n''',
+              '''            appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)\n                .edit().putBoolean(SettingsRepository.KEY_VOICE_ENABLED, enabled).apply()\n            // A disabled voice pipeline must never leave the factory button swallowed.\n            if (!enabled) {\n                _uiState.update { it.copy(dilink3SteeringAssistant = false) }\n                settingsRepository.setString(\n                    SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, "false"\n                )\n                appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)\n                    .edit().putBoolean(\n                        SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, false\n                    ).apply()\n            }\n            // Best-effort re-bind of the a11y key service (PTT is dead without it), same\n''',
+              'voice off releases button',
+          )
+          replace_once(
+              vm,
+              '''    fun setVoiceLanguage(lang: String) {\n''',
+              '''    /**\n     * DiLink3 steering microphone ownership. This never disables a BYD package: it only\n     * controls the field-validated Accessibility key filter, so OFF restores factory routing\n     * immediately. ON requires the voice master switch and self-enables the a11y service.\n     */\n    fun setDiLink3SteeringAssistant(enabled: Boolean) {\n        if (enabled && !_uiState.value.voiceEnabled) return\n        _uiState.update { it.copy(dilink3SteeringAssistant = enabled) }\n        viewModelScope.launch {\n            settingsRepository.setString(\n                SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, enabled.toString()\n            )\n            appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)\n                .edit().putBoolean(\n                    SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, enabled\n                ).apply()\n            if (enabled) {\n                if (helperBootstrap.ensureRunning()) {\n                    helperClient.enableAccessibilityService()\n                } else {\n                    Log.e(TAG, "helper daemon not running; cannot enable DiLink3 steering takeover")\n                }\n            }\n        }\n    }\n\n    fun setVoiceLanguage(lang: String) {\n''',
+              'takeover setter',
+          )
+
+          # 5) Normal Settings UI card. Remove the old pm-disable native-assistant card: package\n          # mutation was a diagnostic-era approach and is no longer the production mechanism.
+          screen = 'app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt'
+          replace_once(
+              screen,
+              '''    // Steering-button assignment (reuses LearnButtonDialog from DisplaySection)\n''',
+              '''    // DiLink3 steering microphone ownership. Disabled unless the voice pipeline is ON;\n    // turning Voice off also clears the persisted takeover in SettingsViewModel.\n    Card(\n        shape = RoundedCornerShape(12.dp),\n        colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),\n        modifier = Modifier.fillMaxWidth(),\n    ) {\n        Column(modifier = Modifier.padding(horizontal = 12.dp)) {\n            SettingToggleRow(\n                title = stringResource(R.string.settings_dilink3_steering_assistant_title),\n                description = stringResource(R.string.settings_dilink3_steering_assistant_desc),\n                checked = state.dilink3SteeringAssistant,\n                onCheckedChange = { viewModel.setDiLink3SteeringAssistant(it) },\n                enabled = state.voiceEnabled,\n            )\n        }\n    }\n\n    // Steering-button assignment (reuses LearnButtonDialog from DisplaySection)\n''',
+              'settings toggle card',
+          )
+          old_native_card = '''    // --- Section 6: Штатный помощник BYD (moved verbatim from AppSection) ---\n    SectionHeader(text = stringResource(R.string.settings_voice_native_assistant_header))\n    Card(\n        shape = RoundedCornerShape(12.dp),\n        colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),\n        modifier = Modifier.fillMaxWidth()\n    ) {\n        Column(modifier = Modifier.padding(horizontal = 12.dp)) {\n            SettingToggleRow(\n                title = stringResource(R.string.settings_voice_disable_native_label),\n                description = stringResource(R.string.settings_voice_disable_native_description),\n                checked = state.disableNativeAssistant,\n                onCheckedChange = { viewModel.setDisableNativeAssistant(it) },\n            )\n            SettingHint(stringResource(R.string.settings_voice_native_assistant_reboot_note))\n        }\n    }\n'''
+          replace_once(screen, old_native_card, '', 'remove package-disable UI')
+
+          # 6) Russian base resources (the project's default strings are Russian).
+          strings = 'app/src/main/res/values/strings.xml'
+          replace_once(
+              strings,
+              '</resources>\n',
+              '''    <!-- DiLink3 steering microphone takeover -->\n    <string name="settings_dilink3_steering_assistant_title">Кнопка микрофона DiLink 3</string>\n    <string name="settings_dilink3_steering_assistant_desc">Включено: кнопка микрофона на руле запускает ассистента BYDMate, а штатный BYD Assistant не открывается. Выключено: кнопка полностью возвращается штатному ассистенту.</string>\n</resources>\n''',
+              'strings',
+          )
+
+          # 7) Focused unit coverage for the exact field-observed event pair and safe OFF state.
+          test = 'app/src/test/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecisionTest.kt'
+          replace_once(
+              test,
+              '\n}\n',
+              '''\n    @Test fun `dilink3 takeover off leaves both physical events factory native`() {\n        assertEquals(\n            DiLink3AssistantDecision.PASS_THROUGH,\n            diLink3AssistantDecision(DILINK3_MIC_KEYCODE, true, false, true),\n        )\n        assertEquals(\n            DiLink3AssistantDecision.PASS_THROUGH,\n            diLink3AssistantDecision(DILINK3_STOCK_ASSISTANT_KEYCODE, true, false, true),\n        )\n    }\n\n    @Test fun `dilink3 304 down triggers BYDMate and up is consumed while takeover is on`() {\n        assertEquals(\n            DiLink3AssistantDecision.TRIGGER_VOICE,\n            diLink3AssistantDecision(DILINK3_MIC_KEYCODE, true, true, true),\n        )\n        assertEquals(\n            DiLink3AssistantDecision.CONSUME,\n            diLink3AssistantDecision(DILINK3_MIC_KEYCODE, false, true, true),\n        )\n    }\n\n    @Test fun `dilink3 327 is consumed on both edges while takeover is on`() {\n        assertEquals(\n            DiLink3AssistantDecision.CONSUME,\n            diLink3AssistantDecision(DILINK3_STOCK_ASSISTANT_KEYCODE, true, true, true),\n        )\n        assertEquals(\n            DiLink3AssistantDecision.CONSUME,\n            diLink3AssistantDecision(DILINK3_STOCK_ASSISTANT_KEYCODE, false, true, true),\n        )\n    }\n\n    @Test fun `dilink3 304 does not trigger when voice master is off`() {\n        assertEquals(\n            DiLink3AssistantDecision.PASS_THROUGH,\n            diLink3AssistantDecision(DILINK3_MIC_KEYCODE, true, true, false),\n        )\n    }\n\n    @Test fun `dilink3 field keycodes stay pinned to 304 and 327`() {\n        assertEquals(304, DILINK3_MIC_KEYCODE)\n        assertEquals(327, DILINK3_STOCK_ASSISTANT_KEYCODE)\n    }\n}\n''',
+              'decision tests',
+          )
+          PY
+
+      - name: Verify migration scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          changed="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt \
+            app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt \
+            app/src/main/kotlin/com/bydmate/app/data/repository/SettingsRepository.kt \
+            app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt \
+            app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt \
+            app/src/main/res/values/strings.xml \
+            app/src/test/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecisionTest.kt | sort)"
+          test "$changed" = "$expected" || { echo "Unexpected scope:"; echo "$changed"; exit 1; }
+          ! grep -R "BUILD[0-9][0-9]" app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          ! grep -R "DiLink3DebugLog" app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          ! grep -R "setAppHidden(\"com.byd.autovoice\"" app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt
+          grep -q 'DILINK3_MIC_KEYCODE = 304' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt
+          grep -q 'DILINK3_STOCK_ASSISTANT_KEYCODE = 327' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt
+
+      - name: Compile and run focused steering tests
+        run: |
+          ./gradlew --no-daemon :app:compileDebugKotlin :app:testDebugUnitTest --tests 'com.bydmate.app.cluster.SteeringWheelKeyDecisionTest'
+
+      - name: Commit production source only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt \
+            app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt \
+            app/src/main/kotlin/com/bydmate/app/data/repository/SettingsRepository.kt \
+            app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt \
+            app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt \
+            app/src/main/res/values/strings.xml \
+            app/src/test/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecisionTest.kt
+          git commit -m "feat(dilink3): add steering assistant takeover toggle"
+          git push origin HEAD:dilink3-production-steering-toggle
