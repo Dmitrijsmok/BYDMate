@@ -1,0 +1,472 @@
+name: DiLink3 Production GigaAM Migration
+
+on:
+  push:
+    branches:
+      - dilink3-production-orchestrator
+    paths:
+      - .github/workflows/dilink3-production-gigaam.yml
+
+permissions:
+  contents: write
+
+jobs:
+  migrate-gigaam:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout clean production branch
+        uses: actions/checkout@v4
+        with:
+          ref: dilink3-production-clean
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply lifecycle-safe GigaAM provisioning
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          manager = r'''package com.bydmate.app.voice
+
+          import android.content.Context
+          import kotlin.coroutines.coroutineContext
+          import kotlinx.coroutines.CancellationException
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.ensureActive
+          import kotlinx.coroutines.sync.Mutex
+          import kotlinx.coroutines.sync.withLock
+          import kotlinx.coroutines.withContext
+          import okhttp3.OkHttpClient
+          import okhttp3.Request
+          import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+          import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
+          import java.io.BufferedInputStream
+          import java.io.File
+          import java.io.FileOutputStream
+
+          /**
+           * Downloads and installs the GigaAM v3 Russian ASR model plus Silero VAD.
+           *
+           * Provisioning state and partial downloads live under filesDir rather than an Activity
+           * cache. That is deliberate: the foreground TrackingService owns the job, and a service /
+           * process restart can resume the same .part files instead of losing a 226 MB download.
+           * Final model publication remains atomic, so VoiceController never sees a half-unpacked
+           * model as ready.
+           */
+          class GigaAmModelManager(
+              private val context: Context,
+              private val http: OkHttpClient,
+          ) {
+              data class StatusSnapshot(
+                  val progress: Int,
+                  val active: Boolean,
+                  val failed: Boolean,
+              )
+
+              private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+              private fun baseDir() = File(context.filesDir, "asr/gigaam-v3-ru")
+              private fun stagingDir() = File(context.filesDir, "asr/.staging-gigaam-v3-ru")
+              private fun legacyDir() = File(context.filesDir, "asr/gigaam-v2-ru")
+              private fun legacyStagingDir() = File(context.filesDir, "asr/.staging-gigaam-v2-ru")
+              private fun vadFile() = File(context.filesDir, "asr/silero_vad.onnx")
+              private fun downloadDir() = File(context.filesDir, "asr/.downloads")
+              private fun archivePart() = File(downloadDir(), "gigaam-v3-ru.tar.bz2.part")
+              private fun vadPart() = File(downloadDir(), "silero_vad.onnx.part")
+
+              fun modelPath(): String = File(baseDir(), "model.int8.onnx").absolutePath
+              fun tokensPath(): String = File(baseDir(), "tokens.txt").absolutePath
+              fun vadPath(): String = vadFile().absolutePath
+
+              private fun isModelComplete(dir: File): Boolean =
+                  File(dir, "model.int8.onnx").let { it.isFile && it.length() > 0 } &&
+                      File(dir, "tokens.txt").let { it.isFile && it.length() > 0 }
+
+              private fun isVadComplete(): Boolean = vadFile().let { it.isFile && it.length() > 0 }
+              fun isReady(): Boolean = isModelComplete(baseDir()) && isVadComplete()
+
+              internal val diskMutex = Mutex()
+
+              fun statusSnapshot(): StatusSnapshot {
+                  if (isReady()) return StatusSnapshot(progress = 100, active = false, failed = false)
+                  return StatusSnapshot(
+                      progress = prefs.getInt(KEY_PROGRESS, -1),
+                      active = prefs.getBoolean(KEY_ACTIVE, false),
+                      failed = prefs.getBoolean(KEY_FAILED, false),
+                  )
+              }
+
+              private fun setState(progress: Int, active: Boolean, failed: Boolean) {
+                  prefs.edit()
+                      .putInt(KEY_PROGRESS, progress)
+                      .putBoolean(KEY_ACTIVE, active)
+                      .putBoolean(KEY_FAILED, failed)
+                      .apply()
+              }
+
+              suspend fun delete() {
+                  diskMutex.withLock {
+                      baseDir().deleteRecursively()
+                      stagingDir().deleteRecursively()
+                      legacyDir().deleteRecursively()
+                      legacyStagingDir().deleteRecursively()
+                      vadFile().delete()
+                      downloadDir().deleteRecursively()
+                  }
+                  prefs.edit().clear().apply()
+              }
+
+              suspend fun download(onProgress: (Int) -> Unit): Result<Unit> = withContext(Dispatchers.IO) {
+                  if (isReady()) {
+                      setState(100, active = false, failed = false)
+                      onProgress(100)
+                      return@withContext Result.success(Unit)
+                  }
+
+                  setState(statusSnapshot().progress.coerceAtLeast(0), active = true, failed = false)
+                  runCatching {
+                      downloadDir().mkdirs()
+
+                      if (!isModelComplete(baseDir())) {
+                          downloadToFileResume(MODEL_URL, archivePart()) { pct ->
+                              val overall = (pct * 92) / 100
+                              setState(overall, active = true, failed = false)
+                              onProgress(overall)
+                          }
+                          coroutineContext.ensureActive()
+
+                          diskMutex.withLock {
+                              coroutineContext.ensureActive()
+                              val staging = stagingDir()
+                              val target = baseDir()
+                              staging.deleteRecursively()
+                              staging.mkdirs()
+                              try {
+                                  untarFlatten(archivePart(), staging)
+                                  coroutineContext.ensureActive()
+                                  check(isModelComplete(staging)) { "unpack produced incomplete model dir" }
+                                  target.deleteRecursively()
+                                  check(staging.renameTo(target)) { "failed to publish staged model" }
+                                  legacyDir().deleteRecursively()
+                                  legacyStagingDir().deleteRecursively()
+                              } catch (t: Throwable) {
+                                  staging.deleteRecursively()
+                                  throw t
+                              }
+                          }
+                          setState(96, active = true, failed = false)
+                          onProgress(96)
+                      }
+
+                      coroutineContext.ensureActive()
+                      if (!isVadComplete()) {
+                          downloadToFileResume(VAD_URL, vadPart()) { pct ->
+                              val overall = 97 + (pct * 2) / 100
+                              setState(overall, active = true, failed = false)
+                              onProgress(overall)
+                          }
+                          coroutineContext.ensureActive()
+                          diskMutex.withLock {
+                              coroutineContext.ensureActive()
+                              check(vadPart().length() > 0) { "downloaded VAD file is empty" }
+                              vadFile().delete()
+                              check(vadPart().renameTo(vadFile())) { "failed to publish VAD file" }
+                          }
+                      }
+
+                      check(isReady()) { "GigaAM publish finished but readiness check failed" }
+                      archivePart().delete()
+                      vadPart().delete()
+                      setState(100, active = false, failed = false)
+                      onProgress(100)
+                  }.onFailure { error ->
+                      if (error is CancellationException) {
+                          // Keep ACTIVE=true. A foreground-service restart will resume the .part file.
+                          throw error
+                      }
+                      setState(statusSnapshot().progress.coerceAtLeast(0), active = false, failed = true)
+                  }
+              }
+
+              private suspend fun downloadToFileResume(
+                  url: String,
+                  dest: File,
+                  onProgress: (Int) -> Unit,
+              ) {
+                  dest.parentFile?.mkdirs()
+                  var existing = if (dest.isFile) dest.length() else 0L
+                  val request = Request.Builder().url(url).apply {
+                      if (existing > 0L) header("Range", "bytes=$existing-")
+                  }.build()
+
+                  http.newCall(request).execute().use { response ->
+                      if (existing > 0L && response.code == 416) {
+                          val remoteSize = response.header("Content-Range")
+                              ?.substringAfter("*/", "")
+                              ?.toLongOrNull()
+                          if (remoteSize != null && remoteSize == existing) {
+                              onProgress(100)
+                              return
+                          }
+                          dest.delete()
+                          return downloadToFileResume(url, dest, onProgress)
+                      }
+                      if (!response.isSuccessful) error("HTTP ${response.code}")
+
+                      val body = response.body ?: error("empty response body")
+                      val append = existing > 0L && response.code == 206
+                      if (existing > 0L && !append) {
+                          dest.delete()
+                          existing = 0L
+                      }
+
+                      val remaining = body.contentLength()
+                      val total = if (remaining > 0L) existing + remaining else -1L
+                      var read = existing
+                      body.byteStream().use { input ->
+                          FileOutputStream(dest, append).use { output ->
+                              val buffer = ByteArray(64 * 1024)
+                              var lastProgress = -1
+                              while (true) {
+                                  coroutineContext.ensureActive()
+                                  val count = input.read(buffer)
+                                  if (count < 0) break
+                                  output.write(buffer, 0, count)
+                                  read += count
+                                  if (total > 0L) {
+                                      val progress = ((read * 100L) / total).toInt().coerceIn(0, 100)
+                                      if (progress != lastProgress) {
+                                          lastProgress = progress
+                                          onProgress(progress)
+                                      }
+                                  }
+                              }
+                              output.fd.sync()
+                          }
+                      }
+                      check(total <= 0L || dest.length() == total) {
+                          "incomplete download: ${dest.length()} of $total bytes"
+                      }
+                  }
+              }
+
+              internal suspend fun untarFlatten(archive: File, target: File) {
+                  val canonicalTarget = target.canonicalFile
+                  BZip2CompressorInputStream(BufferedInputStream(archive.inputStream())).use { bz ->
+                      TarArchiveInputStream(bz).use { tar ->
+                          var entry = tar.nextEntry
+                          while (entry != null) {
+                              coroutineContext.ensureActive()
+                              val rel = entry.name.substringAfter('/')
+                              if (rel.isNotBlank()) {
+                                  val outFile = File(target, rel)
+                                  val canonicalOut = outFile.canonicalFile
+                                  val insideTarget = canonicalOut.path == canonicalTarget.path ||
+                                      canonicalOut.path.startsWith(canonicalTarget.path + File.separator)
+                                  if (insideTarget) {
+                                      if (entry.isDirectory) {
+                                          outFile.mkdirs()
+                                      } else {
+                                          outFile.parentFile?.mkdirs()
+                                          outFile.outputStream().use { output ->
+                                              val buffer = ByteArray(64 * 1024)
+                                              while (true) {
+                                                  coroutineContext.ensureActive()
+                                                  val count = tar.read(buffer)
+                                                  if (count < 0) break
+                                                  output.write(buffer, 0, count)
+                                              }
+                                              output.fd.sync()
+                                          }
+                                      }
+                                  }
+                              }
+                              entry = tar.nextEntry
+                          }
+                      }
+                  }
+              }
+
+              companion object {
+                  const val MODEL_URL =
+                      "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/" +
+                          "sherpa-onnx-nemo-ctc-giga-am-v3-russian-2025-12-16.tar.bz2"
+                  const val VAD_URL =
+                      "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+                  const val MODEL_SIZE_LABEL = "226 МБ"
+
+                  private const val PREFS_NAME = "gigaam_provisioning"
+                  private const val KEY_PROGRESS = "progress"
+                  private const val KEY_ACTIVE = "active"
+                  private const val KEY_FAILED = "failed"
+              }
+          }
+          '''
+          # Dedent the Kotlin literal which is indented only to keep YAML readable.
+          import textwrap
+          Path('app/src/main/kotlin/com/bydmate/app/voice/GigaAmModelManager.kt').write_text(
+              textwrap.dedent(manager), encoding='utf-8'
+          )
+
+          vm_path = Path('app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt')
+          vm = vm_path.read_text(encoding='utf-8')
+          init_old = '''    init {
+              loadSettings()
+              observeLogRecorder()
+          }
+          '''
+          init_new = '''    init {
+              loadSettings()
+              observeLogRecorder()
+              observeGigaAmProvisioning()
+          }
+          '''
+          if init_old not in vm:
+              raise SystemExit('SettingsViewModel init anchor not found')
+          vm = vm.replace(init_old, init_new, 1)
+
+          giga_pattern = re.compile(
+              r'''    // --- GigaAM v3 ASR \(free-form Russian speech recognition, offline\) ---\n\n'''
+              r'''    private var gigaAmDownloadJob: Job\? = null\n.*?'''
+              r'''\n    // --- Voice agent \(hidden\) ---''',
+              re.S,
+          )
+          giga_block = '''    // --- GigaAM v3 ASR (free-form Russian speech recognition, offline) ---
+
+              fun downloadGigaAmModel() {
+                  if (gigaAmModelManager.statusSnapshot().active) return
+                  val intent = Intent(appContext, TrackingService::class.java)
+                      .setAction(TrackingService.ACTION_GIGAAM_DOWNLOAD)
+                  ContextCompat.startForegroundService(appContext, intent)
+              }
+
+              fun deleteGigaAmModel() {
+                  val intent = Intent(appContext, TrackingService::class.java)
+                      .setAction(TrackingService.ACTION_GIGAAM_DELETE)
+                  ContextCompat.startForegroundService(appContext, intent)
+              }
+
+              /**
+               * Settings observes service-owned provisioning state; it never owns the download job.
+               * Leaving this screen therefore cannot cancel or reset model installation.
+               */
+              private fun observeGigaAmProvisioning() {
+                  viewModelScope.launch {
+                      while (isActive) {
+                          val status = gigaAmModelManager.statusSnapshot()
+                          _uiState.update {
+                              it.copy(
+                                  gigaAmModelReady = gigaAmModelManager.isReady(),
+                                  gigaAmDownloadProgress = if (status.active) status.progress.coerceAtLeast(0) else -1,
+                                  gigaAmDownloadFailed = status.failed,
+                              )
+                          }
+                          delay(750)
+                      }
+                  }
+              }
+
+              // --- Voice agent (hidden) ---'''
+          vm, count = giga_pattern.subn(textwrap.dedent(giga_block), vm, count=1)
+          if count != 1:
+              raise SystemExit(f'SettingsViewModel GigaAM block replacement count={count}')
+          vm_path.write_text(vm, encoding='utf-8')
+
+          service_path = Path('app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt')
+          service = service_path.read_text(encoding='utf-8')
+          field_anchor = '    private var pollingJob: Job? = null\n'
+          if field_anchor not in service:
+              raise SystemExit('TrackingService pollingJob anchor not found')
+          service = service.replace(
+              field_anchor,
+              field_anchor + '    private var gigaAmProvisioningJob: Job? = null\n',
+              1,
+          )
+
+          channel_anchor = '        private const val CHANNEL_ID = "bydmate_tracking"\n'
+          if channel_anchor not in service:
+              raise SystemExit('TrackingService CHANNEL_ID anchor not found')
+          service = service.replace(
+              channel_anchor,
+              channel_anchor +
+              '        const val ACTION_GIGAAM_DOWNLOAD = "com.bydmate.app.action.GIGAAM_DOWNLOAD"\n' +
+              '        const val ACTION_GIGAAM_DELETE = "com.bydmate.app.action.GIGAAM_DELETE"\n',
+              1,
+          )
+
+          start_old = '''    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+              maybeAttachWidget()
+              return START_STICKY
+          }
+          '''
+          start_new = '''    private fun startGigaAmProvisioning() {
+              if (gigaAmModelManager.isReady()) return
+              if (gigaAmProvisioningJob?.isActive == true) return
+              gigaAmProvisioningJob = serviceScope.launch(Dispatchers.IO) {
+                  try {
+                      val result = gigaAmModelManager.download { }
+                      if (result.isSuccess && voiceGate.isEnabled()) {
+                          runCatching { continuousAsr.warmUp() }
+                      }
+                  } finally {
+                      gigaAmProvisioningJob = null
+                  }
+              }
+          }
+
+              private fun deleteGigaAmProvisioning() {
+                  gigaAmProvisioningJob?.cancel()
+                  gigaAmProvisioningJob = null
+                  serviceScope.launch(Dispatchers.IO) {
+                      gigaAmModelManager.delete()
+                  }
+              }
+
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  when (intent?.action) {
+                      ACTION_GIGAAM_DOWNLOAD -> startGigaAmProvisioning()
+                      ACTION_GIGAAM_DELETE -> deleteGigaAmProvisioning()
+                      null -> {
+                          val status = gigaAmModelManager.statusSnapshot()
+                          if (status.active && !gigaAmModelManager.isReady()) {
+                              startGigaAmProvisioning()
+                          }
+                      }
+                  }
+                  maybeAttachWidget()
+                  return START_STICKY
+              }
+          '''
+          if start_old not in service:
+              raise SystemExit('TrackingService onStartCommand anchor not found')
+          service = service.replace(start_old, textwrap.dedent(start_new), 1)
+          service_path.write_text(service, encoding='utf-8')
+          PY
+
+      - name: Verify no diagnostic UI was added
+        shell: bash
+        run: |
+          git diff --check
+          ! git diff -- app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt | grep -q .
+          ! git diff -- app/src/main/kotlin/com/bydmate/app/ui/diagnostics | grep -q .
+          grep -q 'ACTION_GIGAAM_DOWNLOAD' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
+          grep -q 'statusSnapshot' app/src/main/kotlin/com/bydmate/app/voice/GigaAmModelManager.kt
+
+      - name: Run focused unit tests
+        shell: bash
+        run: |
+          ./gradlew :app:testDebugUnitTest --no-daemon
+
+      - name: Commit clean production change
+        shell: bash
+        run: |
+          git config user.name "BYDMate Production Migration"
+          git config user.email "actions@github.com"
+          git add \
+            app/src/main/kotlin/com/bydmate/app/voice/GigaAmModelManager.kt \
+            app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt \
+            app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
+          git diff --cached --check
+          git commit -m "DiLink3: make GigaAM provisioning lifecycle-safe"
+          git push origin HEAD:dilink3-production-clean
