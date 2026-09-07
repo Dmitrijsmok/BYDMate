@@ -140,4 +140,48 @@ class SteeringWheelKeyDecisionTest {
             steeringKeyDecision(305, isDown = false, assigned = false),
         )
     }
+    @Test fun `dilink3 takeover off leaves both physical events factory native`() {
+        assertEquals(
+            DiLink3AssistantDecision.PASS_THROUGH,
+            diLink3AssistantDecision(DILINK3_MIC_KEYCODE, true, false, true),
+        )
+        assertEquals(
+            DiLink3AssistantDecision.PASS_THROUGH,
+            diLink3AssistantDecision(DILINK3_STOCK_ASSISTANT_KEYCODE, true, false, true),
+        )
+    }
+
+    @Test fun `dilink3 304 down triggers BYDMate and up is consumed while takeover is on`() {
+        assertEquals(
+            DiLink3AssistantDecision.TRIGGER_VOICE,
+            diLink3AssistantDecision(DILINK3_MIC_KEYCODE, true, true, true),
+        )
+        assertEquals(
+            DiLink3AssistantDecision.CONSUME,
+            diLink3AssistantDecision(DILINK3_MIC_KEYCODE, false, true, true),
+        )
+    }
+
+    @Test fun `dilink3 327 is consumed on both edges while takeover is on`() {
+        assertEquals(
+            DiLink3AssistantDecision.CONSUME,
+            diLink3AssistantDecision(DILINK3_STOCK_ASSISTANT_KEYCODE, true, true, true),
+        )
+        assertEquals(
+            DiLink3AssistantDecision.CONSUME,
+            diLink3AssistantDecision(DILINK3_STOCK_ASSISTANT_KEYCODE, false, true, true),
+        )
+    }
+
+    @Test fun `dilink3 304 does not trigger when voice master is off`() {
+        assertEquals(
+            DiLink3AssistantDecision.PASS_THROUGH,
+            diLink3AssistantDecision(DILINK3_MIC_KEYCODE, true, true, false),
+        )
+    }
+
+    @Test fun `dilink3 field keycodes stay pinned to 304 and 327`() {
+        assertEquals(304, DILINK3_MIC_KEYCODE)
+        assertEquals(327, DILINK3_STOCK_ASSISTANT_KEYCODE)
+    }
 }

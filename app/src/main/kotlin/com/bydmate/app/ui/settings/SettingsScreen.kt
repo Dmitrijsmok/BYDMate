@@ -2620,6 +2620,24 @@ private fun VoiceSettingsContent(
         }
     }
 
+    // DiLink3 steering microphone ownership. Disabled unless the voice pipeline is ON;
+    // turning Voice off also clears the persisted takeover in SettingsViewModel.
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp)) {
+            SettingToggleRow(
+                title = stringResource(R.string.settings_dilink3_steering_assistant_title),
+                description = stringResource(R.string.settings_dilink3_steering_assistant_desc),
+                checked = state.dilink3SteeringAssistant,
+                onCheckedChange = { viewModel.setDiLink3SteeringAssistant(it) },
+                enabled = state.voiceEnabled,
+            )
+        }
+    }
+
     // Steering-button assignment (reuses LearnButtonDialog from DisplaySection)
     var learningVoiceKey by remember { mutableStateOf(false) }
     Card(
@@ -2687,23 +2705,6 @@ private fun VoiceSettingsContent(
         }
     }
 
-    // --- Section 6: Штатный помощник BYD (moved verbatim from AppSection) ---
-    SectionHeader(text = stringResource(R.string.settings_voice_native_assistant_header))
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp)) {
-            SettingToggleRow(
-                title = stringResource(R.string.settings_voice_disable_native_label),
-                description = stringResource(R.string.settings_voice_disable_native_description),
-                checked = state.disableNativeAssistant,
-                onCheckedChange = { viewModel.setDisableNativeAssistant(it) },
-            )
-            SettingHint(stringResource(R.string.settings_voice_native_assistant_reboot_note))
-        }
-    }
 }
 
 /** One row in the "Ответы агента" voice list: radio button, name + description + "Локально"

@@ -68,6 +68,31 @@ fun learnDecision(keyCode: Int, isDown: Boolean): LearnAction {
 
 const val DEFAULT_VOICE_KEYCODE = 320  // steering "voice" button on Leopard 3 (learnable)
 
+/** DiLink3 physical microphone press: BYDMate edge observed in the vehicle. */
+const val DILINK3_MIC_KEYCODE = 304
+/** Companion edge from the same press that opens the stock BYD Assistant. */
+const val DILINK3_STOCK_ASSISTANT_KEYCODE = 327
+
+enum class DiLink3AssistantDecision { TRIGGER_VOICE, CONSUME, PASS_THROUGH }
+
+/**
+ * Ownership gate for the DiLink3 steering microphone button. When takeover is OFF every
+ * event passes through, restoring factory behaviour. When ON, 304 starts BYDMate (only if
+ * voice is enabled) and both edges are consumed; 327 is always consumed so the stock
+ * assistant cannot open from the companion event.
+ */
+fun diLink3AssistantDecision(
+    keyCode: Int,
+    isDown: Boolean,
+    takeoverEnabled: Boolean,
+    voiceEnabled: Boolean,
+): DiLink3AssistantDecision {
+    if (!takeoverEnabled) return DiLink3AssistantDecision.PASS_THROUGH
+    if (keyCode == DILINK3_STOCK_ASSISTANT_KEYCODE) return DiLink3AssistantDecision.CONSUME
+    if (keyCode != DILINK3_MIC_KEYCODE || !voiceEnabled) return DiLink3AssistantDecision.PASS_THROUGH
+    return if (isDown) DiLink3AssistantDecision.TRIGGER_VOICE else DiLink3AssistantDecision.CONSUME
+}
+
 enum class VoiceKeyDecision { TRIGGER, CONSUME, IGNORE }
 
 /** Pure gate for the voice push-to-talk button. Independent of star/projection

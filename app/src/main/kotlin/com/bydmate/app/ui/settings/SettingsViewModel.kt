@@ -150,6 +150,7 @@ data class SettingsUiState(
     /** "RU", "EN", or "" (follow app language) */
     val voiceLang: String = "",
     val voiceKeycode: Int = 0,
+    val dilink3SteeringAssistant: Boolean = false,
     // TTS settings (offline synthesis of agent replies)
     val ttsEnabled: Boolean = false,
     val ttsVoice: String = TtsModelManager.DEFAULT_VOICE_ID,
@@ -371,6 +372,16 @@ class SettingsViewModel @Inject constructor(
             val voiceKeycode = settingsRepository.getVoiceKeycode().let {
                 if (it == 0) DEFAULT_VOICE_KEYCODE else it
             }
+            val dilink3SteeringAssistant = settingsRepository.getString(
+                SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, "false"
+            ) == "true"
+            // AccessibilityService reads the synchronous mirror, while Room remains the
+            // canonical setting used by config backup/restore.
+            appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                .edit().putBoolean(
+                    SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT,
+                    dilink3SteeringAssistant,
+                ).apply()
 
             val ttsEnabled = settingsRepository.isTtsEnabled()
             // Resolve through the catalog so a legacy id (retired "denis"/"dmitri") shows its
@@ -453,6 +464,7 @@ class SettingsViewModel @Inject constructor(
                     voiceEnabled = voiceEnabled,
                     voiceLang = voiceLang,
                     voiceKeycode = voiceKeycode,
+                    dilink3SteeringAssistant = dilink3SteeringAssistant,
                     ttsEnabled = ttsEnabled,
                     ttsVoice = ttsVoice,
                     ttsReadyVoices = ttsReadyVoices,
@@ -1160,6 +1172,17 @@ class SettingsViewModel @Inject constructor(
             // Mirror into "voice" SharedPreferences for SteeringWheelKeyService
             appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
                 .edit().putBoolean(SettingsRepository.KEY_VOICE_ENABLED, enabled).apply()
+            // A disabled voice pipeline must never leave the factory button swallowed.
+            if (!enabled) {
+                _uiState.update { it.copy(dilink3SteeringAssistant = false) }
+                settingsRepository.setString(
+                    SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, "false"
+                )
+                appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                    .edit().putBoolean(
+                        SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, false
+                    ).apply()
+            }
             // Best-effort re-bind of the a11y key service (PTT is dead without it), same
             // pattern as ClusterProjectionManager.enableStarControl: bootstrap the daemon
             // FIRST — HelperClient only resolves an existing binder, so without ensureRunning()
@@ -1173,6 +1196,32 @@ class SettingsViewModel @Inject constructor(
                 // Pre-warm the recognizer so the first PTT after enabling voice doesn't pay the
                 // cold model-load cost (Task 5). No-op if the model isn't downloaded yet.
                 viewModelScope.launch(Dispatchers.IO) { runCatching { continuousAsr.warmUp() } }
+            }
+        }
+    }
+
+    /**
+     * DiLink3 steering microphone ownership. This never disables a BYD package: it only
+     * controls the field-validated Accessibility key filter, so OFF restores factory routing
+     * immediately. ON requires the voice master switch and self-enables the a11y service.
+     */
+    fun setDiLink3SteeringAssistant(enabled: Boolean) {
+        if (enabled && !_uiState.value.voiceEnabled) return
+        _uiState.update { it.copy(dilink3SteeringAssistant = enabled) }
+        viewModelScope.launch {
+            settingsRepository.setString(
+                SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, enabled.toString()
+            )
+            appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                .edit().putBoolean(
+                    SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, enabled
+                ).apply()
+            if (enabled) {
+                if (helperBootstrap.ensureRunning()) {
+                    helperClient.enableAccessibilityService()
+                } else {
+                    Log.e(TAG, "helper daemon not running; cannot enable DiLink3 steering takeover")
+                }
             }
         }
     }
