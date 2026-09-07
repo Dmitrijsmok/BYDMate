@@ -42,7 +42,7 @@ jobs:
           PY
           python3 /tmp/apply_gigaam.py
 
-      - name: Update GigaAM unit-test context for persistent provisioning state
+      - name: Update GigaAM unit tests for persistent idempotent provisioning
         shell: bash
         run: |
           set -euo pipefail
@@ -113,6 +113,48 @@ jobs:
           if n != 1:
               raise SystemExit(f'managerWith test helper replacement count={n}')
 
+          # New production contract: a complete installed model is final and download() is
+          # idempotent. A retry must not touch the network or risk replacing a known-good model.
+          old_test = re.compile(
+              r'    @Test\n'
+              r'    fun `failed download keeps the previous model`\(\) = runBlocking \{.*?\n'
+              r'    \}\n\n'
+              r'    @Test\n'
+              r'    fun `download stops when coroutine is cancelled`',
+              re.S,
+          )
+          new_test = '''    @Test
+          fun `ready model download is idempotent and never touches network`() = runBlocking {
+              val filesDir = tmp.newFolder("files10")
+              val dir = File(filesDir, "asr/gigaam-v3-ru").apply { mkdirs() }
+              File(dir, "model.int8.onnx").writeText("existing-onnx")
+              File(dir, "tokens.txt").writeText("existing-tokens")
+              File(filesDir, "asr/silero_vad.onnx").writeText("existing-vad")
+
+              val client = OkHttpClient.Builder()
+                  .addInterceptor { error("network must not be touched when GigaAM is already ready") }
+                  .build()
+              val m = managerWith(filesDir, client)
+
+              val result = m.download { }
+
+              assertTrue(result.isSuccess)
+              assertTrue(m.isReady())
+              assertEquals("existing-onnx", File(dir, "model.int8.onnx").readText())
+              assertEquals("existing-tokens", File(dir, "tokens.txt").readText())
+              assertEquals("existing-vad", File(m.vadPath()).readText())
+          }
+
+          @Test
+          fun `download stops when coroutine is cancelled`'''
+          new_test = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in new_test.splitlines()
+          )
+          s, n = old_test.subn(new_test, s, count=1)
+          if n != 1:
+              raise SystemExit(f'idempotency test replacement count={n}')
+
           p.write_text(s, encoding='utf-8')
           PY
 
@@ -133,6 +175,7 @@ jobs:
           grep -q 'ACTION_GIGAAM_DOWNLOAD' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
           grep -q 'START_STICKY' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
           grep -q 'observeGigaAmProvisioning' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt
+          grep -q 'ready model download is idempotent and never touches network' app/src/test/kotlin/com/bydmate/app/voice/GigaAmModelManagerTest.kt
           test -z "$(git diff --name-only -- app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt)"
           ! grep -R 'BUILD57_' app/src/main/kotlin/com/bydmate/app/voice app/src/main/kotlin/com/bydmate/app/service
 
