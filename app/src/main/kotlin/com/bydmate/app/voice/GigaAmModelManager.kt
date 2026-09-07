@@ -14,6 +14,7 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 import java.io.BufferedInputStream
 import java.io.File
+import java.io.FileOutputStream
 
 /** Downloads and unpacks the GigaAM v3 Russian ASR model (sherpa-onnx nemo-ctc archive:
  *  model.int8.onnx + tokens.txt under one top-level dir) plus the standalone silero VAD
@@ -34,6 +35,11 @@ class GigaAmModelManager(
 
     private fun vadFile() = File(context.filesDir, "asr/silero_vad.onnx")
 
+    private fun downloadDir() = File(context.filesDir, "asr/.downloads")
+    private fun archivePart() = File(downloadDir(), "gigaam-v3-ru.tar.bz2.part")
+    private fun vadPart() = File(downloadDir(), "silero_vad.onnx.part")
+    private val provisioningPrefs = context.getSharedPreferences("gigaam_provisioning", Context.MODE_PRIVATE)
+
     fun modelPath(): String = File(baseDir(), "model.int8.onnx").absolutePath
 
     fun tokensPath(): String = File(baseDir(), "tokens.txt").absolutePath
@@ -48,101 +54,172 @@ class GigaAmModelManager(
 
     fun isReady(): Boolean = isModelComplete(baseDir()) && isVadComplete()
 
+    data class StatusSnapshot(
+        val progress: Int,
+        val active: Boolean,
+        val failed: Boolean,
+    )
+
+    fun statusSnapshot(): StatusSnapshot {
+        if (isReady()) return StatusSnapshot(progress = 100, active = false, failed = false)
+        return StatusSnapshot(
+  progress = provisioningPrefs.getInt("progress", -1),
+  active = provisioningPrefs.getBoolean("active", false),
+  failed = provisioningPrefs.getBoolean("failed", false),
+        )
+    }
+
+    private fun setProvisioningState(progress: Int, active: Boolean, failed: Boolean) {
+        provisioningPrefs.edit()
+  .putInt("progress", progress)
+  .putBoolean("active", active)
+  .putBoolean("failed", failed)
+  .apply()
+    }
+
     /** Serializes all disk mutations of the model dir / vad file: a delete can never
      *  interleave with download's commit (unpack / rename) sections, so a cancelled
      *  download cannot recreate files the user just deleted. */
     internal val diskMutex = Mutex()
 
     suspend fun delete() {
-        diskMutex.withLock {
-            baseDir().deleteRecursively()
-            stagingDir().deleteRecursively()
-            legacyDir().deleteRecursively()
-            legacyStagingDir().deleteRecursively()
-            vadFile().delete()
+    diskMutex.withLock {
+        baseDir().deleteRecursively()
+        stagingDir().deleteRecursively()
+        legacyDir().deleteRecursively()
+        legacyStagingDir().deleteRecursively()
+        vadFile().delete()
+        downloadDir().deleteRecursively()
+    }
+    provisioningPrefs.edit().clear().apply()
+}
+
+    suspend fun download(onProgress: (Int) -> Unit): Result<Unit> =
+    withContext(Dispatchers.IO) {
+        if (isReady()) {
+  setProvisioningState(100, active = false, failed = false)
+  onProgress(100)
+  return@withContext Result.success(Unit)
+        }
+
+        setProvisioningState(statusSnapshot().progress.coerceAtLeast(0), active = true, failed = false)
+        runCatching {
+  downloadDir().mkdirs()
+
+  // Keep a completed model while retrying only a failed/missing VAD download.
+  if (!isModelComplete(baseDir())) {
+      downloadToFileResume(MODEL_URL, archivePart()) { pct ->
+          val overall = (pct * 92) / 100
+          setProvisioningState(overall, active = true, failed = false)
+          onProgress(overall)
+      }
+      coroutineContext.ensureActive()
+      diskMutex.withLock {
+          coroutineContext.ensureActive()
+          val staging = stagingDir()
+          val target = baseDir()
+          staging.deleteRecursively()
+          staging.mkdirs()
+          try {
+              untarFlatten(archivePart(), staging)
+              coroutineContext.ensureActive()
+              check(isModelComplete(staging)) { "unpack produced incomplete model dir" }
+              target.deleteRecursively()
+              check(staging.renameTo(target)) { "failed to publish staged model" }
+              legacyDir().deleteRecursively()
+              legacyStagingDir().deleteRecursively()
+          } catch (t: Throwable) {
+              staging.deleteRecursively()
+              throw t
+          }
+      }
+      setProvisioningState(96, active = true, failed = false)
+      onProgress(96)
+  }
+
+  coroutineContext.ensureActive()
+  if (!isVadComplete()) {
+      downloadToFileResume(VAD_URL, vadPart()) { pct ->
+          val overall = 97 + (pct * 2) / 100
+          setProvisioningState(overall, active = true, failed = false)
+          onProgress(overall)
+      }
+      coroutineContext.ensureActive()
+      diskMutex.withLock {
+          coroutineContext.ensureActive()
+          check(vadPart().length() > 0) { "downloaded VAD file is empty" }
+          vadFile().delete()
+          check(vadPart().renameTo(vadFile())) { "failed to publish VAD file" }
+      }
+  }
+
+  check(isReady()) { "GigaAM publish finished but readiness check failed" }
+  archivePart().delete()
+  vadPart().delete()
+  setProvisioningState(100, active = false, failed = false)
+  onProgress(100)
+        }.onFailure { error ->
+  if (error is CancellationException) {
+      // Deliberately leave active=true: START_STICKY can resume the .part file.
+      throw error
+  }
+  setProvisioningState(statusSnapshot().progress.coerceAtLeast(0), active = false, failed = true)
         }
     }
 
-    suspend fun download(onProgress: (Int) -> Unit): Result<Unit> =
-        withContext(Dispatchers.IO) {
-            runCatching {
-                val tmpArchive = File(context.cacheDir, "gigaam-v3-ru.tar.bz2")
-                val tmpVad = File(context.cacheDir, "silero_vad.onnx.tmp")
-                try {
-                    // Model archive: 0..MODEL_WEIGHT of the combined progress.
-                    downloadToFile(MODEL_URL, tmpArchive) { pct -> onProgress((pct * MODEL_WEIGHT) / 100) }
-                    ensureActive()
-                    diskMutex.withLock {
-                        // Checked under the lock: a delete that cancelled us has
-                        // either finished (we bail here) or runs strictly after
-                        // this whole commit section (and removes its result).
-                        ensureActive()
-                        val staging = stagingDir()
-                        val target = baseDir()
-                        staging.deleteRecursively()
-                        staging.mkdirs()
-                        try {
-                            untarFlatten(tmpArchive, staging)
-                            check(isModelComplete(staging)) { "unpack produced incomplete model dir" }
-                            // Atomic publish: the final dir only ever appears as a
-                            // fully verified unpack, so a process kill mid-unpack can
-                            // never leave a dir that isModelComplete() accepts.
-                            target.deleteRecursively()
-                            check(staging.renameTo(target)) { "failed to publish staged model" }
-                            // v2 -> v3 migration: the old model can never be read again
-                            // (baseDir points at v3), so sweep it with the same lock held.
-                            legacyDir().deleteRecursively()
-                            legacyStagingDir().deleteRecursively()
-                        } catch (t: Throwable) {
-                            staging.deleteRecursively()
-                            throw t
-                        }
-                    }
-                    ensureActive()
+    private suspend fun downloadToFileResume(url: String, dest: File, onProgress: (Int) -> Unit) {
+        dest.parentFile?.mkdirs()
+        var existing = if (dest.isFile) dest.length() else 0L
+        val request = Request.Builder().url(url).apply {
+  if (existing > 0L) header("Range", "bytes=$existing-")
+        }.build()
 
-                    // VAD: MODEL_WEIGHT..100 of the combined progress.
-                    downloadToFile(VAD_URL, tmpVad) { pct ->
-                        onProgress(MODEL_WEIGHT + (pct * (100 - MODEL_WEIGHT)) / 100)
-                    }
-                    ensureActive()
-                    diskMutex.withLock {
-                        ensureActive()
-                        check(tmpVad.length() > 0) { "downloaded VAD file is empty" }
-                        vadFile().delete()
-                        check(tmpVad.renameTo(vadFile())) { "failed to publish VAD file" }
-                    }
-                    // Cancelled between commit and return: don't report success --
-                    // the serialized delete() removes the files, state must not flip.
-                    ensureActive()
-                } finally {
-                    tmpArchive.delete()
-                    tmpVad.delete()
-                }
-            }.onFailure { if (it is CancellationException) throw it }
-        }
-
-    private suspend fun downloadToFile(url: String, dest: File, onProgress: (Int) -> Unit) {
-        http.newCall(Request.Builder().url(url).build()).execute().use { resp ->
-            if (!resp.isSuccessful) error("HTTP ${resp.code}")
-            val body = resp.body ?: error("empty response body")
-            val total = body.contentLength()
-            var read = 0L
-            body.byteStream().use { input ->
-                dest.outputStream().use { out ->
-                    val buf = ByteArray(64 * 1024)
-                    while (true) {
-                        coroutineContext.ensureActive()
-                        val n = input.read(buf); if (n < 0) break
-                        out.write(buf, 0, n); read += n
-                        if (total > 0) onProgress(((read * 100) / total).toInt())
-                    }
-                    // fsync before the caller's rename-publish: the head unit powers off
-                    // with the car (no clean shutdown), and a rename whose data blocks
-                    // never hit flash survives as a full-size file of garbage (field
-                    // defect: Sea Lion 07 crash loop on a corrupt model, 2026-07-16).
-                    out.fd.sync()
-                }
-            }
+        http.newCall(request).execute().use { response ->
+  if (existing > 0L && response.code == 416) {
+      val remoteSize = response.header("Content-Range")
+          ?.substringAfter("*/", "")
+          ?.toLongOrNull()
+      if (remoteSize != null && remoteSize == existing) {
+          onProgress(100)
+          return
+      }
+      dest.delete()
+      return downloadToFileResume(url, dest, onProgress)
+  }
+  if (!response.isSuccessful) error("HTTP ${response.code}")
+  val body = response.body ?: error("empty response body")
+  val append = existing > 0L && response.code == 206
+  if (existing > 0L && !append) {
+      dest.delete()
+      existing = 0L
+  }
+  val remaining = body.contentLength()
+  val total = if (remaining > 0L) existing + remaining else -1L
+  var read = existing
+  body.byteStream().use { input ->
+      FileOutputStream(dest, append).use { output ->
+          val buffer = ByteArray(64 * 1024)
+          var lastProgress = -1
+          while (true) {
+              coroutineContext.ensureActive()
+              val count = input.read(buffer)
+              if (count < 0) break
+              output.write(buffer, 0, count)
+              read += count
+              if (total > 0L) {
+                  val progress = ((read * 100L) / total).toInt().coerceIn(0, 100)
+                  if (progress != lastProgress) {
+                      lastProgress = progress
+                      onProgress(progress)
+                  }
+              }
+          }
+          output.fd.sync()
+      }
+  }
+  check(total <= 0L || dest.length() == total) {
+      "incomplete download: ${dest.length()} of $total bytes"
+  }
         }
     }
 

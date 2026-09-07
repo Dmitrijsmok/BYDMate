@@ -304,6 +304,7 @@ class SettingsViewModel @Inject constructor(
     init {
         loadSettings()
         observeLogRecorder()
+        observeGigaAmProvisioning()
     }
 
     /** Load all settings from the repository on init. */
@@ -1406,42 +1407,38 @@ class SettingsViewModel @Inject constructor(
 
     // --- GigaAM v3 ASR (free-form Russian speech recognition, offline) ---
 
-    private var gigaAmDownloadJob: Job? = null
-
     fun downloadGigaAmModel() {
-        if (_uiState.value.gigaAmDownloadProgress >= 0) return   // already downloading
-        gigaAmDownloadJob = viewModelScope.launch {
-            _uiState.update { it.copy(gigaAmDownloadProgress = 0, gigaAmDownloadFailed = false) }
-            val result = gigaAmModelManager.download { pct ->
-                // A late delivery after deleteGigaAmModel() reset progress to -1 (idle) must
-                // not resurrect an in-progress state.
-                _uiState.update {
-                    if (it.gigaAmDownloadProgress < 0) it else it.copy(gigaAmDownloadProgress = pct)
-                }
-            }
-            _uiState.update {
-                it.copy(
-                    gigaAmDownloadProgress = -1,
-                    gigaAmModelReady = gigaAmModelManager.isReady(),
-                    gigaAmDownloadFailed = result.isFailure,
-                )
-            }
-            // Pre-warm the recognizer right after a successful download so the first PTT
-            // doesn't pay the cold model-load cost (Task 5).
-            if (result.isSuccess) {
-                viewModelScope.launch(Dispatchers.IO) { runCatching { continuousAsr.warmUp() } }
-            }
-            gigaAmDownloadJob = null
-        }
+        if (gigaAmModelManager.statusSnapshot().active) return
+        ContextCompat.startForegroundService(
+  appContext,
+  Intent(appContext, TrackingService::class.java)
+      .setAction(TrackingService.ACTION_GIGAAM_DOWNLOAD),
+        )
     }
 
     fun deleteGigaAmModel() {
-        gigaAmDownloadJob?.cancel()
-        gigaAmDownloadJob = null
-        _uiState.update { it.copy(gigaAmModelReady = false, gigaAmDownloadProgress = -1, gigaAmDownloadFailed = false) }
-        // Suspend delete: serialized against download's commit section inside
-        // the manager, so a cancelled download can't recreate the files after us.
-        viewModelScope.launch { gigaAmModelManager.delete() }
+        ContextCompat.startForegroundService(
+  appContext,
+  Intent(appContext, TrackingService::class.java)
+      .setAction(TrackingService.ACTION_GIGAAM_DELETE),
+        )
+    }
+
+    /** Settings only mirrors service-owned state; leaving this screen never cancels download. */
+    private fun observeGigaAmProvisioning() {
+        viewModelScope.launch {
+  while (isActive) {
+      val status = gigaAmModelManager.statusSnapshot()
+      _uiState.update {
+          it.copy(
+              gigaAmModelReady = gigaAmModelManager.isReady(),
+              gigaAmDownloadProgress = if (status.active) status.progress.coerceAtLeast(0) else -1,
+              gigaAmDownloadFailed = status.failed,
+          )
+      }
+      delay(750)
+  }
+        }
     }
 
     // --- Voice agent (hidden) ---

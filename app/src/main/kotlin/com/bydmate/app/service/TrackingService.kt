@@ -110,6 +110,7 @@ class TrackingService : Service(), LocationListener {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pollingJob: Job? = null
+    private var gigaAmProvisioningJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var wakeLockRenewer: WakeLockRenewer? = null
     private var locationManager: LocationManager? = null
@@ -246,6 +247,8 @@ class TrackingService : Service(), LocationListener {
         private const val NOTIFICATION_ID = 1
         private const val A11Y_ATTEMPTS_ANDROID10 = 2
         private const val CHANNEL_ID = "bydmate_tracking"
+        const val ACTION_GIGAAM_DOWNLOAD = "com.bydmate.app.action.GIGAAM_DOWNLOAD"
+        const val ACTION_GIGAAM_DELETE = "com.bydmate.app.action.GIGAAM_DELETE"
         // Opt-in "quiet" channel (IMPORTANCE_MIN): the mandatory foreground notification collapses
         // into the shade's silent list with no status-bar icon. Off by default - existing users keep
         // the LOW channel untouched (#86). Pref lives in the cluster_projection file next to the other
@@ -756,7 +759,35 @@ class TrackingService : Service(), LocationListener {
         }
     }
 
+    private fun startGigaAmProvisioning() {
+    if (gigaAmModelManager.isReady() || gigaAmProvisioningJob?.isActive == true) return
+    gigaAmProvisioningJob = serviceScope.launch(Dispatchers.IO) {
+        try {
+  val result = gigaAmModelManager.download { }
+  if (result.isSuccess && voiceGate.isEnabled()) {
+      runCatching { continuousAsr.warmUp() }
+  }
+        } finally {
+  gigaAmProvisioningJob = null
+        }
+    }
+}
+
+    private fun deleteGigaAmProvisioning() {
+        gigaAmProvisioningJob?.cancel()
+        gigaAmProvisioningJob = null
+        serviceScope.launch(Dispatchers.IO) { gigaAmModelManager.delete() }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+  ACTION_GIGAAM_DOWNLOAD -> startGigaAmProvisioning()
+  ACTION_GIGAAM_DELETE -> deleteGigaAmProvisioning()
+  null -> {
+      val state = gigaAmModelManager.statusSnapshot()
+      if (state.active && !gigaAmModelManager.isReady()) startGigaAmProvisioning()
+  }
+        }
         maybeAttachWidget()
         return START_STICKY
     }

@@ -3,6 +3,7 @@ package com.bydmate.app.voice
 import io.mockk.every
 import io.mockk.mockk
 import android.content.Context
+import android.content.SharedPreferences
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream
@@ -25,12 +26,24 @@ class GigaAmModelManagerTest {
 
     @get:Rule val tmp = TemporaryFolder()
 
-    private fun manager(filesDir: File): GigaAmModelManager {
-        val ctx = mockk<Context>()
-        every { ctx.filesDir } returns filesDir
-        every { ctx.cacheDir } returns filesDir
-        return GigaAmModelManager(ctx, OkHttpClient())
-    }
+    private fun contextFor(filesDir: File): Context {
+    val ctx = mockk<Context>()
+    val prefs = mockk<SharedPreferences>(relaxed = true)
+    val editor = mockk<SharedPreferences.Editor>(relaxed = true)
+    every { ctx.filesDir } returns filesDir
+    every { ctx.cacheDir } returns filesDir
+    every { ctx.getSharedPreferences("gigaam_provisioning", Context.MODE_PRIVATE) } returns prefs
+    every { prefs.getInt(any(), any()) } returns -1
+    every { prefs.getBoolean(any(), any()) } returns false
+    every { prefs.edit() } returns editor
+    every { editor.putInt(any(), any()) } returns editor
+    every { editor.putBoolean(any(), any()) } returns editor
+    every { editor.clear() } returns editor
+    return ctx
+}
+
+private fun manager(filesDir: File): GigaAmModelManager =
+    GigaAmModelManager(contextFor(filesDir), OkHttpClient())
 
     /** Builds a tar.bz2 with the sherpa nemo-ctc archive layout under one top-level dir. */
     private fun makeArchive(entries: Map<String, String>): File {
@@ -65,12 +78,8 @@ class GigaAmModelManagerTest {
             }
             .build()
 
-    private fun managerWith(filesDir: File, http: OkHttpClient): GigaAmModelManager {
-        val ctx = mockk<Context>()
-        every { ctx.filesDir } returns filesDir
-        every { ctx.cacheDir } returns filesDir
-        return GigaAmModelManager(ctx, http)
-    }
+    private fun managerWith(filesDir: File, http: OkHttpClient): GigaAmModelManager =
+    GigaAmModelManager(contextFor(filesDir), http)
 
     // --- Step 1 (a, b): isReady() on an empty dir vs. all 3 files present ---
 
@@ -210,29 +219,29 @@ class GigaAmModelManagerTest {
     }
 
     @Test
-    fun `failed download keeps the previous model`() = runBlocking {
-        val filesDir = tmp.newFolder("files10")
-        // Seed a complete, previously installed model + vad.
-        val dir = File(filesDir, "asr/gigaam-v3-ru").apply { mkdirs() }
-        File(dir, "model.int8.onnx").writeText("existing-onnx")
-        File(dir, "tokens.txt").writeText("existing-tokens")
-        File(filesDir, "asr/silero_vad.onnx").writeText("existing-vad")
+fun `ready model download is idempotent and never touches network`() = runBlocking {
+    val filesDir = tmp.newFolder("files10")
+    val dir = File(filesDir, "asr/gigaam-v3-ru").apply { mkdirs() }
+    File(dir, "model.int8.onnx").writeText("existing-onnx")
+    File(dir, "tokens.txt").writeText("existing-tokens")
+    File(filesDir, "asr/silero_vad.onnx").writeText("existing-vad")
 
-        // New download serves an INCOMPLETE archive (missing tokens.txt).
-        val archive = makeArchive(mapOf("top/model.int8.onnx" to "new-onnx"))
-        val client = clientFor(archive, "vad-bytes".toByteArray())
-        val m = managerWith(filesDir, client)
+    val client = OkHttpClient.Builder()
+        .addInterceptor { error("network must not be touched when GigaAM is already ready") }
+        .build()
+    val m = managerWith(filesDir, client)
 
-        val result = m.download { }
+    val result = m.download { }
 
-        assertTrue(result.isFailure)
-        assertTrue(m.isReady())
-        assertEquals("existing-onnx", File(dir, "model.int8.onnx").readText())
-        assertEquals("existing-vad", File(m.vadPath()).readText())
-    }
+    assertTrue(result.isSuccess)
+    assertTrue(m.isReady())
+    assertEquals("existing-onnx", File(dir, "model.int8.onnx").readText())
+    assertEquals("existing-tokens", File(dir, "tokens.txt").readText())
+    assertEquals("existing-vad", File(m.vadPath()).readText())
+}
 
-    @Test
-    fun `download stops when coroutine is cancelled`() = runBlocking {
+@Test
+fun `download stops when coroutine is cancelled`() = runBlocking {
         val filesDir = tmp.newFolder("files11")
         // A genuinely valid, extractable archive with a ~1 MiB low-compressibility payload:
         // the body must stream over multiple 64 KiB reads (so onProgress fires more than
