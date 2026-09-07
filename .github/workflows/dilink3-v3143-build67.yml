@@ -1,0 +1,86 @@
+name: Build67 clean DiLink3 production test
+
+on:
+  push:
+    branches: [dilink3-v3143-finalize-migration]
+  workflow_dispatch:
+
+jobs:
+  build67:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout finalized production source
+        uses: actions/checkout@v4
+        with:
+          ref: dilink3-production-v3143
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Prepare side-by-side field-test identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/build.gradle.kts')
+          s = p.read_text()
+          anchor = '    buildTypes {\n        release {\n'
+          repl = '''    buildTypes {
+              debug {
+                  applicationIdSuffix = ".dilink3prodtest"
+                  versionNameSuffix = "-dilink3-production-test"
+              }
+              release {
+          '''
+          repl = '\n'.join(line[10:] if line.startswith('          ') else line for line in repl.splitlines()) + '\n'
+          if anchor not in s:
+              raise SystemExit('buildTypes anchor missing')
+          s = s.replace(anchor, repl, 1)
+          if '        versionCode = 443' not in s:
+              raise SystemExit('versionCode anchor missing')
+          s = s.replace('        versionCode = 443', '        versionCode = 60017', 1)
+          p.write_text(s)
+
+          m = Path('app/src/main/AndroidManifest.xml')
+          t = m.read_text()
+          if 'android:label="BYDMate"' in t:
+              m.write_text(t.replace('android:label="BYDMate"', 'android:label="BYDMate DiLink3 Production Test"', 1))
+          PY
+          grep -F 'applicationIdSuffix = ".dilink3prodtest"' app/build.gradle.kts
+          grep -F 'versionCode = 60017' app/build.gradle.kts
+
+      - name: Build APK
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n1)"
+          BT="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+          "$BT/aapt" dump badging "$APK" | tee /tmp/badging
+          grep -F "package: name='com.bydmate.app.dilink3prodtest' versionCode='60017'" /tmp/badging
+          mkdir -p verified
+          cp "$APK" verified/BYDMate-DiLink3-Build67-Production-Test.apk
+          sha256sum verified/BYDMate-DiLink3-Build67-Production-Test.apk | tee verified/BYDMate-DiLink3-Build67-Production-Test.sha256
+          printf '%s\n' \
+            'base=v3.14.3' \
+            'productionCommit=f9124ee' \
+            'sourceBranch=dilink3-production-v3143' \
+            'package=com.bydmate.app.dilink3prodtest' \
+            'versionCode=60017' \
+            'ui=clean production; no BuildXX wizard/debug panel' \
+            'steering=304 -> BYDMate; 327 consumed only while BYDMate selected' \
+            'voice=one steering press -> one GigaAM utterance -> API -> TTS' > verified/BUILD67.txt
+
+      - name: Upload Build67
+        uses: actions/upload-artifact@v4
+        with:
+          name: bydmate-dilink3-build67-production-test
+          path: verified/
+          retention-days: 14
