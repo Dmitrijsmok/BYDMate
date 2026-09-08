@@ -1,0 +1,154 @@
+name: Build73 DiLink3 final voice-agent field test
+
+on:
+  push:
+    branches:
+      - dilink3-build73-final
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dilink3-build73-final
+  cancel-in-progress: true
+
+jobs:
+  build73final:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout clean production source
+        uses: actions/checkout@v7
+        with:
+          ref: dilink3-production-v3143
+          fetch-depth: 0
+
+      - name: Fetch Build70/71/72/73 support files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin dilink3-build70-fixed dilink3-build71-ai-ui dilink3-build72-agent-routing dilink3-build73-final dilink3-build66-wizard
+          git show origin/dilink3-build70-fixed:.github/dilink3-build70-fixes.py > /tmp/build70.py
+          git show origin/dilink3-build71-ai-ui:.github/dilink3-build71-fixes.py > /tmp/build71.py
+          git show origin/dilink3-build72-agent-routing:.github/dilink3-build72-fixes.py > /tmp/build72.py
+          git show origin/dilink3-build73-final:.github/dilink3-build73-fixes.py > /tmp/build73.py
+          git show origin/dilink3-build73-final:.github/dilink3-build73-test-fixes.py > /tmp/build73tests.py
+          git show origin/dilink3-build73-final:.github/dilink3-build73-final-hotfix.py > /tmp/build73final.py
+          git show origin/dilink3-build66-wizard:.github/dilink3-debug.keystore.b64 > /tmp/dilink3-debug.keystore.b64
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Preflight patch syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile /tmp/build70.py /tmp/build71.py /tmp/build72.py /tmp/build73.py /tmp/build73tests.py /tmp/build73final.py
+          test "$(git branch --show-current)" = "dilink3-production-v3143"
+          test -z "$(git status --porcelain)"
+
+      - name: Apply verified Build70 field fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d /tmp/dilink3-debug.keystore.b64 > /tmp/dilink3-field-test.keystore
+          python3 /tmp/build70.py
+
+      - name: Apply Build71 AI UI fixes
+        run: python3 /tmp/build71.py
+
+      - name: Apply Build72 provider/routing fixes
+        run: python3 /tmp/build72.py
+
+      - name: Apply Build73 runtime UI and final routing semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 /tmp/build73.py
+          python3 /tmp/build73tests.py
+          python3 /tmp/build73final.py
+          git diff --check
+
+      - name: Verify Build73 final invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'versionCode = 60023' app/build.gradle.kts
+          grep -F 'BYDMate DiLink3 Build73' app/src/main/AndroidManifest.xml
+          grep -F 'build73_voice_runtime' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
+          grep -F 'Voice Agent runtime' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt
+          grep -F 'probeLiveTransport' app/src/main/kotlin/com/bydmate/app/agent/AgentOrchestrator.kt
+          grep -F 'stream failed before first delta' app/src/main/kotlin/com/bydmate/app/agent/LlmAgentBackend.kt
+          grep -F 'HTTP 400' app/src/main/kotlin/com/bydmate/app/agent/LlmAgentBackend.kt
+          grep -F '_uiState.update { it.copy(primaryConn = conn.id, agentEnabled = true) }' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt
+          grep -F 'settingsRepository.setString(SettingsRepository.KEY_AGENT_ENABLED, "true")' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt
+          grep -F 'Провайдер, API key и модель' app/src/main/res/values/strings.xml
+          grep -F 'DILINK3_STOCK_ASSISTANT_KEYCODE' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          if grep -R -F 'setAppHidden("com.byd.vrassistant", true)' app/src/main/kotlin; then
+            echo 'Build73 must not disable vrassistant package' >&2
+            exit 1
+          fi
+
+      - name: Compile and run focused regressions
+        env:
+          CI: 'true'
+        run: |
+          ./gradlew --no-daemon \
+            :app:compileDebugKotlin \
+            :app:testDebugUnitTest \
+            --tests 'com.bydmate.app.cluster.SteeringWheelKeyDecisionTest' \
+            --tests 'com.bydmate.app.voice.VoiceControllerAgentFallbackTest' \
+            --tests 'com.bydmate.app.agent.LlmAgentBackendTest' \
+            --tests 'com.bydmate.app.service.A11yRecoveryGateTest' \
+            --stacktrace
+
+      - name: Build APK
+        run: ./gradlew --no-daemon :app:assembleDebug --stacktrace
+
+      - name: Verify APK identity signer and upgrade path
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n1)"
+          BT="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+          "$BT/aapt" dump badging "$APK" | tee /tmp/badging
+          grep -F "package: name='com.bydmate.app.dilink3prodtest' versionCode='60023'" /tmp/badging
+          grep -F "application-label:'BYDMate DiLink3 Build73'" /tmp/badging
+          "$BT/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/signer
+          grep -Fi 'certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb' /tmp/signer
+          test 60023 -gt 60022
+          mkdir -p verified
+          cp "$APK" verified/BYDMate-DiLink3-Build73.apk
+          sha256sum verified/BYDMate-DiLink3-Build73.apk | tee verified/BYDMate-DiLink3-Build73.sha256
+
+      - name: Build metadata
+        shell: bash
+        run: |
+          cat > verified/BUILD73.txt <<'EOF'
+          BYDMate DiLink3 Build73 final
+          base=v3.14.3
+          package=com.bydmate.app.dilink3prodtest
+          previousVersionCode=60022
+          versionCode=60023
+          ui=no diagnostic wizard restored; runtime status is shown inside the existing voice settings card
+          connection=selected OpenAI-compatible provider is primary after exact live-agent compatibility passes
+          agent=successful compatibility explicitly enables the production voice agent
+          compatibility=full BYDMate tool schema + live streaming transport, not a toy readiness tool
+          transport=stream failure before first delta retries once non-streaming, matching the proven old direct path
+          diagnostics=on-screen route, ASR, transcript, stage, answer/error, TTS; no logcat required
+          steering=verified Build70 304/327 routing unchanged
+          EOF
+
+      - name: Upload Build73 final
+        uses: actions/upload-artifact@v7
+        with:
+          name: bydmate-dilink3-build73-final
+          path: verified/
+          retention-days: 14
