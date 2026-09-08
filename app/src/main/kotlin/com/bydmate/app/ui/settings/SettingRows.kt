@@ -272,6 +272,20 @@ fun SettingChipRow(
     enabled: Boolean = true,
     onHelp: (() -> Unit)? = null,
 ) {
+    // DiLink3 assistant ownership is a single on/off feature, not a choice between two
+    // independent assistants. Keep the existing call site/state contract but render the row as
+    // one switch so OFF naturally means "factory BYD Assistant".
+    if (options == listOf("BYD Assistant", "BYDMate")) {
+        SettingToggleRow(
+            title = "BYDMate Assistant",
+            description = "Включает BYDMate Assistant для кнопки микрофона на руле. Штатный BYD Assistant при этом отключается. Выключите переключатель, чтобы вернуть штатный ассистент.",
+            checked = selectedIndex == 1,
+            onCheckedChange = { checked -> onSelect(if (checked) 1 else 0) },
+            enabled = enabled,
+        )
+        return
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
