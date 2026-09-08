@@ -7,6 +7,10 @@ from pathlib import Path
 #
 # Production must be uninstall-safe: it never needs the stock assistant package disabled. We only
 # consume key 327 while BYDMate is selected, so the stock package should always remain enabled.
+#
+# This patch is deliberately idempotent because a successful verified run commits the repair into
+# the production branch before the field APK is assembled. A verification-only rerun must therefore
+# accept an already-repaired production tree instead of trying to patch the same anchors twice.
 
 # ---------------------------------------------------------------------------
 # 1) HelperDaemon: allow a narrow recovery-only `pm enable` for com.byd.vrassistant.
@@ -16,11 +20,13 @@ from pathlib import Path
 p = Path('app/src/main/kotlin/com/bydmate/app/helper/HelperDaemon.kt')
 s = p.read_text()
 
-old_tail = '''                        primaryOk && engineOk
+vr_marker = 'pkg == "com.byd.vrassistant" && hidden == 0'
+if vr_marker not in s:
+    old_tail = '''                        primaryOk && engineOk
                     } else false
                     reply?.writeInt(if (ok) 0 else -1); reply?.writeInt(0)
 '''
-new_tail = '''                        primaryOk && engineOk
+    new_tail = '''                        primaryOk && engineOk
                     } else if (pkg == "com.byd.vrassistant" && hidden == 0) {
                         // Legacy DiLink3 diagnostic recovery only. Build45 could leave this package
                         // disabled if its APK was removed before AUTO-RESTORE. Production may only
@@ -30,13 +36,17 @@ new_tail = '''                        primaryOk && engineOk
                     } else false
                     reply?.writeInt(if (ok) 0 else -1); reply?.writeInt(0)
 '''
-if old_tail not in s:
-    raise SystemExit('Build69 HelperDaemon setAppHidden tail anchor not found')
-s = s.replace(old_tail, new_tail, 1)
+    if old_tail not in s:
+        raise SystemExit('Build69 HelperDaemon setAppHidden tail anchor not found')
+    s = s.replace(old_tail, new_tail, 1)
 
-old_others = '''    val others = current.split(':').filter { it.isNotEmpty() && canonicalComponent(it) != target }
+legacy_a11y_component = (
+    'com.bydmate.app.dilink3diag/com.bydmate.app.cluster.SteeringWheelKeyService'
+)
+if legacy_a11y_component not in s:
+    old_others = '''    val others = current.split(':').filter { it.isNotEmpty() && canonicalComponent(it) != target }
 '''
-new_others = '''    // Old Build42-66 diagnostics used a side-by-side package. Remove that exact legacy
+    new_others = '''    // Old Build42-66 diagnostics used a side-by-side package. Remove that exact legacy
     // component as part of production self-heal so reinstalling an old diagnostic APK later cannot
     // silently re-bind a second key filter. Every unrelated Accessibility service is preserved.
     val legacyDiagTarget = canonicalComponent(
@@ -46,9 +56,9 @@ new_others = '''    // Old Build42-66 diagnostics used a side-by-side package. R
         it.isNotEmpty() && canonicalComponent(it) != target && canonicalComponent(it) != legacyDiagTarget
     }
 '''
-if old_others not in s:
-    raise SystemExit('Build69 HelperDaemon accessibility filter anchor not found')
-s = s.replace(old_others, new_others, 1)
+    if old_others not in s:
+        raise SystemExit('Build69 HelperDaemon accessibility filter anchor not found')
+    s = s.replace(old_others, new_others, 1)
 
 p.write_text(s)
 
@@ -62,10 +72,12 @@ p.write_text(s)
 p = Path('app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt')
 s = p.read_text()
 
-anchor = '''                    val legacyPref = settingsRepository.getString(
+migration_marker = 'legacy_diag_stock_assistant_restored_v1'
+if migration_marker not in s:
+    anchor = '''                    val legacyPref = settingsRepository.getString(
                         SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, "")
 '''
-insert = '''                    // One-time migration for persistent system state left by pre-production
+    insert = '''                    // One-time migration for persistent system state left by pre-production
                     // DiLink3 diagnostics. App uninstall clears app data but does NOT reliably undo
                     // shell/secure-settings mutations such as pm disable-user. Production never
                     // disables the stock assistant package; key ownership is event-level only.
@@ -99,9 +111,10 @@ insert = '''                    // One-time migration for persistent system stat
                     }
 
 '''
-if anchor not in s:
-    raise SystemExit('Build69 TrackingService legacy restore anchor not found')
-s = s.replace(anchor, insert + anchor, 1)
+    if anchor not in s:
+        raise SystemExit('Build69 TrackingService legacy restore anchor not found')
+    s = s.replace(anchor, insert + anchor, 1)
+
 p.write_text(s)
 
-print('Build69 legacy DiLink3 repair patch applied')
+print('Build69 legacy DiLink3 repair present and verified idempotently')
