@@ -1,0 +1,116 @@
+name: Build71 DiLink3 AI UI field test
+
+on:
+  push:
+    branches:
+      - dilink3-build71-ai-ui
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build71:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout clean production source
+        uses: actions/checkout@v7
+        with:
+          ref: dilink3-production-v3143
+          fetch-depth: 0
+
+      - name: Fetch Build70/71 support files
+        shell: bash
+        run: |
+          git show origin/dilink3-build70-fixed:.github/dilink3-build70-fixes.py > /tmp/build70.py
+          git show origin/dilink3-build70-fixed:.github/dilink3-field-test.keystore > /tmp/dilink3-field-test.keystore || git show origin/dilink3-build69-legacy-repair:.github/dilink3-field-test.keystore > /tmp/dilink3-field-test.keystore
+          git show origin/dilink3-build71-ai-ui:.github/dilink3-build71-fixes.py > /tmp/build71.py
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Preflight patch syntax
+        shell: bash
+        run: |
+          python3 -m py_compile /tmp/build70.py
+          python3 -m py_compile /tmp/build71.py
+
+      - name: Apply Build70 verified field fixes
+        shell: bash
+        run: python3 /tmp/build70.py
+
+      - name: Apply Build71 minimal fixes
+        shell: bash
+        run: python3 /tmp/build71.py
+
+      - name: Verify Build71 invariants
+        shell: bash
+        run: |
+          grep -F 'versionCode = 60021' app/build.gradle.kts
+          grep -F 'BYDMate DiLink3 Build71' app/src/main/AndroidManifest.xml
+          grep -F 'https://api.groq.com/openai/v1' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt
+          grep -F 'https://api.x.ai/v1' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt
+          grep -F 'testAgentCompatibility' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt
+          grep -F 'Требуется перезапуск системы' app/src/main/res/values/strings.xml
+          grep -F 'System restart required' app/src/main/res/values-en/strings.xml
+          grep -F 'refreshGigaAmStatus' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt
+          grep -F 'bydmate_h70' app/src/main/kotlin/com/bydmate/app/helper/HelperBinderProtocol.kt
+          grep -F 'DILINK3_STOCK_ASSISTANT_KEYCODE' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          ! grep -R 'setAppHidden("com.byd.vrassistant", true)' app/src/main/kotlin
+
+      - name: Compile and run focused regressions
+        shell: bash
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:compileDebugKotlin :app:testDebugUnitTest --tests com.bydmate.app.cluster.SteeringWheelKeyDecisionTest --tests com.bydmate.app.voice.VoiceControllerAgentFallbackTest --tests com.bydmate.app.voice.GigaAmModelManagerTest --tests com.bydmate.app.service.A11yRecoveryGateTest
+
+      - name: Build APK
+        shell: bash
+        run: |
+          ./gradlew --no-daemon :app:assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk BYDMate-DiLink3-Build71.apk
+          sha256sum BYDMate-DiLink3-Build71.apk > BYDMate-DiLink3-Build71.sha256
+
+      - name: Verify APK identity signer and upgrade path
+        shell: bash
+        run: |
+          AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
+          "$AAPT" dump badging BYDMate-DiLink3-Build71.apk | head -20
+          "$AAPT" dump badging BYDMate-DiLink3-Build71.apk | grep "package: name='com.bydmate.app.dilink3prodtest' versionCode='60021'"
+          "$AAPT" dump badging BYDMate-DiLink3-Build71.apk | grep "application-label:'BYDMate DiLink3 Build71'"
+          "$APKSIGNER" verify --verbose --print-certs BYDMate-DiLink3-Build71.apk
+          "$APKSIGNER" verify --print-certs BYDMate-DiLink3-Build71.apk | grep -i 'Signer #1 certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb'
+
+      - name: Build metadata
+        shell: bash
+        run: |
+          cat > BUILD71.txt <<'EOF'
+          BYDMate DiLink3 Build71
+          base=v3.14.3
+          sourceBranch=dilink3-production-v3143
+          package=com.bydmate.app.dilink3prodtest
+          versionCode=60021
+          changes=minimal UI/status patch on top of verified Build70 steering routing
+          ai=OpenAI-compatible presets + one Agent compatibility tool-call test
+          steering=human-readable BYD Assistant status + system restart required hint when enabled but a11y not connected
+          gigaam=manual status re-check; actual installed files override stale 93/99 percent UI state
+          localization=Russian + English for new short debug/status strings only
+          EOF
+
+      - name: Upload Build71
+        uses: actions/upload-artifact@v7
+        with:
+          name: bydmate-dilink3-build71
+          path: |
+            BYDMate-DiLink3-Build71.apk
+            BYDMate-DiLink3-Build71.sha256
+            BUILD71.txt
+          retention-days: 14
