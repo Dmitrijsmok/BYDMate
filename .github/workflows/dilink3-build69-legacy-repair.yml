@@ -57,7 +57,7 @@ jobs:
           test "$(git branch --show-current)" = "dilink3-production-v3143"
           test -z "$(git status --porcelain)"
 
-      - name: Apply legacy-state repair
+      - name: Apply or verify legacy-state repair
         run: python3 /tmp/build69.py
 
       - name: Preflight formatting and production invariants
@@ -107,7 +107,7 @@ jobs:
             --tests 'com.bydmate.app.service.A11yRecoveryGateTest' \
             --stacktrace
 
-      - name: Commit verified repair to production branch
+      - name: Commit verified repair to production branch if needed
         shell: bash
         run: |
           set -euo pipefail
@@ -115,8 +115,12 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add app/src/main/kotlin/com/bydmate/app/helper/HelperDaemon.kt \
                   app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
-          git commit -m 'fix(dilink3): repair persistent state left by legacy diagnostics'
-          git push origin HEAD:dilink3-production-v3143
+          if git diff --cached --quiet; then
+            echo 'Production branch already contains the verified Build69 repair'
+          else
+            git commit -m 'fix(dilink3): repair persistent state left by legacy diagnostics'
+            git push origin HEAD:dilink3-production-v3143
+          fi
 
       - name: Prepare reproducibly signed Build69 field APK
         shell: bash
@@ -141,7 +145,7 @@ jobs:
           grep -F "application-label:'BYDMate DiLink3 Build69'" /tmp/badging
 
           "$BT/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/signer
-          grep -Fi 'Signer #1 certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb' /tmp/signer
+          grep -Fi 'certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb' /tmp/signer
 
           mkdir -p verified
           cp "$APK" verified/BYDMate-DiLink3-Build69.apk
