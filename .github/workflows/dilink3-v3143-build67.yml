@@ -1,12 +1,12 @@
-name: Build67 clean DiLink3 production test
+name: Build68 clean DiLink3 production test
 
 on:
   push:
-    branches: [dilink3-v3143-finalize-migration]
+    branches: [dilink3-build68-runner]
   workflow_dispatch:
 
 jobs:
-  build67:
+  build68:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -33,7 +33,7 @@ jobs:
           repl = '''    buildTypes {
               debug {
                   applicationIdSuffix = ".dilink3prodtest"
-                  versionNameSuffix = "-dilink3-production-test"
+                  versionNameSuffix = "-dilink3-production-build68"
               }
               release {
           '''
@@ -43,16 +43,25 @@ jobs:
           s = s.replace(anchor, repl, 1)
           if '        versionCode = 443' not in s:
               raise SystemExit('versionCode anchor missing')
-          s = s.replace('        versionCode = 443', '        versionCode = 60017', 1)
+          s = s.replace('        versionCode = 443', '        versionCode = 60018', 1)
           p.write_text(s)
 
           m = Path('app/src/main/AndroidManifest.xml')
           t = m.read_text()
           if 'android:label="BYDMate"' in t:
-              m.write_text(t.replace('android:label="BYDMate"', 'android:label="BYDMate DiLink3 Production Test"', 1))
+              m.write_text(t.replace('android:label="BYDMate"', 'android:label="BYDMate DiLink3 Build68"', 1))
           PY
           grep -F 'applicationIdSuffix = ".dilink3prodtest"' app/build.gradle.kts
-          grep -F 'versionCode = 60017' app/build.gradle.kts
+          grep -F 'versionCode = 60018' app/build.gradle.kts
+
+      - name: Verify assistant-toggle source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'val diLink3Takeover = diLink3Platform && voiceEnabled' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -F 'VoiceEarcon().steeringStart()' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -F 'fun steeringStart()' app/src/main/kotlin/com/bydmate/app/voice/VoiceEarcon.kt
+          grep -F 'options == listOf("BYD Assistant", "BYDMate")) return' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingRows.kt
 
       - name: Build APK
         run: ./gradlew --no-daemon :app:assembleDebug
@@ -64,23 +73,23 @@ jobs:
           APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n1)"
           BT="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
           "$BT/aapt" dump badging "$APK" | tee /tmp/badging
-          grep -F "package: name='com.bydmate.app.dilink3prodtest' versionCode='60017'" /tmp/badging
+          grep -F "package: name='com.bydmate.app.dilink3prodtest' versionCode='60018'" /tmp/badging
           mkdir -p verified
-          cp "$APK" verified/BYDMate-DiLink3-Build67-Production-Test.apk
-          sha256sum verified/BYDMate-DiLink3-Build67-Production-Test.apk | tee verified/BYDMate-DiLink3-Build67-Production-Test.sha256
+          cp "$APK" verified/BYDMate-DiLink3-Build68.apk
+          sha256sum verified/BYDMate-DiLink3-Build68.apk | tee verified/BYDMate-DiLink3-Build68.sha256
           printf '%s\n' \
             'base=v3.14.3' \
-            'productionCommit=f9124ee' \
             'sourceBranch=dilink3-production-v3143' \
             'package=com.bydmate.app.dilink3prodtest' \
-            'versionCode=60017' \
-            'ui=clean production; no BuildXX wizard/debug panel' \
-            'steering=304 -> BYDMate; 327 consumed only while BYDMate selected' \
-            'voice=one steering press -> one GigaAM utterance -> API -> TTS' > verified/BUILD67.txt
+            'versionCode=60018' \
+            'ui=one BYDMate Assistant switch on DiLink3' \
+            'switchON=304 -> immediate beep -> BYDMate; 327 consumed' \
+            'switchOFF=304 and 327 pass through to stock BYD Assistant' \
+            'voice=GigaAM -> agent/API -> TTS' > verified/BUILD68.txt
 
-      - name: Upload Build67
+      - name: Upload Build68
         uses: actions/upload-artifact@v4
         with:
-          name: bydmate-dilink3-build67-production-test
+          name: bydmate-dilink3-build68
           path: verified/
           retention-days: 14
