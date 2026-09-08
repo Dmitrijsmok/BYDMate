@@ -1,5 +1,7 @@
 from pathlib import Path
 
+FIELD_PACKAGE = "com.bydmate.app.dilink3prodtest"
+
 p = Path('app/build.gradle.kts')
 s = p.read_text()
 
@@ -37,10 +39,29 @@ if '        versionCode = 443' not in s:
 s = s.replace('        versionCode = 443', '        versionCode = 60019', 1)
 p.write_text(s)
 
+# A side-by-side APK must make every narrow helper operation target THIS APK, not an installed
+# com.bydmate.app production copy. Otherwise the test UI writes one package's prefs while the
+# AccessibilityService that actually receives 304/327 belongs to another package.
+protocol = Path('app/src/main/kotlin/com/bydmate/app/helper/HelperBinderProtocol.kt')
+t = protocol.read_text()
+replacements = {
+    'const val APP_PACKAGE = "com.bydmate.app"':
+        f'const val APP_PACKAGE = "{FIELD_PACKAGE}"',
+    '"com.bydmate.app/com.bydmate.app.cluster.SteeringWheelKeyService"':
+        f'"{FIELD_PACKAGE}/com.bydmate.app.cluster.SteeringWheelKeyService"',
+    '"com.bydmate.app/com.bydmate.app.media.MediaSessionListenerService"':
+        f'"{FIELD_PACKAGE}/com.bydmate.app.media.MediaSessionListenerService"',
+}
+for old, new in replacements.items():
+    if old not in t:
+        raise SystemExit(f'helper field-package anchor missing: {old}')
+    t = t.replace(old, new, 1)
+protocol.write_text(t)
+
 m = Path('app/src/main/AndroidManifest.xml')
 t = m.read_text()
 if 'android:label="BYDMate"' not in t:
     raise SystemExit('manifest label anchor missing')
 m.write_text(t.replace('android:label="BYDMate"', 'android:label="BYDMate DiLink3 Build69"', 1))
 
-print('Build69 field APK identity/signing prepared')
+print('Build69 field APK identity/signing/helper targets prepared')
