@@ -1,5 +1,6 @@
 package com.bydmate.app.ui.settings
 
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -98,6 +99,15 @@ fun SettingToggleRow(
     onCheckedChange: (Boolean) -> Unit,
     enabled: Boolean = true,
 ) {
+    // On DiLink3 the voice master switch is also the ownership switch for the physical microphone
+    // button. Present that single truth directly instead of exposing a second BYD/BYDMate selector.
+    val isDiLink3VoiceMaster = Build.VERSION.SDK_INT <= 29 &&
+        (title == "Voice commands" || title == "Голосовые команды")
+    val visibleTitle = if (isDiLink3VoiceMaster) "BYDMate Assistant" else title
+    val visibleDescription = if (isDiLink3VoiceMaster) {
+        "Включает BYDMate Assistant для кнопки микрофона на руле. Штатный BYD Assistant при этом отключается. Выключите, чтобы вернуть штатный ассистент."
+    } else description
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -106,7 +116,7 @@ fun SettingToggleRow(
             .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RowLabel(title, description, enabled, Modifier.weight(1f))
+        RowLabel(visibleTitle, visibleDescription, enabled, Modifier.weight(1f))
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
@@ -272,19 +282,9 @@ fun SettingChipRow(
     enabled: Boolean = true,
     onHelp: (() -> Unit)? = null,
 ) {
-    // DiLink3 assistant ownership is a single on/off feature, not a choice between two
-    // independent assistants. Keep the existing call site/state contract but render the row as
-    // one switch so OFF naturally means "factory BYD Assistant".
-    if (options == listOf("BYD Assistant", "BYDMate")) {
-        SettingToggleRow(
-            title = "BYDMate Assistant",
-            description = "Включает BYDMate Assistant для кнопки микрофона на руле. Штатный BYD Assistant при этом отключается. Выключите переключатель, чтобы вернуть штатный ассистент.",
-            checked = selectedIndex == 1,
-            onCheckedChange = { checked -> onSelect(if (checked) 1 else 0) },
-            enabled = enabled,
-        )
-        return
-    }
+    // Legacy DiLink3 BYD/BYDMate chooser. Ownership now follows the one voice master switch above,
+    // so rendering this second control would recreate the contradictory two-switch state.
+    if (Build.VERSION.SDK_INT <= 29 && options == listOf("BYD Assistant", "BYDMate")) return
 
     Row(
         modifier = Modifier
