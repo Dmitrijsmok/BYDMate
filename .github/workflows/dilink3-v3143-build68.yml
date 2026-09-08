@@ -1,0 +1,154 @@
+name: Build68 DiLink3 production assistant toggle
+
+on:
+  push:
+    branches: [dilink3-v3143-finalize-migration]
+    paths:
+      - '.github/workflows/dilink3-v3143-build68.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: dilink3-v3143-build68
+  cancel-in-progress: true
+
+jobs:
+  build68:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout current production source
+        uses: actions/checkout@v4
+        with:
+          ref: dilink3-production-v3143
+          fetch-depth: 0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Verify production source invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE=app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          EARCON=app/src/main/kotlin/com/bydmate/app/voice/VoiceEarcon.kt
+          ROWS=app/src/main/kotlin/com/bydmate/app/ui/settings/SettingRows.kt
+          grep -Fq 'val diLink3Takeover = diLink3Platform && voiceEnabled' "$SERVICE"
+          grep -Fq 'VoiceEarcon().steeringStart()' "$SERVICE"
+          grep -Fq 'fun steeringStart()' "$EARCON"
+          grep -Fq 'title == "Voice commands" || title == "Голосовые команды"' "$ROWS"
+          grep -Fq 'options == listOf("BYD Assistant", "BYDMate")) return' "$ROWS"
+          if grep -R -E 'PRODUCTION WIZARD|ПОШАГОВАЯ ДИАГНОСТИКА' app/src/main/kotlin; then
+            echo 'Diagnostic wizard leaked into production source' >&2
+            exit 1
+          fi
+
+      - name: Prepare reproducibly signed field-test APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Reuse the fixed DiLink3 field-test signing key so Build68+ updates are reproducible.
+          git fetch --depth=1 origin dilink3-build66-wizard
+          git show FETCH_HEAD:.github/dilink3-debug.keystore.b64 | base64 -d > /tmp/dilink3-field-test.keystore
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/build.gradle.kts')
+          s = p.read_text()
+
+          signing_anchor = '''    signingConfigs {
+        if (keystorePropsFile.exists()) {
+'''
+          signing_repl = '''    signingConfigs {
+        create("dilink3ProdTest") {
+            storeFile = file("/tmp/dilink3-field-test.keystore")
+            storePassword = "dilink3debug"
+            keyAlias = "dilink3debug"
+            keyPassword = "dilink3debug"
+        }
+        if (keystorePropsFile.exists()) {
+'''
+          if signing_anchor not in s:
+              raise SystemExit('signingConfigs anchor missing')
+          s = s.replace(signing_anchor, signing_repl, 1)
+
+          build_anchor = '''    buildTypes {
+        release {
+'''
+          build_repl = '''    buildTypes {
+        debug {
+            applicationIdSuffix = ".dilink3prodtest"
+            versionNameSuffix = "-dilink3-production-build68"
+            signingConfig = signingConfigs.getByName("dilink3ProdTest")
+        }
+        release {
+'''
+          if build_anchor not in s:
+              raise SystemExit('buildTypes anchor missing')
+          s = s.replace(build_anchor, build_repl, 1)
+
+          if '        versionCode = 443' not in s:
+              raise SystemExit('versionCode anchor missing')
+          s = s.replace('        versionCode = 443', '        versionCode = 60018', 1)
+          p.write_text(s)
+
+          m = Path('app/src/main/AndroidManifest.xml')
+          t = m.read_text()
+          if 'android:label="BYDMate"' not in t:
+              raise SystemExit('manifest label anchor missing')
+          m.write_text(t.replace('android:label="BYDMate"', 'android:label="BYDMate DiLink3 Build68"', 1))
+          PY
+
+      - name: Compile and run focused regressions
+        env:
+          CI: 'true'
+        run: |
+          ./gradlew --no-daemon \
+            :app:compileDebugKotlin \
+            :app:testDebugUnitTest \
+            --tests 'com.bydmate.app.cluster.SteeringWheelKeyDecisionTest' \
+            --tests 'com.bydmate.app.voice.VoiceControllerAgentFallbackTest' \
+            --tests 'com.bydmate.app.voice.GigaAmModelManagerTest' \
+            --tests 'com.bydmate.app.service.A11yRecoveryGateTest' \
+            --stacktrace
+
+      - name: Build APK
+        run: ./gradlew --no-daemon :app:assembleDebug --stacktrace
+
+      - name: Verify APK identity and signer
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n1)"
+          BT="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+          "$BT/aapt" dump badging "$APK" | tee /tmp/badging
+          grep -F "package: name='com.bydmate.app.dilink3prodtest' versionCode='60018'" /tmp/badging
+          grep -F "application-label:'BYDMate DiLink3 Build68'" /tmp/badging
+          "$BT/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/signer
+          grep -Fi 'Signer #1 certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb' /tmp/signer
+
+          mkdir -p verified
+          cp "$APK" verified/BYDMate-DiLink3-Build68.apk
+          sha256sum verified/BYDMate-DiLink3-Build68.apk | tee verified/BYDMate-DiLink3-Build68.sha256
+          printf '%s\n' \
+            'base=v3.14.3' \
+            'sourceBranch=dilink3-production-v3143' \
+            'package=com.bydmate.app.dilink3prodtest' \
+            'versionCode=60018' \
+            'signerSha256=c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb' \
+            'ui=one BYDMate Assistant switch on DiLink3; legacy BYD/BYDMate chips hidden' \
+            'switchON=304 -> immediate beep -> BYDMate; 327 consumed' \
+            'switchOFF=304 and 327 pass through to stock BYD Assistant' \
+            'voice=GigaAM -> agent/API -> TTS' > verified/BUILD68.txt
+
+      - name: Upload Build68
+        uses: actions/upload-artifact@v4
+        with:
+          name: bydmate-dilink3-build68
+          path: verified/
+          retention-days: 14
