@@ -9,10 +9,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: dilink3-build71-ai-ui
+  cancel-in-progress: true
+
 jobs:
   build71:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout clean production source
         uses: actions/checkout@v7
@@ -23,9 +27,11 @@ jobs:
       - name: Fetch Build70/71 support files
         shell: bash
         run: |
+          set -euo pipefail
+          git fetch origin dilink3-build70-fixed dilink3-build71-ai-ui dilink3-build66-wizard
           git show origin/dilink3-build70-fixed:.github/dilink3-build70-fixes.py > /tmp/build70.py
-          git show origin/dilink3-build70-fixed:.github/dilink3-field-test.keystore > /tmp/dilink3-field-test.keystore || git show origin/dilink3-build69-legacy-repair:.github/dilink3-field-test.keystore > /tmp/dilink3-field-test.keystore
           git show origin/dilink3-build71-ai-ui:.github/dilink3-build71-fixes.py > /tmp/build71.py
+          git show origin/dilink3-build66-wizard:.github/dilink3-debug.keystore.b64 > /tmp/dilink3-debug.keystore.b64
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -39,20 +45,30 @@ jobs:
       - name: Preflight patch syntax
         shell: bash
         run: |
+          set -euo pipefail
           python3 -m py_compile /tmp/build70.py
           python3 -m py_compile /tmp/build71.py
+          test "$(git branch --show-current)" = "dilink3-production-v3143"
+          test -z "$(git status --porcelain)"
 
       - name: Apply Build70 verified field fixes
         shell: bash
-        run: python3 /tmp/build70.py
+        run: |
+          set -euo pipefail
+          base64 -d /tmp/dilink3-debug.keystore.b64 > /tmp/dilink3-field-test.keystore
+          python3 /tmp/build70.py
 
       - name: Apply Build71 minimal fixes
         shell: bash
-        run: python3 /tmp/build71.py
+        run: |
+          set -euo pipefail
+          python3 /tmp/build71.py
+          git diff --check
 
       - name: Verify Build71 invariants
         shell: bash
         run: |
+          set -euo pipefail
           grep -F 'versionCode = 60021' app/build.gradle.kts
           grep -F 'BYDMate DiLink3 Build71' app/src/main/AndroidManifest.xml
           grep -F 'https://api.groq.com/openai/v1' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt
@@ -63,40 +79,55 @@ jobs:
           grep -F 'refreshGigaAmStatus' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt
           grep -F 'bydmate_h70' app/src/main/kotlin/com/bydmate/app/helper/HelperBinderProtocol.kt
           grep -F 'DILINK3_STOCK_ASSISTANT_KEYCODE' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
-          ! grep -R 'setAppHidden("com.byd.vrassistant", true)' app/src/main/kotlin
+          if grep -R -F 'setAppHidden("com.byd.vrassistant", true)' app/src/main/kotlin; then
+            echo 'Build71 must not disable vrassistant package' >&2
+            exit 1
+          fi
 
       - name: Compile and run focused regressions
-        shell: bash
+        env:
+          CI: 'true'
         run: |
-          chmod +x ./gradlew
-          ./gradlew --no-daemon :app:compileDebugKotlin :app:testDebugUnitTest --tests com.bydmate.app.cluster.SteeringWheelKeyDecisionTest --tests com.bydmate.app.voice.VoiceControllerAgentFallbackTest --tests com.bydmate.app.voice.GigaAmModelManagerTest --tests com.bydmate.app.service.A11yRecoveryGateTest
+          ./gradlew --no-daemon \
+            :app:compileDebugKotlin \
+            :app:testDebugUnitTest \
+            --tests 'com.bydmate.app.cluster.SteeringWheelKeyDecisionTest' \
+            --tests 'com.bydmate.app.voice.GigaAmModelManagerTest' \
+            --tests 'com.bydmate.app.voice.VoiceControllerAgentFallbackTest' \
+            --tests 'com.bydmate.app.service.A11yRecoveryGateTest' \
+            --stacktrace
 
       - name: Build APK
-        shell: bash
-        run: |
-          ./gradlew --no-daemon :app:assembleDebug
-          cp app/build/outputs/apk/debug/app-debug.apk BYDMate-DiLink3-Build71.apk
-          sha256sum BYDMate-DiLink3-Build71.apk > BYDMate-DiLink3-Build71.sha256
+        run: ./gradlew --no-daemon :app:assembleDebug --stacktrace
 
       - name: Verify APK identity signer and upgrade path
         shell: bash
         run: |
-          AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -1)
-          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
-          "$AAPT" dump badging BYDMate-DiLink3-Build71.apk | head -20
-          "$AAPT" dump badging BYDMate-DiLink3-Build71.apk | grep "package: name='com.bydmate.app.dilink3prodtest' versionCode='60021'"
-          "$AAPT" dump badging BYDMate-DiLink3-Build71.apk | grep "application-label:'BYDMate DiLink3 Build71'"
-          "$APKSIGNER" verify --verbose --print-certs BYDMate-DiLink3-Build71.apk
-          "$APKSIGNER" verify --print-certs BYDMate-DiLink3-Build71.apk | grep -i 'Signer #1 certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb'
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n1)"
+          BT="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+
+          "$BT/aapt" dump badging "$APK" | tee /tmp/badging
+          grep -F "package: name='com.bydmate.app.dilink3prodtest' versionCode='60021'" /tmp/badging
+          grep -F "application-label:'BYDMate DiLink3 Build71'" /tmp/badging
+
+          "$BT/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/signer
+          grep -Fi 'certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb' /tmp/signer
+          test 60021 -gt 60020
+
+          mkdir -p verified
+          cp "$APK" verified/BYDMate-DiLink3-Build71.apk
+          sha256sum verified/BYDMate-DiLink3-Build71.apk | tee verified/BYDMate-DiLink3-Build71.sha256
 
       - name: Build metadata
         shell: bash
         run: |
-          cat > BUILD71.txt <<'EOF'
+          cat > verified/BUILD71.txt <<'EOF'
           BYDMate DiLink3 Build71
           base=v3.14.3
           sourceBranch=dilink3-production-v3143
           package=com.bydmate.app.dilink3prodtest
+          previousVersionCode=60020
           versionCode=60021
           changes=minimal UI/status patch on top of verified Build70 steering routing
           ai=OpenAI-compatible presets + one Agent compatibility tool-call test
@@ -109,8 +140,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: bydmate-dilink3-build71
-          path: |
-            BYDMate-DiLink3-Build71.apk
-            BYDMate-DiLink3-Build71.sha256
-            BUILD71.txt
+          path: verified/
           retention-days: 14
