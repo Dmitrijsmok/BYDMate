@@ -12,6 +12,7 @@ import com.bydmate.app.media.KnobPlayPause
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.navdata.NavA11yFeed
 import com.bydmate.app.service.TrackingService
+import com.bydmate.app.voice.VoiceEarcon
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -96,7 +97,11 @@ class SteeringWheelKeyService : AccessibilityService() {
             voicePrefs.getBoolean(SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, false)
         when (diLink3AssistantDecision(event.keyCode, isDown, diLink3Takeover, voiceEnabled)) {
             DiLink3AssistantDecision.TRIGGER_VOICE -> {
-                entryPoint().voiceController().onSteeringPttPressed()
+                val controller = entryPoint().voiceController()
+                // Give immediate physical-button feedback before GigaAM construction/capture. The
+                // VoiceEarcon debounce suppresses VoiceController's normal start cue a moment later.
+                if (!controller.listening.value) VoiceEarcon().steeringStart()
+                controller.onSteeringPttPressed()
                 return true
             }
             DiLink3AssistantDecision.CONSUME -> return true
