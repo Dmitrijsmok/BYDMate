@@ -16,12 +16,18 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 # 1) Update field identity only. Same package/signing path is inherited from Build70 patching.
 p = Path("app/build.gradle.kts")
 s = p.read_text()
-s = replace_once(s, "        versionCode = 443", f"        versionCode = {VERSION_CODE}", "versionCode")
+s = replace_once(s, "        versionCode = 60020", f"        versionCode = {VERSION_CODE}", "versionCode")
+s = replace_once(
+    s,
+    '            versionNameSuffix = "-dilink3-production-build70"',
+    '            versionNameSuffix = "-dilink3-production-build71"',
+    "versionNameSuffix",
+)
 p.write_text(s)
 
 m = Path("app/src/main/AndroidManifest.xml")
 s = m.read_text()
-s = replace_once(s, 'android:label="BYDMate"', 'android:label="BYDMate DiLink3 Build71"', "manifest label")
+s = replace_once(s, 'android:label="BYDMate DiLink3 Build70"', 'android:label="BYDMate DiLink3 Build71"', "manifest label")
 m.write_text(s)
 
 # 2) Add provider presets only; transport already supports any OpenAI-compatible base URL.
@@ -143,7 +149,7 @@ insert = '''    fun testAgentCompatibility(connId: String) {
         viewModelScope.launch {
             val conn = runCatching { llmConnectionResolver.get(connId) }.getOrNull()
             val text = if (conn == null) {
-                appContext.getString(R.string.settings_conn_not_configured)
+                appContext.getString(R.string.settings_agent_compat_not_configured)
             } else {
                 val messages = JSONArray().put(
                     JSONObject().put("role", "user")
@@ -184,11 +190,12 @@ insert = '''    fun testAgentCompatibility(connId: String) {
      *  over a stale 93/99% UI marker after process/system restarts. */
     fun refreshGigaAmStatus() {
         val status = gigaAmModelManager.statusSnapshot()
+        val ready = gigaAmModelManager.isReady()
         _uiState.update { it.copy(
-            gigaAmModelReady = gigaAmModelManager.isReady(),
-            gigaAmDownloadProgress = if (gigaAmModelManager.isReady()) 100 else status.progress,
-            gigaAmDownloadFailed = if (gigaAmModelManager.isReady()) false else status.failed,
-            gigaAmDownloadPhase = if (gigaAmModelManager.isReady()) "ready" else status.phase,
+            gigaAmModelReady = ready,
+            gigaAmDownloadProgress = if (ready) 100 else status.progress,
+            gigaAmDownloadFailed = if (ready) false else status.failed,
+            gigaAmDownloadPhase = if (ready) "ready" else status.phase,
         ) }
     }
 
@@ -206,6 +213,7 @@ for values_dir, vals in {
         "settings_preset_hint_together": "Together AI OpenAI-compatible API",
         "settings_agent_compat_button": "Проверить агента",
         "settings_agent_compat_running": "Проверка…",
+        "settings_agent_compat_not_configured": "Сначала заполните подключение и модель",
         "settings_agent_compat_ok": "Совместимо с BYDMate Agent",
         "settings_agent_compat_no_tools": "API отвечает, но модель не вернула tool call",
         "settings_dilink3_assistant_status_blocked": "Штатный BYD Assistant: заблокирован",
@@ -223,6 +231,7 @@ for values_dir, vals in {
         "settings_preset_hint_together": "Together AI OpenAI-compatible API",
         "settings_agent_compat_button": "Check agent",
         "settings_agent_compat_running": "Checking…",
+        "settings_agent_compat_not_configured": "Configure the connection and model first",
         "settings_agent_compat_ok": "Compatible with BYDMate Agent",
         "settings_agent_compat_no_tools": "API responds, but the model did not return a tool call",
         "settings_dilink3_assistant_status_blocked": "Factory BYD Assistant: blocked",
