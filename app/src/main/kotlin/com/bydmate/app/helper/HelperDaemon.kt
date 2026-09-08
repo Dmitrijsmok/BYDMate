@@ -466,6 +466,12 @@ fun main(args: Array<String>) {
                         val engineOk = shExec("$cmd \"\$1\"", "com.byd.autovoice.engine").code == 0
                         shExec("$cmd \"\$1\"", "com.byd.autovoice.tts")
                         primaryOk && engineOk
+                    } else if (pkg == "com.byd.vrassistant" && hidden == 0) {
+                        // Legacy DiLink3 diagnostic recovery only. Build45 could leave this package
+                        // disabled if its APK was removed before AUTO-RESTORE. Production may only
+                        // re-enable it; disabling vrassistant through this privileged helper remains
+                        // impossible by construction.
+                        shExec("pm enable --user 0 \"\$1\"", pkg).code == 0
                     } else false
                     reply?.writeInt(if (ok) 0 else -1); reply?.writeInt(0)
                     true
@@ -1617,7 +1623,15 @@ private fun enableAccessibilityService(): Boolean {
     // both canonicalise to the same ComponentName, so a literal-string filter would leave the other
     // form behind. The framework would then see no change to the enabled SET and never re-bind a
     // crashed service — the exact failure that kept star control dead after a reboot.
-    val others = current.split(':').filter { it.isNotEmpty() && canonicalComponent(it) != target }
+    // Old Build42-66 diagnostics used a side-by-side package. Remove that exact legacy
+    // component as part of production self-heal so reinstalling an old diagnostic APK later cannot
+    // silently re-bind a second key filter. Every unrelated Accessibility service is preserved.
+    val legacyDiagTarget = canonicalComponent(
+        "com.bydmate.app.dilink3diag/com.bydmate.app.cluster.SteeringWheelKeyService"
+    )
+    val others = current.split(':').filter {
+        it.isNotEmpty() && canonicalComponent(it) != target && canonicalComponent(it) != legacyDiagTarget
+    }
     // $1 = the list, passed as argv (not interpolated) — safe even if an existing entry is odd.
     if (shExec("settings put secure enabled_accessibility_services \"\$1\"", others.joinToString(":")).code != 0) return false
     Thread.sleep(200L)  // let the framework observe the removal before we re-add (OpenBYD uses 0.2s)

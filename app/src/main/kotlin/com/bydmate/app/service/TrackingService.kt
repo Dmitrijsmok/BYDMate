@@ -591,6 +591,39 @@ class TrackingService : Service(), LocationListener {
                 // Chained after ensureRunning() (not a separate coroutine) so it cannot race
                 // an unregistered binder on cold start.
                 if (ok) {
+                    // One-time migration for persistent system state left by pre-production
+                    // DiLink3 diagnostics. App uninstall clears app data but does NOT reliably undo
+                    // shell/secure-settings mutations such as pm disable-user. Production never
+                    // disables the stock assistant package; key ownership is event-level only.
+                    if (android.os.Build.VERSION.SDK_INT <= 29) {
+                        val migrationPrefs = getSharedPreferences("dilink3_migrations", Context.MODE_PRIVATE)
+                        if (!migrationPrefs.getBoolean("legacy_diag_stock_assistant_restored_v1", false)) {
+                            val a11yRepaired = runCatching { helperClient.enableAccessibilityService() }
+                                .getOrDefault(false)
+                            val vrRestored = runCatching {
+                                helperClient.setAppHidden("com.byd.vrassistant", false)
+                            }.getOrDefault(false)
+                            val autoVoiceRestored = runCatching {
+                                helperClient.setAppHidden("com.byd.autovoice", false)
+                            }.getOrDefault(false)
+                            val stockRestored = vrRestored || autoVoiceRestored
+                            if (a11yRepaired && stockRestored) {
+                                migrationPrefs.edit()
+                                    .putBoolean("legacy_diag_stock_assistant_restored_v1", true)
+                                    .apply()
+                                Log.i(
+                                    TAG,
+                                    "DiLink3 legacy state repaired: a11y=$a11yRepaired vr=$vrRestored autovoice=$autoVoiceRestored"
+                                )
+                            } else {
+                                Log.w(
+                                    TAG,
+                                    "DiLink3 legacy state repair incomplete: a11y=$a11yRepaired vr=$vrRestored autovoice=$autoVoiceRestored; will retry"
+                                )
+                            }
+                        }
+                    }
+
                     val legacyPref = settingsRepository.getString(
                         SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, "")
                     if (legacyPref == "true") {
