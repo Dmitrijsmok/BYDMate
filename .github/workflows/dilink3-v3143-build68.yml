@@ -2,7 +2,7 @@ name: Build68 DiLink3 production assistant toggle
 
 on:
   push:
-    branches: [dilink3-v3143-finalize-migration]
+    branches: [dilink3-build68-runner]
     paths:
       - '.github/workflows/dilink3-v3143-build68.yml'
   workflow_dispatch:
@@ -52,7 +52,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Reuse the fixed DiLink3 field-test signing key so Build68+ updates are reproducible.
           git fetch --depth=1 origin dilink3-build66-wizard
           git show FETCH_HEAD:.github/dilink3-debug.keystore.b64 | base64 -d > /tmp/dilink3-field-test.keystore
 
