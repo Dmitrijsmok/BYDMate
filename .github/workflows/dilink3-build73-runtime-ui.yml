@@ -33,6 +33,7 @@ jobs:
           git show origin/dilink3-build71-ai-ui:.github/dilink3-build71-fixes.py > /tmp/build71.py
           git show origin/dilink3-build72-agent-routing:.github/dilink3-build72-fixes.py > /tmp/build72.py
           git show origin/dilink3-build73-runtime-ui:.github/dilink3-build73-fixes.py > /tmp/build73.py
+          git show origin/dilink3-build73-runtime-ui:.github/dilink3-build73-test-fixes.py > /tmp/build73tests.py
           git show origin/dilink3-build66-wizard:.github/dilink3-debug.keystore.b64 > /tmp/dilink3-debug.keystore.b64
 
       - name: Set up Java 17
@@ -48,7 +49,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile /tmp/build70.py /tmp/build71.py /tmp/build72.py /tmp/build73.py
+          python3 -m py_compile /tmp/build70.py /tmp/build71.py /tmp/build72.py /tmp/build73.py /tmp/build73tests.py
           test "$(git branch --show-current)" = "dilink3-production-v3143"
           test -z "$(git status --porcelain)"
 
@@ -70,6 +71,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 /tmp/build73.py
+          python3 /tmp/build73tests.py
           git diff --check
 
       - name: Verify Build73 invariants
@@ -85,6 +87,7 @@ jobs:
           grep -F 'HTTP 400' app/src/main/kotlin/com/bydmate/app/agent/LlmAgentBackend.kt
           grep -F 'Провайдер, API key и модель' app/src/main/res/values/strings.xml
           grep -F 'openai/gpt-oss-20b' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt
+          grep -F 'stream failure before any delta retries same connection non-streaming' app/src/test/kotlin/com/bydmate/app/agent/LlmAgentBackendTest.kt
           grep -F 'DILINK3_STOCK_ASSISTANT_KEYCODE' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
           if grep -R -F 'setAppHidden("com.byd.vrassistant", true)' app/src/main/kotlin; then
             echo 'Build73 must not disable vrassistant package' >&2
