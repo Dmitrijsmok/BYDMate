@@ -9,7 +9,6 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import com.bydmate.app.media.KnobPlayPause
-import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.navdata.NavA11yFeed
 import com.bydmate.app.service.TrackingService
 import com.bydmate.app.voice.VoiceEarcon
@@ -89,12 +88,13 @@ class SteeringWheelKeyService : AccessibilityService() {
         val voiceEnabled = voicePrefs.getBoolean("voice_enabled", false)
         val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)
 
-        // DiLink3 field-validated microphone takeover. One physical press emits 304 plus 327;
-        // 304 is BYDMate's trigger while 327 is the stock-assistant companion event. The
-        // preference is opt-in and defaults false, so every other vehicle keeps factory routing.
+        // DiLink3 has one user-facing ownership switch: the existing voice master switch.
+        // ON means BYDMate owns the physical microphone press (304 triggers BYDMate, companion 327
+        // is consumed). OFF means BYDMate does not touch either event, so factory BYD Assistant gets
+        // its original routing back. Keeping ownership tied directly to voiceEnabled prevents two
+        // independent switches from disagreeing and, critically, makes OFF fail-open to stock.
         val diLink3Platform = diLink3TakeoverSupported(android.os.Build.VERSION.SDK_INT)
-        val diLink3Takeover = diLink3Platform &&
-            voicePrefs.getBoolean(SettingsRepository.KEY_DILINK3_STEERING_ASSISTANT, false)
+        val diLink3Takeover = diLink3Platform && voiceEnabled
         when (diLink3AssistantDecision(event.keyCode, isDown, diLink3Takeover, voiceEnabled)) {
             DiLink3AssistantDecision.TRIGGER_VOICE -> {
                 val controller = entryPoint().voiceController()
