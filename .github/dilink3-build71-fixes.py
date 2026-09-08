@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
-# Build71 is intentionally a narrow field patch on top of the verified Build70 behaviour.
-# It keeps the 304/327 routing untouched and changes only settings UI/status handling,
-# OpenAI-compatible presets/agent test UX, and GigaAM stale-status recovery.
-
+# Build71 is intentionally a narrow field patch on top of verified Build70.
+# 304/327 routing and helper behaviour are left untouched.
 VERSION_CODE = "60021"
 
 
@@ -13,7 +11,10 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
         raise SystemExit(f"Build71 anchor missing: {label}")
     return text.replace(old, new, 1)
 
-# 1) Update field identity only. Same package/signing path is inherited from Build70 patching.
+
+# ---------------------------------------------------------------------------
+# 1) Field identity only: same package + signer, monotonically higher version.
+# ---------------------------------------------------------------------------
 p = Path("app/build.gradle.kts")
 s = p.read_text()
 s = replace_once(s, "        versionCode = 60020", f"        versionCode = {VERSION_CODE}", "versionCode")
@@ -25,14 +26,24 @@ s = replace_once(
 )
 p.write_text(s)
 
-m = Path("app/src/main/AndroidManifest.xml")
-s = m.read_text()
-s = replace_once(s, 'android:label="BYDMate DiLink3 Build70"', 'android:label="BYDMate DiLink3 Build71"', "manifest label")
-m.write_text(s)
+p = Path("app/src/main/AndroidManifest.xml")
+s = p.read_text()
+s = replace_once(
+    s,
+    'android:label="BYDMate DiLink3 Build70"',
+    'android:label="BYDMate DiLink3 Build71"',
+    "manifest label",
+)
+p.write_text(s)
 
-# 2) Add provider presets only; transport already supports any OpenAI-compatible base URL.
+
+# ---------------------------------------------------------------------------
+# 2) Minimal settings UI changes.
+# ---------------------------------------------------------------------------
 p = Path("app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt")
 s = p.read_text()
+
+# Add OpenAI-compatible presets to the existing Custom connection. No new transport/backend.
 old = '''private val CUSTOM_PRESETS = listOf(
     CustomPreset("Cloudflare", "https://api.cloudflare.com/client/v4/accounts/ACCOUNT_ID/ai/v1",
         "@cf/zai-org/glm-4.7-flash", R.string.settings_preset_hint_cloudflare),
@@ -62,25 +73,73 @@ new = '''private val CUSTOM_PRESETS = listOf(
 '''
 s = replace_once(s, old, new, "provider presets")
 
-# Change custom-connection test button to agent-compatibility semantics, but only after all fields are configured.
-old = '''                buttonLabel = if (state.connTestRunning == "custom")
-                    stringResource(R.string.settings_conn_check_running)
-                else
-                    stringResource(R.string.settings_conn_check_button),
-                onClick = { viewModel.testConnection("custom") },
-                enabled = state.customConfigured && state.connTestRunning == null,
-'''
-new = '''                buttonLabel = if (state.connTestRunning == "custom")
-                    stringResource(R.string.settings_agent_compat_running)
-                else
-                    stringResource(R.string.settings_agent_compat_button),
-                onClick = { viewModel.testAgentCompatibility("custom") },
-                enabled = state.customConfigured && state.connTestRunning == null,
-'''
-s = replace_once(s, old, new, "custom agent compatibility button")
+# All existing LLM cards now run the single Agent compatibility test.
+for conn_id, key_expr in (
+    ("openrouter", "state.openRouterApiKey.isNotBlank()"),
+    ("zai", "state.zaiApiKey.isNotBlank()"),
+    ("custom", "state.customApiKey.isNotBlank()"),
+):
+    old_call = f'''        testRunning = state.connTestRunning == "{conn_id}",\n        onTest = {{ viewModel.testConnection("{conn_id}") }},\n'''
+    new_call = f'''        testRunning = state.connTestRunning == "{conn_id}",\n        showTest = {key_expr},\n        onTest = {{ viewModel.testAgentCompatibility("{conn_id}") }},\n'''
+    s = replace_once(s, old_call, new_call, f"{conn_id} agent test")
 
-# Keep voice section focused on selecting an already configured model; no API entry fields are moved there.
-# Replace the Build70 steering debug line with human-readable status inside the assistant toggle card.
+# Keep the button hidden until a key exists; it stays disabled until the whole connection is configured.
+old = '''private fun ConnectionCard(
+    title: String,
+    configured: Boolean,
+    testResult: String?,
+    testRunning: Boolean,
+    onTest: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+'''
+new = '''private fun ConnectionCard(
+    title: String,
+    configured: Boolean,
+    testResult: String?,
+    testRunning: Boolean,
+    showTest: Boolean = true,
+    onTest: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+'''
+s = replace_once(s, old, new, "ConnectionCard showTest")
+
+old = '''            content()
+            OutlinedButton(
+                onClick = onTest,
+                enabled = configured && !testRunning,
+                shape = RoundedCornerShape(8.dp),
+            ) {
+                Text(
+                    stringResource(
+                        if (testRunning) R.string.settings_conn_checking else R.string.settings_conn_check
+                    ),
+                    fontSize = 13.sp
+                )
+            }
+            testResult?.let {
+'''
+new = '''            content()
+            if (showTest) {
+                OutlinedButton(
+                    onClick = onTest,
+                    enabled = configured && !testRunning,
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Text(
+                        stringResource(
+                            if (testRunning) R.string.settings_conn_checking else R.string.settings_conn_check
+                        ),
+                        fontSize = 13.sp
+                    )
+                }
+            }
+            testResult?.let {
+'''
+s = replace_once(s, old, new, "ConnectionCard test visibility")
+
+# Human-readable DiLink3 status inside the assistant toggle card; key codes remain secondary.
 old = '''            Text(
                 "Build70 debug: helper=bydmate_h70 | A11y=${if (build70A11y) "CONNECTED" else "OFF"} | 304=$build70Age304 | 327 BLOCKED=$build70Age327",
                 color = TextMuted,
@@ -116,7 +175,7 @@ new = '''            val restartRequired = state.voiceEnabled && !build70A11y
 '''
 s = replace_once(s, old, new, "human steering status")
 
-# GigaAM: add a small manual re-check action only, no new state machine.
+# GigaAM keeps its own status area and gets one cheap re-check action.
 old = '''            if (gigaAmDownloading) {
                 Text(
                     "GigaAM debug: ${state.gigaAmDownloadPhase} · ${state.gigaAmDownloadProgress}%",
@@ -137,7 +196,10 @@ new = '''            if (gigaAmDownloading) {
 s = replace_once(s, old, new, "GigaAM recheck UI")
 p.write_text(s)
 
-# 3) Agent compatibility: use an actual function/tool call instead of plain text response.
+
+# ---------------------------------------------------------------------------
+# 3) One actual Agent compatibility test: provider must return a tool call.
+# ---------------------------------------------------------------------------
 p = Path("app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt")
 s = p.read_text()
 anchor = '''    fun testConnection(connId: String) {
@@ -186,8 +248,7 @@ insert = '''    fun testAgentCompatibility(connId: String) {
         }
     }
 
-    /** Re-read actual GigaAM files and persisted provisioning state. A completed model always wins
-     *  over a stale 93/99% UI marker after process/system restarts. */
+    /** Re-read actual model files and persisted provisioning state. */
     fun refreshGigaAmStatus() {
         val status = gigaAmModelManager.statusSnapshot()
         val ready = gigaAmModelManager.isReady()
@@ -203,7 +264,10 @@ insert = '''    fun testAgentCompatibility(connId: String) {
 s = replace_once(s, anchor, insert + anchor, "agent compatibility method")
 p.write_text(s)
 
-# 4) Strings: use the app's existing resource mechanism; small EN translations are cheap and safe.
+
+# ---------------------------------------------------------------------------
+# 4) New short strings only. RU default + EN bonus; other locales fall back normally.
+# ---------------------------------------------------------------------------
 for values_dir, vals in {
     "values": {
         "settings_preset_hint_openai": "OpenAI API",
@@ -211,8 +275,6 @@ for values_dir, vals in {
         "settings_preset_hint_xai": "xAI Grok API",
         "settings_preset_hint_gemini": "Google Gemini OpenAI-compatible API",
         "settings_preset_hint_together": "Together AI OpenAI-compatible API",
-        "settings_agent_compat_button": "Проверить агента",
-        "settings_agent_compat_running": "Проверка…",
         "settings_agent_compat_not_configured": "Сначала заполните подключение и модель",
         "settings_agent_compat_ok": "Совместимо с BYDMate Agent",
         "settings_agent_compat_no_tools": "API отвечает, но модель не вернула tool call",
@@ -229,8 +291,6 @@ for values_dir, vals in {
         "settings_preset_hint_xai": "xAI Grok API",
         "settings_preset_hint_gemini": "Google Gemini OpenAI-compatible API",
         "settings_preset_hint_together": "Together AI OpenAI-compatible API",
-        "settings_agent_compat_button": "Check agent",
-        "settings_agent_compat_running": "Checking…",
         "settings_agent_compat_not_configured": "Configure the connection and model first",
         "settings_agent_compat_ok": "Compatible with BYDMate Agent",
         "settings_agent_compat_no_tools": "API responds, but the model did not return a tool call",
@@ -246,9 +306,8 @@ for values_dir, vals in {
     if not p.exists():
         continue
     s = p.read_text()
-    marker = "</resources>"
     additions = "\n".join(f'    <string name="{k}">{v}</string>' for k, v in vals.items()) + "\n"
-    s = replace_once(s, marker, additions + marker, f"{values_dir} Build71 strings")
+    s = replace_once(s, "</resources>", additions + "</resources>", f"{values_dir} Build71 strings")
     p.write_text(s)
 
 print("Build71 minimal fixes applied")
