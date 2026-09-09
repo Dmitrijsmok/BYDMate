@@ -1,0 +1,157 @@
+name: Build78 DiLink3 voice timing diagnostics
+
+on:
+  push:
+    branches:
+      - dilink3-build78-voice-timing
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dilink3-build78-voice-timing
+  cancel-in-progress: true
+
+jobs:
+  build78:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout clean production source
+        uses: actions/checkout@v7
+        with:
+          ref: dilink3-production-v3143
+          fetch-depth: 0
+
+      - name: Fetch Build70-78 support files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin dilink3-build70-fixed dilink3-build71-ai-ui dilink3-build72-agent-routing dilink3-build73-final dilink3-build74-aihubmix dilink3-build75-minimax dilink3-build76-openrouter dilink3-build77-marusya dilink3-build78-voice-timing dilink3-build66-wizard
+          git show origin/dilink3-build70-fixed:.github/dilink3-build70-fixes.py > /tmp/build70.py
+          git show origin/dilink3-build71-ai-ui:.github/dilink3-build71-fixes.py > /tmp/build71.py
+          git show origin/dilink3-build72-agent-routing:.github/dilink3-build72-fixes.py > /tmp/build72.py
+          git show origin/dilink3-build73-final:.github/dilink3-build73-fixes.py > /tmp/build73.py
+          git show origin/dilink3-build73-final:.github/dilink3-build73-test-fixes.py > /tmp/build73tests.py
+          git show origin/dilink3-build73-final:.github/dilink3-build73-final-hotfix.py > /tmp/build73final.py
+          git show origin/dilink3-build74-aihubmix:.github/dilink3-build74-aihubmix.py > /tmp/build74.py
+          git show origin/dilink3-build75-minimax:.github/dilink3-build75-minimax.py > /tmp/build75.py
+          git show origin/dilink3-build76-openrouter:.github/dilink3-build76-openrouter.py > /tmp/build76.py
+          git show origin/dilink3-build77-marusya:.github/dilink3-build77-marusya.py > /tmp/build77.py
+          git show origin/dilink3-build78-voice-timing:.github/dilink3-build78-voice-timing.py > /tmp/build78.py
+          git show origin/dilink3-build66-wizard:.github/dilink3-debug.keystore.b64 > /tmp/dilink3-debug.keystore.b64
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Preflight patch syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile /tmp/build70.py /tmp/build71.py /tmp/build72.py /tmp/build73.py /tmp/build73tests.py /tmp/build73final.py /tmp/build74.py /tmp/build75.py /tmp/build76.py /tmp/build77.py /tmp/build78.py
+          test "$(git branch --show-current)" = "dilink3-production-v3143"
+          test -z "$(git status --porcelain)"
+
+      - name: Apply verified Build70-77 field patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d /tmp/dilink3-debug.keystore.b64 > /tmp/dilink3-field-test.keystore
+          python3 /tmp/build70.py
+          python3 /tmp/build71.py
+          python3 /tmp/build72.py
+          python3 /tmp/build73.py
+          python3 /tmp/build73tests.py
+          python3 /tmp/build73final.py
+          python3 /tmp/build74.py
+          python3 /tmp/build75.py
+          python3 /tmp/build76.py
+          python3 /tmp/build77.py
+
+      - name: Apply Build78 timing diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 /tmp/build78.py
+          git diff --check
+
+      - name: Verify Build78 invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'versionCode = 60028' app/build.gradle.kts
+          grep -F 'BYDMate DiLink3 Build78' app/src/main/AndroidManifest.xml
+          grep -F 'object VoiceTimingDiagnostics' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt
+          grep -F 'agentFirstDeltaAtMs' app/src/main/kotlin/com/bydmate/app/agent/LlmAgentBackend.kt
+          grep -F 'Диагностика задержки' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt
+          grep -F 'id = "marusya"' app/src/main/kotlin/com/bydmate/app/voice/TtsVoiceCatalog.kt
+          grep -F 'speakerId = 0, sizeMb = 145' app/src/main/kotlin/com/bydmate/app/voice/TtsVoiceCatalog.kt
+          grep -F 'DILINK3_STOCK_ASSISTANT_KEYCODE' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          if grep -R -F 'setAppHidden("com.byd.vrassistant", true)' app/src/main/kotlin; then
+            echo 'Build78 must not disable vrassistant package' >&2
+            exit 1
+          fi
+
+      - name: Compile and run focused regressions
+        env:
+          CI: 'true'
+        run: |
+          ./gradlew --no-daemon \
+            :app:compileDebugKotlin \
+            :app:testDebugUnitTest \
+            --tests 'com.bydmate.app.cluster.SteeringWheelKeyDecisionTest' \
+            --tests 'com.bydmate.app.voice.VoiceControllerAgentFallbackTest' \
+            --tests 'com.bydmate.app.agent.LlmAgentBackendTest' \
+            --tests 'com.bydmate.app.service.A11yRecoveryGateTest' \
+            --stacktrace
+
+      - name: Build APK
+        run: ./gradlew --no-daemon :app:assembleDebug --stacktrace
+
+      - name: Verify APK identity signer and upgrade path
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n1)"
+          BT="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+          "$BT/aapt" dump badging "$APK" | tee /tmp/badging
+          grep -F "package: name='com.bydmate.app.dilink3prodtest' versionCode='60028'" /tmp/badging
+          grep -F "application-label:'BYDMate DiLink3 Build78'" /tmp/badging
+          "$BT/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/signer
+          grep -Fi 'certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb' /tmp/signer
+          test 60028 -gt 60027
+          mkdir -p verified
+          cp "$APK" verified/BYDMate-DiLink3-Build78.apk
+          sha256sum verified/BYDMate-DiLink3-Build78.apk | tee verified/BYDMate-DiLink3-Build78.sha256
+
+      - name: Build metadata
+        shell: bash
+        run: |
+          cat > verified/BUILD78.txt <<'EOF'
+          BYDMate DiLink3 Build78
+          base=v3.14.3
+          package=com.bydmate.app.dilink3prodtest
+          previousVersionCode=60027
+          versionCode=60028
+          purpose=voice-latency-diagnostics
+          visibleTimings=PTT-ASR,API-first-token,API-first-sentence,API-total,TTS-worker,TTS-init,TTS-synthesis,audio-play,audio-write
+          ttsDiagnostics=voice,engine,speakerId,textLength,samples,sampleRate,error
+          marusya=preserved
+          marusyaSpeakerId=0
+          latencyBehavior=unchanged-measure-first
+          steering=Build70 304/327 unchanged
+          EOF
+
+      - name: Upload Build78
+        uses: actions/upload-artifact@v7
+        with:
+          name: bydmate-dilink3-build78
+          path: verified/
+          retention-days: 14
