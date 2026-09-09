@@ -40,6 +40,7 @@ jobs:
           git show origin/dilink3-build76-openrouter:.github/dilink3-build76-openrouter.py > /tmp/build76.py
           git show origin/dilink3-build77-marusya:.github/dilink3-build77-marusya.py > /tmp/build77.py
           git show origin/dilink3-build78-voice-timing:.github/dilink3-build78-voice-timing.py > /tmp/build78.py
+          git show origin/dilink3-build78-voice-timing:.github/dilink3-build78-compile-hotfix.py > /tmp/build78hotfix.py
           git show origin/dilink3-build66-wizard:.github/dilink3-debug.keystore.b64 > /tmp/dilink3-debug.keystore.b64
 
       - name: Set up Java 17
@@ -55,7 +56,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile /tmp/build70.py /tmp/build71.py /tmp/build72.py /tmp/build73.py /tmp/build73tests.py /tmp/build73final.py /tmp/build74.py /tmp/build75.py /tmp/build76.py /tmp/build77.py /tmp/build78.py
+          python3 -m py_compile /tmp/build70.py /tmp/build71.py /tmp/build72.py /tmp/build73.py /tmp/build73tests.py /tmp/build73final.py /tmp/build74.py /tmp/build75.py /tmp/build76.py /tmp/build77.py /tmp/build78.py /tmp/build78hotfix.py
           test "$(git branch --show-current)" = "dilink3-production-v3143"
           test -z "$(git status --porcelain)"
 
@@ -80,6 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 /tmp/build78.py
+          python3 /tmp/build78hotfix.py
           git diff --check
 
       - name: Verify Build78 invariants
