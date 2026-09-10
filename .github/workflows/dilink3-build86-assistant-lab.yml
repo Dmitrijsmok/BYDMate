@@ -1,0 +1,211 @@
+name: Build86 DiLink3 Assistant Lab
+
+on:
+  push:
+    branches:
+      - dilink3-build86-assistant-lab
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dilink3-build86-assistant-lab
+  cancel-in-progress: true
+
+jobs:
+  build86:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout clean production source
+        uses: actions/checkout@v7
+        with:
+          ref: dilink3-production-v3143
+          fetch-depth: 0
+
+      - name: Fetch Build70-86 support files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin dilink3-build70-fixed dilink3-build71-ai-ui dilink3-build72-agent-routing dilink3-build73-final dilink3-build74-aihubmix dilink3-build75-minimax dilink3-build76-openrouter dilink3-build77-marusya dilink3-build78-voice-timing dilink3-build79-deep-diagnostics dilink3-build80-launch-crashfix dilink3-build81-steering-recovery dilink3-build82-sherpa-streaming dilink3-build83-update-rebind-streamfix dilink3-build84-lowlatency-clauses dilink3-build85-universal-assistant dilink3-build86-assistant-lab dilink3-build66-wizard
+          git show origin/dilink3-build70-fixed:.github/dilink3-build70-fixes.py > /tmp/build70.py
+          git show origin/dilink3-build71-ai-ui:.github/dilink3-build71-fixes.py > /tmp/build71.py
+          git show origin/dilink3-build72-agent-routing:.github/dilink3-build72-fixes.py > /tmp/build72.py
+          git show origin/dilink3-build73-final:.github/dilink3-build73-test-fixes.py > /tmp/build73tests.py
+          git show origin/dilink3-build73-final:.github/dilink3-build73-fixes.py > /tmp/build73.py
+          git show origin/dilink3-build73-final:.github/dilink3-build73-final-hotfix.py > /tmp/build73final.py
+          git show origin/dilink3-build74-aihubmix:.github/dilink3-build74-aihubmix.py > /tmp/build74.py
+          git show origin/dilink3-build75-minimax:.github/dilink3-build75-minimax.py > /tmp/build75.py
+          git show origin/dilink3-build76-openrouter:.github/dilink3-build76-openrouter.py > /tmp/build76.py
+          git show origin/dilink3-build77-marusya:.github/dilink3-build77-marusya.py > /tmp/build77.py
+          git show origin/dilink3-build78-voice-timing:.github/dilink3-build78-voice-timing.py > /tmp/build78.py
+          git show origin/dilink3-build78-voice-timing:.github/dilink3-build78-compile-hotfix.py > /tmp/build78hotfix.py
+          git show origin/dilink3-build79-deep-diagnostics:.github/dilink3-build79-deep-diagnostics.py > /tmp/build79.py
+          git show origin/dilink3-build80-launch-crashfix:.github/dilink3-build80-launch-crashfix.py > /tmp/build80.py
+          git show origin/dilink3-build81-steering-recovery:.github/dilink3-build81-steering-recovery.py > /tmp/build81.py
+          git show origin/dilink3-build82-sherpa-streaming:.github/dilink3-build82-sherpa-streaming.py > /tmp/build82.py
+          git show origin/dilink3-build83-update-rebind-streamfix:.github/dilink3-build83-update-rebind-streamfix.py > /tmp/build83.py
+          git show origin/dilink3-build84-lowlatency-clauses:.github/dilink3-build84-lowlatency.py > /tmp/build84.py
+          git show origin/dilink3-build85-universal-assistant:.github/dilink3-build85-universal.py > /tmp/build85.py
+          git show origin/dilink3-build86-assistant-lab:.github/dilink3-build86-assistant-lab.py > /tmp/build86.py
+          git show origin/dilink3-build66-wizard:.github/dilink3-debug.keystore.b64 > /tmp/dilink3-debug.keystore.b64
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Preflight patch syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile /tmp/build70.py /tmp/build71.py /tmp/build72.py /tmp/build73.py /tmp/build73tests.py /tmp/build73final.py /tmp/build74.py /tmp/build75.py /tmp/build76.py /tmp/build77.py /tmp/build78.py /tmp/build78hotfix.py /tmp/build79.py /tmp/build80.py /tmp/build81.py /tmp/build82.py /tmp/build83.py /tmp/build84.py /tmp/build85.py /tmp/build86.py
+          test "$(git branch --show-current)" = "dilink3-production-v3143"
+          test -z "$(git status --porcelain)"
+
+      - name: Apply frozen Build85 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d /tmp/dilink3-debug.keystore.b64 > /tmp/dilink3-field-test.keystore
+          python3 /tmp/build70.py
+          python3 /tmp/build71.py
+          python3 /tmp/build72.py
+          python3 /tmp/build73.py
+          python3 /tmp/build73tests.py
+          python3 /tmp/build73final.py
+          python3 /tmp/build74.py
+          python3 /tmp/build75.py
+          python3 /tmp/build76.py
+          python3 /tmp/build77.py
+          python3 /tmp/build78.py
+          python3 /tmp/build78hotfix.py
+          python3 /tmp/build79.py
+          python3 /tmp/build80.py
+          python3 /tmp/build81.py
+          python3 /tmp/build82.py
+          python3 /tmp/build83.py
+          python3 /tmp/build84.py
+          python3 /tmp/build85.py
+
+      - name: Apply Build86 Assistant Lab
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 /tmp/build86.py
+          git diff --check
+
+      - name: Verify Build85 baseline and Build86 isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'versionCode = 60036' app/build.gradle.kts
+          grep -F 'BYDMate DiLink3 Build86' app/src/main/AndroidManifest.xml
+          grep -F 'Ты универсальный голосовой AI-помощник пользователя' app/src/main/kotlin/com/bydmate/app/agent/AgentOrchestrator.kt
+          grep -F 'private fun sherpaThreadCount(): Int = 2' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt
+          grep -F 'Build84 TTS prewarm ready:' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt
+          grep -F 'agentOrchestrator.ask(transcript) { sentence ->' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
+          grep -F 'DILINK3_STOCK_ASSISTANT_KEYCODE' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -F 'BUILD70_327_CONSUMED' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -F 'AssistantLabTrace.maybeHandleSteering' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -F 'object AssistantLabOverlay' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'START TRACE' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'РУЛЬ → ALICE' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'РУЛЬ → GPT' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'com.yandex.aliceapp' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'com.openai.chatgpt' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'https://alice.yandex.ru/' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'https://chatgpt.com/download' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          if grep -F 'BUILD82_STREAM_PREBUFFER_MS' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt; then
+            echo 'Build86 must preserve Build85 safe TTS path' >&2
+            exit 1
+          fi
+          if grep -F 'coerceIn(2, 4)' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt; then
+            echo 'Build86 must preserve Build85 two-thread TTS' >&2
+            exit 1
+          fi
+          if grep -F 'streamState(15)' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt; then
+            echo 'Build86 must retain Build80 launch crash fix' >&2
+            exit 1
+          fi
+          if grep -R -F 'settings_tts_voice_marusya' app/src/main; then
+            echo 'Build86 must not expose Marusya' >&2
+            exit 1
+          fi
+
+      - name: Compile and run frozen baseline regressions
+        env:
+          CI: 'true'
+        run: |
+          ./gradlew --no-daemon \
+            :app:compileDebugKotlin \
+            :app:testDebugUnitTest \
+            --tests 'com.bydmate.app.cluster.SteeringWheelKeyDecisionTest' \
+            --tests 'com.bydmate.app.voice.SherpaTtsEngineTest' \
+            --tests 'com.bydmate.app.voice.GigaAmSegmenterTest' \
+            --tests 'com.bydmate.app.voice.GigaAmVadConfigTest' \
+            --tests 'com.bydmate.app.voice.VoiceControllerAgentFallbackTest' \
+            --tests 'com.bydmate.app.agent.AgentOrchestratorTest' \
+            --tests 'com.bydmate.app.agent.SentenceChunkerTest' \
+            --tests 'com.bydmate.app.agent.LlmAgentBackendTest' \
+            --tests 'com.bydmate.app.service.A11yRecoveryGateTest' \
+            --stacktrace
+
+      - name: Build APK
+        run: ./gradlew --no-daemon :app:assembleDebug --stacktrace
+
+      - name: Verify APK identity signer and upgrade path
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n1)"
+          BT="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+          "$BT/aapt" dump badging "$APK" | tee /tmp/badging
+          grep -F "package: name='com.bydmate.app.dilink3prodtest' versionCode='60036'" /tmp/badging
+          grep -F "application-label:'BYDMate DiLink3 Build86'" /tmp/badging
+          "$BT/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/signer
+          grep -Fi 'certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb' /tmp/signer
+          test 60036 -gt 60035
+          mkdir -p verified
+          cp "$APK" verified/BYDMate-DiLink3-Build86.apk
+          sha256sum verified/BYDMate-DiLink3-Build86.apk | tee verified/BYDMate-DiLink3-Build86.sha256
+
+      - name: Build metadata
+        shell: bash
+        run: |
+          cat > verified/BUILD86.txt <<'EOF'
+          BYDMate DiLink3 Build86
+          base=v3.14.3
+          baseline=Build85-frozen
+          package=com.bydmate.app.dilink3prodtest
+          previousVersionCode=60035
+          versionCode=60036
+          purpose=external-assistant-lab
+          externalTargets=Alice,ChatGPT
+          floatingOverlay=minimize-expand-drag
+          trace=key+a11y+intent+foreground+secure-assistant+package+best-effort-logcat
+          missingAppAction=official-install-page
+          steeringExternalTest=one-shot-armed-304-only
+          normalSteering=Build85-unchanged-unless-explicitly-armed
+          ttsRuntime=sherpa-onnx OfflineTts
+          voice=dmitri Piper VITS int8
+          cpuThreads=2
+          ttsPrewarm=during-agent-api-wait
+          pcmStreaming=false
+          audioRoute=BTTS17-with-existing-fallback
+          stockAssistant327Block=retained
+          packageReplaceA11yRecovery=retained
+          universalAssistant=retained
+          EOF
+
+      - name: Upload Build86
+        uses: actions/upload-artifact@v7
+        with:
+          name: bydmate-dilink3-build86
+          path: verified/
+          retention-days: 14
