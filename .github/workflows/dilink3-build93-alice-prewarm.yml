@@ -41,14 +41,19 @@ jobs:
           grep -F 'BYDMate DiLink3 Build93' app/src/main/AndroidManifest.xml
           grep -F 'com.yandex.browser:id/alice_input_quarknyx' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
           grep -F 'com.yandex.browser:id/bro_omnibox_button_microphone_inactive' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'com.yandex.alicenger.Alice.OPEN' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
           grep -F 'AliceRealmeWakeupService' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
           grep -F 'warmYandexAliceAfterStartup' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
+          grep -F '@Volatile var aliceTestMode: Boolean = true' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
           grep -F 'shouldDismissStockAssistant' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
           grep -F 'BUILD70_327_CONSUMED' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
           grep -F 'Build92DirectBootGuard' app/src/main/kotlin/com/bydmate/app/service/BootReceiver.kt
           grep -F 'private fun sherpaThreadCount(): Int = 2' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt
           if grep -F 'РУЛЬ → ALICE APP (1 раз)' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt; then exit 1; fi
+          if grep -F 'actionButton(context, "SAVE TXT")' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt; then exit 1; fi
+          if grep -F 'actionButton(context, "SAVE ZIP")' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt; then exit 1; fi
           if grep -F 'BUILD82_STREAM_PREBUFFER_MS' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt; then exit 1; fi
+          if grep -F 'coerceIn(2, 4)' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt; then exit 1; fi
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -106,13 +111,18 @@ jobs:
           versionCode=60043
           aliceWarmId=com.yandex.browser:id/alice_input_quarknyx
           aliceColdId=com.yandex.browser:id/bro_omnibox_button_microphone_inactive
+          aliceOpenAction=com.yandex.alicenger.Alice.OPEN
           aliceBootPrewarm=true
           aliceWakeupServiceProbe=true
           aliceBackgroundAfterWarm=true
+          aliceSteeringDefault=true
           transientStockAssistantGuard=true
           standaloneAliceUi=false
+          txtZipButtons=false
+          shareText=true
           stockAssistant327Block=retained
-          normalVoiceBaseline=Build85-unchanged
+          localVoiceImplementation=Build85-frozen
+          steeringDefault=Alice-for-Build93-test
           EOF
 
       - name: Upload Build93
