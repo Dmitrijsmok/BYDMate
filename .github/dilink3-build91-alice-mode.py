@@ -57,6 +57,15 @@ s = once(s,
 ''', "toggle")
 
 s = once(s,
+'''    fun maybeHandleSteering(context: Context, event: KeyEvent): Boolean {
+        if (!active || event.keyCode != MIC_KEYCODE) return false
+''',
+'''    fun maybeHandleSteering(context: Context, event: KeyEvent): Boolean {
+        if (event.keyCode != MIC_KEYCODE) return false
+        if (!active && !aliceTestMode) return false
+''', "mode independent of trace")
+
+s = once(s,
 '''        val target = armedTarget ?: return false
         if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount != 0) return false
 
