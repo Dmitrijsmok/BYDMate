@@ -1,20 +1,20 @@
-name: Build89 DiLink3 Yandex Alice
+name: Build90 DiLink3 Dual Yandex Debug
 
 on:
   push:
     branches:
-      - dilink3-build89-yandex-alice-v3
+      - dilink3-build90-dual-yandex-debug
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: dilink3-build89-yandex-alice-v3
+  group: dilink3-build90-dual-yandex-debug
   cancel-in-progress: true
 
 jobs:
-  build89:
+  build90:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -24,11 +24,11 @@ jobs:
           ref: dilink3-production-v3143
           fetch-depth: 0
 
-      - name: Fetch Build70-89 support files
+      - name: Fetch Build70-90 support files
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin dilink3-build70-fixed dilink3-build71-ai-ui dilink3-build72-agent-routing dilink3-build73-final dilink3-build74-aihubmix dilink3-build75-minimax dilink3-build76-openrouter dilink3-build77-marusya dilink3-build78-voice-timing dilink3-build79-deep-diagnostics dilink3-build80-launch-crashfix dilink3-build81-steering-recovery dilink3-build82-sherpa-streaming dilink3-build83-update-rebind-streamfix dilink3-build84-lowlatency-clauses dilink3-build85-universal-assistant dilink3-build86-assistant-lab dilink3-build87-native-assistant-handoff dilink3-build88-overlay-touchfix dilink3-build89-yandex-alice-v3 dilink3-build66-wizard
+          git fetch origin dilink3-build70-fixed dilink3-build71-ai-ui dilink3-build72-agent-routing dilink3-build73-final dilink3-build74-aihubmix dilink3-build75-minimax dilink3-build76-openrouter dilink3-build77-marusya dilink3-build78-voice-timing dilink3-build79-deep-diagnostics dilink3-build80-launch-crashfix dilink3-build81-steering-recovery dilink3-build82-sherpa-streaming dilink3-build83-update-rebind-streamfix dilink3-build84-lowlatency-clauses dilink3-build85-universal-assistant dilink3-build86-assistant-lab dilink3-build87-native-assistant-handoff dilink3-build88-overlay-touchfix dilink3-build89-yandex-alice-v3 dilink3-build90-dual-yandex-debug dilink3-build66-wizard
           git show origin/dilink3-build70-fixed:.github/dilink3-build70-fixes.py > /tmp/build70.py
           git show origin/dilink3-build71-ai-ui:.github/dilink3-build71-fixes.py > /tmp/build71.py
           git show origin/dilink3-build72-agent-routing:.github/dilink3-build72-fixes.py > /tmp/build72.py
@@ -52,6 +52,7 @@ jobs:
           git show origin/dilink3-build87-native-assistant-handoff:.github/dilink3-build87-native-handoff.py > /tmp/build87.py
           git show origin/dilink3-build88-overlay-touchfix:.github/dilink3-build88-overlay-touchfix.py > /tmp/build88.py
           git show origin/dilink3-build89-yandex-alice-v3:.github/dilink3-build89-yandex-alice.py > /tmp/build89.py
+          git show origin/dilink3-build90-dual-yandex-debug:.github/dilink3-build90-dual-yandex-debug.py > /tmp/build90.py
           git show origin/dilink3-build66-wizard:.github/dilink3-debug.keystore.b64 > /tmp/dilink3-debug.keystore.b64
 
       - name: Set up Java 17
@@ -67,9 +68,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile /tmp/build70.py /tmp/build71.py /tmp/build72.py /tmp/build73.py /tmp/build73tests.py /tmp/build73final.py /tmp/build74.py /tmp/build75.py /tmp/build76.py /tmp/build77.py /tmp/build78.py /tmp/build78hotfix.py /tmp/build79.py /tmp/build80.py /tmp/build81.py /tmp/build82.py /tmp/build83.py /tmp/build84.py /tmp/build85.py /tmp/build86.py /tmp/build87.py /tmp/build88.py /tmp/build89.py
+          python3 -m py_compile /tmp/build70.py /tmp/build71.py /tmp/build72.py /tmp/build73.py /tmp/build73tests.py /tmp/build73final.py /tmp/build74.py /tmp/build75.py /tmp/build76.py /tmp/build77.py /tmp/build78.py /tmp/build78hotfix.py /tmp/build79.py /tmp/build80.py /tmp/build81.py /tmp/build82.py /tmp/build83.py /tmp/build84.py /tmp/build85.py /tmp/build86.py /tmp/build87.py /tmp/build88.py /tmp/build89.py /tmp/build90.py
 
-      - name: Apply frozen Build85 baseline through Build89
+      - name: Apply Build70 through Build90
         shell: bash
         run: |
           set -euo pipefail
@@ -97,28 +98,25 @@ jobs:
           python3 /tmp/build87.py
           python3 /tmp/build88.py
           python3 /tmp/build89.py
+          python3 /tmp/build90.py
           git diff --check
 
-      - name: Verify Build89 invariants
+      - name: Verify Build90 invariants
         shell: bash
         run: |
           set -euo pipefail
-          grep -F 'versionCode = 60039' app/build.gradle.kts
-          grep -F 'BYDMate DiLink3 Build89' app/src/main/AndroidManifest.xml
-          grep -F 'Ты универсальный голосовой AI-помощник пользователя' app/src/main/kotlin/com/bydmate/app/agent/AgentOrchestrator.kt
-          grep -F 'private fun sherpaThreadCount(): Int = 2' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt
-          grep -F 'stopForExternalAssistant' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
+          grep -F 'versionCode = 60040' app/build.gradle.kts
+          grep -F 'BYDMate DiLink3 Build90' app/src/main/AndroidManifest.xml
+          grep -F '${applicationId}.assistantlab.files' app/src/main/AndroidManifest.xml
           grep -F 'com.yandex.browser' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
-          grep -F 'YANDEX toolbar Alice clicked' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
-          grep -F 'A11Y YANDEX CLICK' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
-          grep -F 'https://apkpure.com/search?q=com.yandex.browser' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
-          grep -F 'dp(context, 500)' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
-          grep -F '"-b", "crash"' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'com.yandex.aliceapp' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'SHARE LOG' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'dumpYandexProfile' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'A11Y-YANDEX' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'РУЛЬ → ALICE APP (1 раз)' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          if grep -F 'com.openai.chatgpt' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt; then exit 1; fi
+          grep -F 'private fun sherpaThreadCount(): Int = 2' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt
           grep -F 'BUILD70_327_CONSUMED' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
-          if grep -F 'com.yandex.aliceapp' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt; then
-            echo 'Build89 Alice target must be Yandex Browser, not standalone Alice' >&2
-            exit 1
-          fi
           if grep -F 'BUILD82_STREAM_PREBUFFER_MS' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt; then exit 1; fi
           if grep -F 'coerceIn(2, 4)' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt; then exit 1; fi
           if grep -F 'streamState(15)' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt; then exit 1; fi
@@ -149,45 +147,37 @@ jobs:
           APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n1)"
           BT="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
           "$BT/aapt" dump badging "$APK" | tee /tmp/badging
-          grep -F "package: name='com.bydmate.app.dilink3prodtest' versionCode='60039'" /tmp/badging
-          grep -F "application-label:'BYDMate DiLink3 Build89'" /tmp/badging
+          grep -F "package: name='com.bydmate.app.dilink3prodtest' versionCode='60040'" /tmp/badging
+          grep -F "application-label:'BYDMate DiLink3 Build90'" /tmp/badging
           "$BT/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/signer
           grep -Fi 'certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb' /tmp/signer
-          test 60039 -gt 60038
+          test 60040 -gt 60039
           mkdir -p verified
-          cp "$APK" verified/BYDMate-DiLink3-Build89.apk
-          sha256sum verified/BYDMate-DiLink3-Build89.apk | tee verified/BYDMate-DiLink3-Build89.sha256
+          cp "$APK" verified/BYDMate-DiLink3-Build90.apk
+          sha256sum verified/BYDMate-DiLink3-Build90.apk | tee verified/BYDMate-DiLink3-Build90.sha256
 
       - name: Build metadata
         shell: bash
         run: |
-          cat > verified/BUILD89.txt <<'EOF'
-          BYDMate DiLink3 Build89
+          cat > verified/BUILD90.txt <<'EOF'
+          BYDMate DiLink3 Build90
           base=v3.14.3
           baseline=Build85-frozen
-          overlayBase=Build88
           package=com.bydmate.app.dilink3prodtest
-          previousVersionCode=60038
-          versionCode=60039
-          purpose=yandex-browser-alice-routing
-          aliceHostPackage=com.yandex.browser
-          aliceEntry=browser-toolbar-accessibility
-          standaloneAliceRequired=false
-          missingYandexAction=APKPure-package-search
-          debugOverlay=compact-820x500dp
-          trace=yandex-node-metadata+main+system+crash-logcat
-          externalVoice=native-yandex-mic-and-tts
-          steeringExternalTest=one-shot-armed-304-only
+          previousVersionCode=60039
+          versionCode=60040
+          browserAlicePackage=com.yandex.browser
+          standaloneAliceProbe=com.yandex.aliceapp
+          chatgptLab=false
+          traceShare=file-provider-action-send
+          targetDiagnostics=package-components+a11y+crash-logcat
           stockAssistant327Block=retained
           normalVoiceBaseline=Build85-unchanged
-          ttsRuntime=sherpa-onnx
-          voice=dmitri
-          cpuThreads=2
           EOF
 
-      - name: Upload Build89
+      - name: Upload Build90
         uses: actions/upload-artifact@v7
         with:
-          name: bydmate-dilink3-build89
+          name: bydmate-dilink3-build90
           path: verified/
           retention-days: 14
