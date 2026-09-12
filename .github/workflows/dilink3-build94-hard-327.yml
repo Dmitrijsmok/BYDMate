@@ -40,7 +40,9 @@ jobs:
           grep -F 'versionCode = 60044' app/build.gradle.kts
           grep -F 'BYDMate DiLink3 Build94' app/src/main/AndroidManifest.xml
           grep -F '@Volatile var aliceTestMode: Boolean = true' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
-          grep -F 'fun shouldHardBlockStock327(event: KeyEvent): Boolean' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'fun shouldHardBlockStock327(context: Context, event: KeyEvent): Boolean' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'steeringOwnershipEnabled(context)' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'voicePrefs.contains("dilink3_steering_assistant")' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
           grep -F 'ALICE HARD 327 BLOCK' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
           grep -F 'STEERING hard-consumed 327 before stock assistant dispatch' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
           grep -F 'BUILD70_327_CONSUMED' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
@@ -110,7 +112,8 @@ jobs:
           versionCode=60044
           aliceSteeringDefault=true
           hardAlice327Block=true
-          hardAlice327IndependentOfVoiceEnabled=true
+          steeringOwnershipToggleAuthoritative=true
+          steeringOwnershipPrefsMirror=voice/dilink3_steering_assistant
           hardAlice327ArmWindowMs=4000
           transientA11yBackGuard=true
           aliceBootPrewarm=true
