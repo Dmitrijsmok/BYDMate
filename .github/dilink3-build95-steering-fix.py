@@ -118,24 +118,13 @@ s = once(
     "do not clear ownership with voice master",
 )
 
+# Build94 source may have older/newer wording in the KDoc, so patch only the actual behavior line.
 s = once(
     s,
-    '''    /**
-     * DiLink3 steering microphone ownership. This never disables a BYD package: it only
-     * controls the field-validated Accessibility key filter, so OFF restores factory routing
-     * immediately. ON requires the voice master switch and self-enables the a11y service.
-     */
-    fun setDiLink3SteeringAssistant(enabled: Boolean) {
-        if (enabled && !_uiState.value.voiceEnabled) return
+    '''        if (enabled && !_uiState.value.voiceEnabled) return
 ''',
-    '''    /**
-     * DiLink3 steering microphone ownership. OFF restores factory routing immediately.
-     * ON owns 304/327 independently of the local BYDMate ASR master, because Alice is an
-     * external voice target and does not require the local recognizer to be enabled.
-     */
-    fun setDiLink3SteeringAssistant(enabled: Boolean) {
-''',
-    "independent setter",
+    '',
+    "independent setter guard",
 )
 
 # Mark the migration initialized whenever the user explicitly changes the switch.
