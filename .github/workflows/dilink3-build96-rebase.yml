@@ -1,0 +1,55 @@
+name: Build96 Rebase Probe
+
+on:
+  push:
+    branches:
+      - build96-rebase-v3152
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dilink3-build96-rebase
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout upstream v3.15.2 rebase branch
+        uses: actions/checkout@v7
+        with:
+          ref: build96-rebase-v3152
+          fetch-depth: 0
+
+      - name: Apply Build70-95 custom patch chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin build95
+          git show origin/build95:.github/dilink3-build95-runner.py > /tmp/build95-runner.py
+          python3 -m py_compile /tmp/build95-runner.py
+          python3 /tmp/build95-runner.py
+
+      - name: Show resulting diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --stat
+          git diff --check
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Compile rebased source
+        env:
+          CI: 'true'
+        run: ./gradlew --no-daemon :app:compileDebugKotlin --stacktrace
