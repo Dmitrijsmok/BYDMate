@@ -1,0 +1,130 @@
+name: Build94 DiLink3 Hard 327 Block
+
+on:
+  push:
+    branches:
+      - build94
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dilink3-build94-hard-327
+  cancel-in-progress: true
+
+jobs:
+  build94:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout clean production source
+        uses: actions/checkout@v7
+        with:
+          ref: dilink3-production-v3143
+          fetch-depth: 0
+
+      - name: Load and apply Build70-94 patch chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin build94
+          git show origin/build94:.github/dilink3-build94-runner.py > /tmp/build94-runner.py
+          python3 -m py_compile /tmp/build94-runner.py
+          python3 /tmp/build94-runner.py
+
+      - name: Verify Build94 invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'versionCode = 60044' app/build.gradle.kts
+          grep -F 'BYDMate DiLink3 Build94' app/src/main/AndroidManifest.xml
+          grep -F '@Volatile var aliceTestMode: Boolean = true' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'fun shouldHardBlockStock327(event: KeyEvent): Boolean' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'ALICE HARD 327 BLOCK' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'STEERING hard-consumed 327 before stock assistant dispatch' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -F 'BUILD70_327_CONSUMED' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -F 'Build94 boot-only Alice prewarm requested' app/src/main/kotlin/com/bydmate/app/service/BootReceiver.kt
+          if grep -F 'warmYandexAliceAfterStartup(applicationContext)' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt; then exit 1; fi
+          grep -F 'com.yandex.alicenger.Alice.OPEN' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'com.yandex.browser:id/alice_input_quarknyx' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'com.yandex.browser:id/bro_omnibox_button_microphone_inactive' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'private fun sherpaThreadCount(): Int = 2' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt
+          if grep -F 'BUILD82_STREAM_PREBUFFER_MS' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt; then exit 1; fi
+          if grep -F 'coerceIn(2, 4)' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt; then exit 1; fi
+          if grep -F 'FLAG_NOT_FOCUSABLE' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt; then exit 1; fi
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Compile and run frozen baseline regressions
+        env:
+          CI: 'true'
+        run: |
+          ./gradlew --no-daemon \
+            :app:compileDebugKotlin \
+            :app:testDebugUnitTest \
+            --tests 'com.bydmate.app.cluster.SteeringWheelKeyDecisionTest' \
+            --tests 'com.bydmate.app.voice.SherpaTtsEngineTest' \
+            --tests 'com.bydmate.app.voice.GigaAmSegmenterTest' \
+            --tests 'com.bydmate.app.voice.VoiceControllerAgentFallbackTest' \
+            --tests 'com.bydmate.app.agent.AgentOrchestratorTest' \
+            --tests 'com.bydmate.app.agent.LlmAgentBackendTest' \
+            --tests 'com.bydmate.app.service.A11yRecoveryGateTest' \
+            --stacktrace
+
+      - name: Build APK
+        run: ./gradlew --no-daemon :app:assembleDebug --stacktrace
+
+      - name: Verify APK identity signer and upgrade path
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n1)"
+          BT="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+          "$BT/aapt" dump badging "$APK" | tee /tmp/badging
+          grep -F "package: name='com.bydmate.app.dilink3prodtest' versionCode='60044'" /tmp/badging
+          grep -F "application-label:'BYDMate DiLink3 Build94'" /tmp/badging
+          "$BT/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/signer
+          grep -Fi 'certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb' /tmp/signer
+          test 60044 -gt 60043
+          mkdir -p verified
+          cp "$APK" verified/BYDMate-DiLink3-Build94.apk
+          sha256sum verified/BYDMate-DiLink3-Build94.apk | tee verified/BYDMate-DiLink3-Build94.sha256
+
+      - name: Build metadata
+        shell: bash
+        run: |
+          cat > verified/BUILD94.txt <<'EOF'
+          BYDMate DiLink3 Build94
+          base=v3.14.3
+          baseline=Build85-frozen
+          package=com.bydmate.app.dilink3prodtest
+          previousVersionCode=60043
+          versionCode=60044
+          aliceSteeringDefault=true
+          hardAlice327Block=true
+          hardAlice327IndependentOfVoiceEnabled=true
+          hardAlice327ArmWindowMs=4000
+          transientA11yBackGuard=true
+          aliceBootPrewarm=true
+          alicePrewarmOnManualAppOpen=false
+          aliceOpenAction=com.yandex.alicenger.Alice.OPEN
+          aliceWarmId=com.yandex.browser:id/alice_input_quarknyx
+          aliceColdId=com.yandex.browser:id/bro_omnibox_button_microphone_inactive
+          stockAssistant327LegacyBlock=retained
+          localVoiceImplementation=Build85-frozen
+          EOF
+
+      - name: Upload Build94
+        uses: actions/upload-artifact@v7
+        with:
+          name: bydmate-dilink3-build94
+          path: verified/
+          retention-days: 14
