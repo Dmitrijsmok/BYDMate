@@ -50,6 +50,7 @@ patches = [
     ("build93", ".github/dilink3-build93-alice-prewarm.py"),
     ("build93", ".github/dilink3-build93-hotfix.py"),
     ("build94", ".github/dilink3-build94-hard-327.py"),
+    ("build94", ".github/dilink3-build94-toggle.py"),
 ]
 
 key_b64 = subprocess.check_output(["git", "show", "origin/dilink3-build66-wizard:.github/dilink3-debug.keystore.b64"])
