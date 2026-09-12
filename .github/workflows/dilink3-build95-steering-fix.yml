@@ -1,0 +1,128 @@
+name: Build95 DiLink3 Steering Ownership Fix
+
+on:
+  push:
+    branches:
+      - build95
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dilink3-build95-steering-fix
+  cancel-in-progress: true
+
+jobs:
+  build95:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout clean production source
+        uses: actions/checkout@v7
+        with:
+          ref: dilink3-production-v3143
+          fetch-depth: 0
+
+      - name: Load and apply Build70-95 patch chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin build95
+          git show origin/build95:.github/dilink3-build95-runner.py > /tmp/build95-runner.py
+          python3 -m py_compile /tmp/build95-runner.py
+          python3 /tmp/build95-runner.py
+
+      - name: Verify Build95 invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'versionCode = 60045' app/build.gradle.kts
+          grep -F 'BYDMate DiLink3 Build95' app/src/main/AndroidManifest.xml
+          grep -F 'build95_steering_owner_initialized' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'build95_steering_owner_initialized' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt
+          grep -F 'ALICE95 304 ROUTE' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'ALICE95 327 BLOCK' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'val explicitRoute = consume304UntilUp || armedTarget != null' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'val block = hardWindow || owner' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt
+          grep -F 'options = listOf("BYD Assistant", "BYDMate / Alice")' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt
+          grep -F 'enabled = true' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt
+          if grep -F 'if (enabled && !_uiState.value.voiceEnabled) return' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt; then exit 1; fi
+          if grep -F 'it.copy(dilink3SteeringAssistant = false)' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt; then exit 1; fi
+          grep -F 'private fun sherpaThreadCount(): Int = 2' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt
+          if grep -F 'BUILD82_STREAM_PREBUFFER_MS' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt; then exit 1; fi
+          if grep -F 'coerceIn(2, 4)' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt; then exit 1; fi
+          if grep -F 'FLAG_NOT_FOCUSABLE' app/src/main/kotlin/com/bydmate/app/assistantlab/AssistantLab.kt; then exit 1; fi
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Compile and run frozen baseline regressions
+        env:
+          CI: 'true'
+        run: |
+          ./gradlew --no-daemon \
+            :app:compileDebugKotlin \
+            :app:testDebugUnitTest \
+            --tests 'com.bydmate.app.cluster.SteeringWheelKeyDecisionTest' \
+            --tests 'com.bydmate.app.voice.SherpaTtsEngineTest' \
+            --tests 'com.bydmate.app.voice.GigaAmSegmenterTest' \
+            --tests 'com.bydmate.app.voice.VoiceControllerAgentFallbackTest' \
+            --tests 'com.bydmate.app.agent.AgentOrchestratorTest' \
+            --tests 'com.bydmate.app.agent.LlmAgentBackendTest' \
+            --tests 'com.bydmate.app.service.A11yRecoveryGateTest' \
+            --stacktrace
+
+      - name: Build APK
+        run: ./gradlew --no-daemon :app:assembleDebug --stacktrace
+
+      - name: Verify APK identity signer and upgrade path
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n1)"
+          BT="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+          "$BT/aapt" dump badging "$APK" | tee /tmp/badging
+          grep -F "package: name='com.bydmate.app.dilink3prodtest' versionCode='60045'" /tmp/badging
+          grep -F "application-label:'BYDMate DiLink3 Build95'" /tmp/badging
+          "$BT/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/signer
+          grep -Fi 'certificate SHA-256 digest: c5344459707bb536c688413acba4f9dff2308da925fe3b3659c5355d60e09aeb' /tmp/signer
+          test 60045 -gt 60044
+          mkdir -p verified
+          cp "$APK" verified/BYDMate-DiLink3-Build95.apk
+          sha256sum verified/BYDMate-DiLink3-Build95.apk | tee verified/BYDMate-DiLink3-Build95.sha256
+
+      - name: Build metadata
+        shell: bash
+        run: |
+          cat > verified/BUILD95.txt <<'EOF'
+          BYDMate DiLink3 Build95
+          base=v3.14.3
+          baseline=Build85-frozen
+          package=com.bydmate.app.dilink3prodtest
+          previousVersionCode=60044
+          versionCode=60045
+          steeringOwnershipIndependentOfVoiceMaster=true
+          steeringOwnershipDefaultAfterMigration=BYDMate/Alice
+          steeringOwnershipPersistent=true
+          oneShotAliceBypassesOwnership=true
+          stock327BlockWhenOwned=true
+          stock327BlockDuringOneShot=true
+          aliceSteeringDefault=true
+          aliceOpenAction=com.yandex.alicenger.Alice.OPEN
+          stockAssistantPackageEnabled=true
+          localVoiceImplementation=Build85-frozen
+          EOF
+
+      - name: Upload Build95
+        uses: actions/upload-artifact@v7
+        with:
+          name: bydmate-dilink3-build95
+          path: verified/
+          retention-days: 14
