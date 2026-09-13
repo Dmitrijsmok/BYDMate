@@ -73,6 +73,11 @@ s = s.replace(
     1,
 )
 
+obsolete = '        private const val YANDEX_ALICE_URI = "yandexbrowser://alice"\n'
+if obsolete not in s:
+    raise SystemExit("Alice3 obsolete deep-link constant anchor missing")
+s = s.replace(obsolete, "", 1)
+
 fallback_start = s.find("        // Fallback: content description used by the old working experiment.")
 fallback_end = s.find("        return false\n    }\n\n    private fun clickAliceCandidate", fallback_start)
 if fallback_start < 0 or fallback_end < 0:
@@ -80,4 +85,4 @@ if fallback_start < 0 or fallback_end < 0:
 s = s[:fallback_start] + "        Log.d(TAG, \"ALICE_TOOLBAR_EXACT_NOT_FOUND source=$source\")\n" + s[fallback_end:]
 
 p.write_text(s)
-print("Alice3 exact toolbar Browser route applied")
+print("Alice3 exact toolbar Browser route applied; obsolete deep-link removed")
