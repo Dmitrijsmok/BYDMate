@@ -1,12 +1,12 @@
-name: Alice Build 1
+name: Alice Build 1 Side-by-Side
 
 on:
   push:
-    branches: [alice-author-v3152-test]
+    branches: [alice-build1-side-by-side-final2]
   workflow_dispatch:
 
 concurrency:
-  group: alice-build1-${{ github.ref }}
+  group: alice-build1-sbs-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -23,15 +23,21 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v5
 
-      - name: Apply Alice Build 1 patch
+      - name: Apply Alice Build 1 diagnostics patch
         run: python3 .github/alice-build1-patch.py
+
+      - name: Apply side-by-side app identity
+        run: python3 .github/alice-sideby-identity.py
+
+      - name: Isolate Alice helper resources
+        run: python3 .github/alice-sideby-helper.py
 
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
-      - name: Upload Alice Build 1 APK
+      - name: Upload Alice Build 1 Side-by-Side APK
         uses: actions/upload-artifact@v7
         with:
-          name: BYDMate-Alice-Build1
+          name: BYDMate-Alice-Build1-SideBySide
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
