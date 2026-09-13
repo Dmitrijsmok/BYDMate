@@ -67,20 +67,17 @@ launcher = '''    private fun launchYandexAliceOrApkPure() {
 '''
 s = s[:start] + launcher + s[end:]
 
-# Never send the user to APKPure search results; keep the supplied exact product page.
 s = s.replace(
     'private const val APKPURE_YANDEX_SEARCH_URL = "https://apkpure.com/search?q=com.yandex.browser"',
     'private const val APKPURE_YANDEX_SEARCH_URL = "https://apkpure.com/yandex-browser-with-protect/com.yandex.browser"',
     1,
 )
 
-# Build95 target only: remove the broad description scan so a similarly named Alice control
-# inside the page cannot be clicked. If the exact toolbar id changes, diagnostics should say so.
 fallback_start = s.find("        // Fallback: content description used by the old working experiment.")
 fallback_end = s.find("        return false\n    }\n\n    private fun clickAliceCandidate", fallback_start)
 if fallback_start < 0 or fallback_end < 0:
     raise SystemExit("Alice3 fallback anchors missing")
-s = s[:fallback_start] + '''        Log.d(TAG, "ALICE_TOOLBAR_EXACT_NOT_FOUND source=$source")\n''' + s[fallback_end:]
+s = s[:fallback_start] + "        Log.d(TAG, \"ALICE_TOOLBAR_EXACT_NOT_FOUND source=$source\")\n" + s[fallback_end:]
 
 p.write_text(s)
 print("Alice3 exact toolbar Browser route applied")
