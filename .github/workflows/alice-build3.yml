@@ -1,12 +1,12 @@
-name: Alice Build 4
+name: Alice Build 4.1
 
 on:
   push:
-    branches: [alice-build4-unified-voice]
+    branches: [alice-build4-1-yandex-handoff]
   workflow_dispatch:
 
 concurrency:
-  group: alice-build4-${{ github.ref }}
+  group: alice-build4-1-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -53,11 +53,18 @@ jobs:
       - name: Apply Build 4
         run: python3 .github/alice-build4-runner.py
 
-      - name: Verify Build 4
+      - name: Apply Build 4.1 staged handoff
+        run: python3 .github/alice-build4-1-yandex-handoff.py
+
+      - name: Verify Build 4.1
         run: |
           grep -R 'applicationId = "com.bydmate.app.alice4"' app/build.gradle.kts
-          grep -R '3.15.2-alice4-unified' app/build.gradle.kts
-          grep -R 'bro_omnibox_button_microphone_inactive' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -R 'versionCode = 64002' app/build.gradle.kts
+          grep -R '3.15.2-alice4.1-handoff' app/build.gradle.kts
+          grep -R 'bro_omnibox_button_microphone' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -R 'ALICE4_1_COLD_ENTRY_CLICKED' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -R 'ALICE4_1_LISTENING_CLICK' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -R 'YANDEX_A11Y_CANDIDATE' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
           grep -R 'alice_native_takeover' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
           grep -R 'smartHomeUnlockedForTest = true' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt
 
@@ -67,6 +74,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
-          name: BYDMate-Alice-Build4
+          name: BYDMate-Alice-Build4-1
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
