@@ -1,12 +1,12 @@
-name: Alice Build 3 DiLink3 Takeover
+name: Alice Build 4
 
 on:
   push:
-    branches: [alice-build3-dilink3-takeover]
+    branches: [alice-build4-unified-voice]
   workflow_dispatch:
 
 concurrency:
-  group: alice-build3-dilink3-${{ github.ref }}
+  group: alice-build4-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -23,47 +23,50 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v5
 
-      - name: Apply Alice Build 1 diagnostics and Smart Home visibility
+      - name: Apply Build 1
         run: python3 .github/alice-build1-patch.py
 
-      - name: Apply Alice 1 side-by-side identity
+      - name: Apply side-by-side identity
         run: python3 .github/alice-sideby-identity.py
 
-      - name: Isolate Alice helper resources
+      - name: Apply helper identity
         run: python3 .github/alice-sideby-helper.py
 
-      - name: Promote identity to Alice Build 2
+      - name: Apply Build 2 identity
         run: python3 .github/alice-build2-identity.py
 
-      - name: Apply Browser Accessibility base route
+      - name: Apply Browser base
         run: python3 .github/alice-build2-browser.py
 
-      - name: Promote identity to Alice Build 3
+      - name: Apply Build 3 identity
         run: python3 .github/alice-build3-identity.py
 
-      - name: Apply DiLink3 304 and 327 decision
+      - name: Apply DiLink3 route
         run: python3 .github/alice-build3-decision.py
 
-      - name: Bind route to native assistant toggle
+      - name: Apply setting bridge
         run: python3 .github/alice-build3-toggle-mirror.py
 
-      - name: Restore exact Build95 toolbar Alice route
+      - name: Apply Browser correction
         run: python3 .github/alice-build3-browserfix.py
 
-      - name: Verify Build 3 source markers
+      - name: Apply Build 4
+        run: python3 .github/alice-build4-runner.py
+
+      - name: Verify Build 4
         run: |
-          grep -R "DILINK3_ALICE_ROUTE = 1304" app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt
-          grep -R "alice_input_quarknyx" app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
-          grep -R "ALICE_TOOLBAR_EXACT_NOT_FOUND" app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
-          grep -R "apkpure.com/yandex-browser-with-protect/com.yandex.browser" app/src/main/kotlin/com/bydmate/app/AliceSetupActivity.kt
-          grep -R "smartHomeUnlockedForTest = true" app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt
+          grep -R 'applicationId = "com.bydmate.app.alice4"' app/build.gradle.kts
+          grep -R '3.15.2-alice4-unified' app/build.gradle.kts
+          grep -R 'bro_omnibox_button_microphone_inactive' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -R 'alice_native_takeover' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
+          grep -R 'smartHomeUnlockedForTest = true' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt
 
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
-      - name: Upload Alice Build 3 APK
+      - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
-          name: BYDMate-Alice-Build3-DiLink3
+          name: BYDMate-Alice-Build4
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
