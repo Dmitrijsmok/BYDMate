@@ -45,8 +45,12 @@ jobs:
         run: python3 .github/alice-build4-4-runner.py
       - name: Apply Build 4.5 vrassistant helper
         run: python3 .github/alice-build4-5-vrassistant-helper.py
-      - name: Apply Build 4.5 main recovery
-        run: python3 .github/alice-build4-5-main-without-helper.py
+      - name: Apply Build 4.5 identity
+        run: python3 .github/alice-build4-5-section.py 1
+      - name: Disable Alice 4.5 boot prewarm
+        run: python3 .github/alice-build4-5-section.py 3
+      - name: Apply Alice 4.5 steering recovery
+        run: python3 .github/alice-build4-5-section.py 4
       - name: Check patch whitespace
         run: git diff --check
 
