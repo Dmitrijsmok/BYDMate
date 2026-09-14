@@ -31,18 +31,19 @@ if end < 0:
 code = header + source[start:end]
 
 # Alice4.2 boot-prewarm inserted aliceBootPrewarm=false into cancelAliceClick().
-# The original 4.5 patch was written against the 4.1 three-line reset anchor;
-# normalize that expected old block to the actual generated 4.4 source.
+# Rewrite the OLD literal inside the patch program so it matches generated 4.4.
 if which == "4":
-    old_literal = '''        aliceColdEntryClicked = false
+    old_source_literal = """'''        aliceColdEntryClicked = false
         aliceCandidateDumped = false
         aliceClickGeneration++
-'''
-    actual_literal = '''        aliceColdEntryClicked = false
+'''"""
+    actual_source_literal = """'''        aliceColdEntryClicked = false
         aliceCandidateDumped = false
         aliceBootPrewarm = false
         aliceClickGeneration++
-'''
-    code = code.replace(repr(old_literal), repr(actual_literal))
+'''"""
+    if old_source_literal not in code:
+        raise SystemExit("Alice4.5 section4 cancel literal missing")
+    code = code.replace(old_source_literal, actual_source_literal, 1)
 
 exec(compile(code, f"{source_path}#section{which}", "exec"), {"__name__": "__main__"})
