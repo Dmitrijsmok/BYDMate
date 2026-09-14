@@ -41,8 +41,14 @@ jobs:
         run: python3 .github/alice-build3-browserfix.py
       - name: Apply Build 4
         run: python3 .github/alice-build4-runner.py
-      - name: Apply Build 4.5
-        run: python3 .github/alice-build4-5-runner.py
+      - name: Apply Build 4.4 base
+        run: python3 .github/alice-build4-4-runner.py
+      - name: Apply Build 4.5 vrassistant helper
+        run: python3 .github/alice-build4-5-vrassistant-helper.py
+      - name: Apply Build 4.5 main recovery
+        run: python3 .github/alice-build4-5-main-without-helper.py
+      - name: Check patch whitespace
+        run: git diff --check
 
       - name: Verify Build 4.5
         run: |
