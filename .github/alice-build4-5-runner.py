@@ -3,7 +3,7 @@ import subprocess
 
 steps = [
     ".github/alice-build4-4-runner.py",
-    ".github/alice-build4-5-cold-chain-guard-duck.py",
+    ".github/alice-build4-5-fix.py",
 ]
 
 for step in steps:
