@@ -117,7 +117,7 @@ s = once(
                         val result = shExec("$cmd \\\"\\$1\\\"", pkg)
                         android.util.Log.i(
                             "bydmate_helper",
-                            "BUILD6_VRASSISTANT_STATE hidden=${hidden == 1} code=${result.code} output=${result.output.take(240)}"
+                            "BUILD6_VRASSISTANT_STATE hidden=${hidden == 1} code=${result.code} output=${result.stdout.take(240)}"
                         )
                         result.code == 0
                     } else if (pkg == "com.byd.autovoice" && hidden in 0..1) {
