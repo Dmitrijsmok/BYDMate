@@ -56,6 +56,8 @@ jobs:
           ! grep -R 'maybePromptAliceAutostartOnce()' app/src/main/kotlin/com/bydmate/app/MainActivity.kt
           ! grep -R 'Для стабильной работы после перезапуска DiLink разрешите автозапуск BYDMate Alice' app/src/main/kotlin/com/bydmate/app/AliceSetupActivity.kt
           grep -R 'BRIDGE_ENABLE_CHANGED enabled=' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
+          grep -R 'BRIDGE_POLL_START longPollMs=' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
+          grep -R '/api/poll?wait_ms=' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
           grep -R 'BRIDGE_COMMAND_RECEIVED' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
           grep -R 'BRIDGE_COMMAND_DISPATCH' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
           grep -R 'BRIDGE_COMMAND_RESULT' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
