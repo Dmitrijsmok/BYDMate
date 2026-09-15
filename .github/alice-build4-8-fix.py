@@ -41,17 +41,11 @@ s = once(s, old, new, "manual duck start")
 
 # Cold description fallback must mark the Alice session as listening too, otherwise
 # leaving Yandex cannot restore volume until the safety timeout.
-old = '''                if (clickAliceCandidate(node, "alice_description", source, terminal = true)) {
-                    Log.i(TAG, "ALICE4_1_LISTENING_CLICK desc=true coldFirst=$aliceColdEntryClicked")
-                    return true
-                }
+old = '''                        Log.i(TAG, "ALICE4_1_LISTENING_CLICK desc=true coldFirst=$aliceColdEntryClicked")
 '''
-new = '''                if (clickAliceCandidate(node, "alice_description", source, terminal = true)) {
-                    aliceSessionListening = true
-                    logBuild6AudioState("listening_ready_description")
-                    Log.i(TAG, "BUILD8_LISTENING_READY desc=true coldFirst=$aliceColdEntryClicked")
-                    return true
-                }
+new = '''                        aliceSessionListening = true
+                        logBuild6AudioState("listening_ready_description")
+                        Log.i(TAG, "BUILD8_LISTENING_READY desc=true coldFirst=$aliceColdEntryClicked")
 '''
 s = once(s, old, new, "description listening state")
 
