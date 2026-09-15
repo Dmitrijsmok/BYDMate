@@ -28,9 +28,26 @@ class AliceBridgeCommandTranslatorTest {
     }
 
     @Test
+    fun `window open close and percentage translate without raw fids`() {
+        assertEquals(
+            "主驾打开100",
+            AliceBridgeCommandTranslator.resolve(JSONObject("""{"action":"window.driver.open"}"""))?.vehicleCommand,
+        )
+        assertEquals(
+            "主驾打开0",
+            AliceBridgeCommandTranslator.resolve(JSONObject("""{"action":"window.driver.close"}"""))?.vehicleCommand,
+        )
+        assertEquals(
+            "后左打开35",
+            AliceBridgeCommandTranslator.resolve(JSONObject("""{"action":"window.rear_left.position","value":35}"""))?.vehicleCommand,
+        )
+        assertNull(AliceBridgeCommandTranslator.resolve(JSONObject("""{"action":"window.driver.position","value":101}""")))
+    }
+
+    @Test
     fun `dangerous and raw vehicle commands are rejected`() {
         assertNull(AliceBridgeCommandTranslator.resolve(JSONObject("""{"action":"doors.unlock"}""")))
-        assertNull(AliceBridgeCommandTranslator.resolve(JSONObject("""{"action":"window.driver.open"}""")))
+        assertNull(AliceBridgeCommandTranslator.resolve(JSONObject("""{"action":"trunk.open"}""")))
         assertNull(AliceBridgeCommandTranslator.resolve(JSONObject("""{"command":"车门解锁"}""")))
     }
 }
