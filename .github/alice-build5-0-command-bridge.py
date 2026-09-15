@@ -50,6 +50,25 @@ p.write_text(s)
 # exposes fixed 0/100/vent values. Yandex openable/range can request any 0..100%.
 p = Path("app/src/main/kotlin/com/bydmate/app/data/vehicle/CommandTranslator.kt")
 s = p.read_text()
+
+# Front windows have physically validated dedicated full-open/full-close fids. Rear
+# windows do not; their 0..100% position fids ARE live-validated, so full travel for
+# rear windows must use those validated channels too.
+s = once(
+    s,
+    '''        "后左打开100" to Resolved("window_rear_left_open",   1),
+        "后左打开0"   to Resolved("window_rear_left_close",  2),
+        "后右打开100" to Resolved("window_rear_right_open",  1),
+        "后右打开0"   to Resolved("window_rear_right_close", 2),
+''',
+    '''        "后左打开100" to Resolved("window_rear_left_pos",   100),
+        "后左打开0"   to Resolved("window_rear_left_pos",   0),
+        "后右打开100" to Resolved("window_rear_right_pos",  100),
+        "后右打开0"   to Resolved("window_rear_right_pos",  0),
+''',
+    "rear window validated full travel",
+)
+
 s = once(
     s,
     '''        FRIDGE_HEAT_REGEX.matchEntire(stripped)?.let { m ->
@@ -62,9 +81,10 @@ s = once(
             val c = m.groupValues[1].toIntOrNull() ?: return emptyList()
             return fridgeHeat(c.coerceIn(FRIDGE_HEAT_MIN, FRIDGE_HEAT_MAX))
         }
-        // Alice 5.0 / Smart Home: arbitrary side-window aperture. Fixed 0/100
+        // Alice 5.0 / Smart Home: arbitrary side-window aperture. Fixed front 0/100
         // commands were already matched by [table] above and therefore keep using
-        // their dedicated open/close channels; 1..99 use the validated % fids.
+        // their dedicated open/close channels. Rear 0/100 and every 1..99 value use
+        // the live-validated percentage fids.
         WINDOW_POSITION_REGEX.matchEntire(stripped)?.let { m ->
             val pct = m.groupValues[2].toIntOrNull() ?: return emptyList()
             if (pct !in 0..100) return emptyList()
