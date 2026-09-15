@@ -28,6 +28,8 @@ class AlicePollingManager @Inject constructor(
     private val sharedAdaptiveLoop: com.bydmate.app.data.loop.SharedAdaptiveLoop,
     private val vehicleApi: VehicleApi,
 ) {
+    // The provider holds /api/poll open for LONG_POLL_WAIT_MS. This gives near-immediate
+    // delivery when Alice sends a command without hammering the server with short polls.
     private val pollClient = OkHttpClient.Builder()
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(3, TimeUnit.SECONDS)
@@ -36,7 +38,8 @@ class AlicePollingManager @Inject constructor(
 
     companion object {
         private const val TAG = "AlicePolling"
-        private const val POLL_INTERVAL_MS = 2500L
+        private const val LONG_POLL_WAIT_MS = 2000L
+        private const val BETWEEN_POLLS_DELAY_MS = 100L
         private const val STATE_REPORT_EVERY = 10
     }
 
@@ -66,12 +69,12 @@ class AlicePollingManager @Inject constructor(
         scope = s
         s.launch { sharedAdaptiveLoop.flow.collect { data -> latestData = data } }
         pollingJob = s.launch {
-            Log.i(TAG, "BRIDGE_POLL_START intervalMs=$POLL_INTERVAL_MS")
+            Log.i(TAG, "BRIDGE_POLL_START longPollMs=$LONG_POLL_WAIT_MS")
             while (true) {
                 try { poll() } catch (e: Exception) {
                     Log.e(TAG, "BRIDGE_POLL_ERROR ${e.message}")
                 }
-                delay(POLL_INTERVAL_MS)
+                delay(BETWEEN_POLLS_DELAY_MS)
             }
         }
     }
@@ -98,7 +101,10 @@ class AlicePollingManager @Inject constructor(
         }
         configMissingLogged = false
 
-        val request = Request.Builder().url("$endpoint/api/poll").header("X-Api-Key", apiKey).build()
+        val request = Request.Builder()
+            .url("$endpoint/api/poll?wait_ms=$LONG_POLL_WAIT_MS")
+            .header("X-Api-Key", apiKey)
+            .build()
         val t0 = System.currentTimeMillis()
         val (elapsed, commands) = pollClient.newCall(request).execute().use { response ->
             val ms = System.currentTimeMillis() - t0
