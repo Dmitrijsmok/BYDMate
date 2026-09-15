@@ -5,12 +5,12 @@ import org.json.JSONObject
 /**
  * Narrow semantic command surface for the Alice/Yandex bridge.
  *
- * The cloud side never gets access to raw BYD dev/fid/value writes.  It sends one of
- * the actions below; this object translates it to BYDMate's already validated internal
- * command vocabulary, which is then resolved by CommandTranslator and WriteAllowlist.
+ * The cloud side never gets access to raw BYD dev/fid/value writes. It sends one of
+ * the actions below; this object translates it to BYDMate's validated internal command
+ * vocabulary, which is then resolved by CommandTranslator and WriteAllowlist.
  *
- * 5.0 intentionally exposes comfort-only controls.  Windows, locks, trunks and sunroof
- * are deliberately absent from this table and therefore fail closed.
+ * 5.0 exposes comfort controls plus the four side windows. Locks, trunks and sunroof
+ * remain deliberately absent and therefore fail closed.
  */
 object AliceBridgeCommandTranslator {
     data class Resolved(
@@ -48,6 +48,29 @@ object AliceBridgeCommandTranslator {
             "light.ambient_on" -> "氛围灯打开"
             "light.ambient_off" -> "氛围灯关闭"
 
+            // Yandex Smart Home models a window as devices.types.openable. A range/open
+            // capability can request 0..100%, so keep the cloud contract semantic and
+            // translate percentages to BYDMate's existing per-window vocabulary here.
+            "window.driver.open" -> "主驾打开100"
+            "window.driver.close" -> "主驾打开0"
+            "window.driver.vent" -> "主驾通风"
+            "window.driver.position" -> windowPosition("主驾", json) ?: return null
+
+            "window.passenger.open" -> "副驾打开100"
+            "window.passenger.close" -> "副驾打开0"
+            "window.passenger.vent" -> "副驾通风"
+            "window.passenger.position" -> windowPosition("副驾", json) ?: return null
+
+            "window.rear_left.open" -> "后左打开100"
+            "window.rear_left.close" -> "后左打开0"
+            "window.rear_left.vent" -> "后左通风"
+            "window.rear_left.position" -> windowPosition("后左", json) ?: return null
+
+            "window.rear_right.open" -> "后右打开100"
+            "window.rear_right.close" -> "后右打开0"
+            "window.rear_right.vent" -> "后右通风"
+            "window.rear_right.position" -> windowPosition("后右", json) ?: return null
+
             else -> return null
         }
         return Resolved(action, command)
@@ -57,6 +80,12 @@ object AliceBridgeCommandTranslator {
         val level = json.intValueOrNull() ?: return null
         if (level !in 0..5) return null
         return if (level == 0) "${prefix}关闭" else "${prefix}${level}档"
+    }
+
+    private fun windowPosition(prefix: String, json: JSONObject): String? {
+        val percent = json.intValueOrNull() ?: return null
+        if (percent !in 0..100) return null
+        return "${prefix}打开${percent}"
     }
 
     private fun JSONObject.intValueOrNull(): Int? {
@@ -86,5 +115,21 @@ object AliceBridgeCommandTranslator {
         "light.interior_off",
         "light.ambient_on",
         "light.ambient_off",
+        "window.driver.open",
+        "window.driver.close",
+        "window.driver.vent",
+        "window.driver.position",
+        "window.passenger.open",
+        "window.passenger.close",
+        "window.passenger.vent",
+        "window.passenger.position",
+        "window.rear_left.open",
+        "window.rear_left.close",
+        "window.rear_left.vent",
+        "window.rear_left.position",
+        "window.rear_right.open",
+        "window.rear_right.close",
+        "window.rear_right.vent",
+        "window.rear_right.position",
     )
 }
