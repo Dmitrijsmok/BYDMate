@@ -23,13 +23,25 @@ The public HTTPS provider implements the Yandex Smart Home REST resources:
 The adapter converts Yandex capability requests into the semantic actions listed below.
 It never emits raw BYD FIDs.
 
+Yandex gives a Smart Home provider only about 3 seconds for the complete HTTP request / response
+round-trip. Because of that, a fixed 2.5-second vehicle poll cadence is not acceptable for
+interactive Alice control.
+
 ### Vehicle-facing BYDMate transport
 
 The first version keeps the existing BYDMate endpoints:
 
-- `GET /api/poll` — vehicle pulls pending semantic commands
+- `GET /api/poll?wait_ms=2000` — long-poll: vehicle keeps a request waiting for a command
 - `POST /api/ack` — vehicle reports per-command success/failure
 - `POST /api/state` — vehicle reports its latest state snapshot
+
+The endpoint names stay compatible with the existing implementation; only `/api/poll` gains the
+optional `wait_ms` parameter. The provider should hold an empty poll request until either a command
+arrives or `wait_ms` expires. The car reconnects after a short delay, so when Alice sends an action
+there is normally already an outstanding poll waiting and command delivery is almost immediate.
+
+This allows the provider to enqueue the Yandex action, receive the vehicle ACK, and still return a
+truthful `DONE` or error response inside the Yandex timeout in normal conditions.
 
 Authentication remains `X-Api-Key` for the vehicle-facing transport. The Yandex-facing
 side uses the provider OAuth/token flow required by Yandex Smart Home.
@@ -157,5 +169,5 @@ Android log markers:
 - `BRIDGE_COMMAND_REJECTED`
 - `BRIDGE_ACK_OK`
 
-These make it possible to trace: Yandex request -> provider queue -> vehicle poll -> safety
-gate -> Helper write -> ACK.
+These make it possible to trace: Yandex request -> provider queue -> vehicle long-poll -> safety
+gate -> Helper write -> ACK -> Yandex response.
