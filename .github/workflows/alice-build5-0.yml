@@ -59,11 +59,15 @@ jobs:
           grep -R 'BRIDGE_COMMAND_RECEIVED' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
           grep -R 'BRIDGE_COMMAND_DISPATCH' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
           grep -R 'BRIDGE_COMMAND_RESULT' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
+          grep -R 'speedGateBlockReason(command, latestData?.speed)' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
           grep -R 'AliceBridgeCommandTranslator.resolve' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
           grep -R '"climate.temperature"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
           grep -R '"seat.driver.heat"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          grep -R '"window.driver.open"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          grep -R '"window.rear_right.position"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          grep -R 'WINDOW_POSITION_REGEX' app/src/main/kotlin/com/bydmate/app/data/vehicle/CommandTranslator.kt
           ! grep -R '"doors.unlock" ->' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
-          ! grep -R '"window.driver.open" ->' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          ! grep -R '"trunk.open" ->' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
 
       - name: Unit test command bridge
         run: ./gradlew :app:testDebugUnitTest --stacktrace
