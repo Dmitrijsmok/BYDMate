@@ -141,7 +141,14 @@ class AlicePollingManager @Inject constructor(
 
             val command = resolved.vehicleCommand
             Log.i(TAG, "BRIDGE_COMMAND_RECEIVED id=$id action=${resolved.action}")
+
+            // Remote aperture actions are stricter than local automation. The existing
+            // safetyBlockReason preserves historical semantics for windows when telemetry
+            // is absent, so add speedGateBlockReason as a fail-closed fallback. Closing is
+            // never blocked; opening is refused when speed is unknown or above the app's
+            // established threshold.
             val block = ActionDispatcher.safetyBlockReason(command, latestData)
+                ?: ActionDispatcher.speedGateBlockReason(command, latestData?.speed)
             if (block != null) {
                 val reason = block.javaClass.simpleName.ifBlank { "safety_gate" }
                 Log.w(TAG, "BRIDGE_COMMAND_REJECTED id=$id action=${resolved.action} reason=$reason")
