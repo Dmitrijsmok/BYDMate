@@ -55,11 +55,10 @@ jobs:
           grep -R 'BUILD8_LISTENING_READY desc=true' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
           grep -R 'endExternalAliceDuck("left_yandex:' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
           grep -R 'EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX = 4' app/src/main/kotlin/com/bydmate/app/voice/AudioCapture.kt
-          grep -R 'maybePromptAliceAutostartOnce()' app/src/main/kotlin/com/bydmate/app/MainActivity.kt
-          grep -R 'autostart_prompted_v42' app/src/main/kotlin/com/bydmate/app/MainActivity.kt
-          grep -R 'putExtra("mode", "autostart")' app/src/main/kotlin/com/bydmate/app/MainActivity.kt
-          grep -R 'Для стабильной работы после перезапуска DiLink разрешите автозапуск BYDMate Alice' app/src/main/kotlin/com/bydmate/app/AliceSetupActivity.kt
-          grep -R 'putExtra("mode", "autostart")' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt
+          ! grep -R 'maybePromptAliceAutostartOnce()' app/src/main/kotlin/com/bydmate/app/MainActivity.kt
+          ! grep -R 'Для стабильной работы после перезапуска DiLink разрешите автозапуск BYDMate Alice' app/src/main/kotlin/com/bydmate/app/AliceSetupActivity.kt
+          ! grep -R 'putExtra("mode", "autostart")' app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsViewModel.kt
+          ! grep -F '.github/alice-build4-2-autostart.py' .github/alice-build4-9-runner.py
           ! grep -R 'BUILD6_MANUAL_DUCK_DISABLED reason=system_audio_focus' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
 
       - name: Build debug APK
