@@ -18,4 +18,4 @@ s = once(
 )
 p.write_text(s)
 
-print("Alice4.9 stable identity applied: 4.8 behavior preserved + autostart guidance restored")
+print("Alice4.9 stable identity applied: 4.8 behavior preserved; custom autostart popup omitted")
