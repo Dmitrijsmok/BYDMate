@@ -28,60 +28,37 @@ class AlicePollingManager @Inject constructor(
     private val sharedAdaptiveLoop: com.bydmate.app.data.loop.SharedAdaptiveLoop,
     private val vehicleApi: VehicleApi,
 ) {
-    // Fast client with short timeouts for polling (main httpClient has 15s)
     private val pollClient = OkHttpClient.Builder()
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(3, TimeUnit.SECONDS)
         .writeTimeout(3, TimeUnit.SECONDS)
         .build()
-
     companion object {
         private const val TAG = "AlicePolling"
         private const val POLL_INTERVAL_MS = 2500L
-        private const val STATE_REPORT_EVERY = 10 // every 10th poll (~25s)
+        private const val STATE_REPORT_EVERY = 10
     }
-
-    private data class AckResult(
-        val id: String,
-        val success: Boolean,
-        val error: String? = null,
-    )
 
     private var scope: CoroutineScope? = null
     private var pollingJob: Job? = null
     private var pollCount = 0
-    private var configMissingLogged = false
 
-    @Volatile var lastCommandId: String? = null
-        private set
-    @Volatile var lastAction: String? = null
-        private set
-    @Volatile var lastCommandSuccess: Boolean? = null
-        private set
-    @Volatile var lastCommandError: String? = null
-        private set
-    @Volatile var lastCommandAtMs: Long = 0L
-        private set
-
-    // Set by TrackingService from DiPlus data — no extra DiPlus calls
     @Volatile var latestData: DiParsData? = null
 
     fun start() {
         if (pollingJob?.isActive == true) return
         val s = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         scope = s
-        // Flow collector: Alice's own subscription to the shared loop so it
-        // doesn't depend on TrackingService writing latestData on every tick.
         s.launch {
             sharedAdaptiveLoop.flow.collect { data -> latestData = data }
         }
         pollingJob = s.launch {
-            Log.i(TAG, "BRIDGE_POLL_START intervalMs=$POLL_INTERVAL_MS")
+            Log.i(TAG, "Polling started")
             while (true) {
                 try {
                     poll()
                 } catch (e: Exception) {
-                    Log.e(TAG, "BRIDGE_POLL_ERROR ${e.message}")
+                    Log.e(TAG, "Poll error: ${e.message}")
                 }
                 delay(POLL_INTERVAL_MS)
             }
@@ -93,22 +70,15 @@ class AlicePollingManager @Inject constructor(
         pollingJob = null
         scope?.cancel()
         scope = null
-        Log.i(TAG, "BRIDGE_POLL_STOP")
+        Log.i(TAG, "Polling stopped")
     }
 
     val isRunning: Boolean get() = pollingJob?.isActive == true
 
     private suspend fun poll() {
-        val endpoint = settingsRepository.getString(SettingsRepository.KEY_ALICE_ENDPOINT, "").trimEnd('/')
+        val endpoint = settingsRepository.getString(SettingsRepository.KEY_ALICE_ENDPOINT, "")
         val apiKey = settingsRepository.getString(SettingsRepository.KEY_ALICE_API_KEY, "")
-        if (endpoint.isBlank() || apiKey.isBlank()) {
-            if (!configMissingLogged) {
-                configMissingLogged = true
-                Log.w(TAG, "BRIDGE_CONFIG_MISSING endpointSet=${endpoint.isNotBlank()} apiKeySet=${apiKey.isNotBlank()}")
-            }
-            return
-        }
-        configMissingLogged = false
+        if (endpoint.isBlank() || apiKey.isBlank()) return
 
         val request = Request.Builder()
             .url("$endpoint/api/poll")
@@ -119,7 +89,7 @@ class AlicePollingManager @Inject constructor(
         val (elapsed, commands) = pollClient.newCall(request).execute().use { response ->
             val ms = System.currentTimeMillis() - t0
             if (!response.isSuccessful) {
-                Log.w(TAG, "BRIDGE_POLL_HTTP code=${response.code} elapsedMs=$ms")
+                Log.w(TAG, "Poll HTTP ${response.code} (${ms}ms)")
                 return
             }
             val body = response.body?.string() ?: return
@@ -128,8 +98,7 @@ class AlicePollingManager @Inject constructor(
         }
 
         if (commands.length() == 0) {
-            Log.d(TAG, "BRIDGE_POLL_OK elapsedMs=$elapsed commands=0")
-            // Report real device state every Nth poll
+            Log.d(TAG, "Poll OK (${elapsed}ms) - empty")
             pollCount++
             if (pollCount >= STATE_REPORT_EVERY) {
                 pollCount = 0
@@ -137,65 +106,29 @@ class AlicePollingManager @Inject constructor(
             }
             return
         }
-        Log.i(TAG, "BRIDGE_POLL_OK elapsedMs=$elapsed commands=${commands.length()}")
+        Log.i(TAG, "Received ${commands.length()} command(s) (${elapsed}ms)")
 
-        val results = mutableListOf<AckResult>()
+        val ackIds = mutableListOf<String>()
         for (i in 0 until commands.length()) {
             val cmd = commands.getJSONObject(i)
-            val id = cmd.optString("id")
-            if (id.isBlank()) {
-                Log.w(TAG, "BRIDGE_COMMAND_REJECTED id=missing reason=missing_id")
+            val id = cmd.getString("id")
+            val command = cmd.getString("command")
+            Log.i(TAG, "Executing: '$command' (id=$id)")
+            val unlockBlock = ActionDispatcher.unlockGateBlockReason(command, latestData?.speed)
+            if (unlockBlock != null) {
+                Log.w(TAG, "Blocked: '$command' → $unlockBlock")
+                ackIds.add(id)
                 continue
             }
-
-            val resolved = AliceBridgeCommandTranslator.resolve(cmd)
-            if (resolved == null) {
-                val requested = cmd.optString("action", "<missing>")
-                Log.w(TAG, "BRIDGE_COMMAND_REJECTED id=$id action=$requested reason=unsupported_or_invalid")
-                rememberResult(id, requested, false, "unsupported_or_invalid")
-                results += AckResult(id, false, "unsupported_or_invalid")
-                continue
-            }
-
-            val command = resolved.vehicleCommand
-            Log.i(TAG, "BRIDGE_COMMAND_RECEIVED id=$id action=${resolved.action}")
-
-            // Reuse the full automation safety gate even though the 5.0 semantic surface
-            // intentionally exposes comfort-only actions. This stays fail-safe if a future
-            // release expands the semantic vocabulary to apertures or locks.
-            val block = ActionDispatcher.safetyBlockReason(command, latestData)
-            if (block != null) {
-                val reason = block::class.simpleName ?: "safety_gate"
-                Log.w(TAG, "BRIDGE_COMMAND_REJECTED id=$id action=${resolved.action} reason=$reason")
-                rememberResult(id, resolved.action, false, reason)
-                results += AckResult(id, false, reason)
-                continue
-            }
-
-            Log.i(TAG, "BRIDGE_COMMAND_DISPATCH id=$id action=${resolved.action}")
             val result = vehicleApi.dispatch(command)
             val success = result.isSuccess
-            val error = result.exceptionOrNull()?.message
-            rememberResult(id, resolved.action, success, error)
-            Log.i(
-                TAG,
-                "BRIDGE_COMMAND_RESULT id=$id action=${resolved.action} success=$success" +
-                    (error?.let { " error=${it.take(160)}" } ?: "")
-            )
-            results += AckResult(id, success, error?.take(240))
+            Log.i(TAG, "Result: $command → ${if (success) "OK" else "FAIL: ${result.exceptionOrNull()?.message}"}")
+            ackIds.add(id)
         }
 
-        if (results.isNotEmpty()) {
-            ack(endpoint, apiKey, results)
+        if (ackIds.isNotEmpty()) {
+            ack(endpoint, apiKey, ackIds)
         }
-    }
-
-    private fun rememberResult(id: String, action: String, success: Boolean, error: String?) {
-        lastCommandId = id
-        lastAction = action
-        lastCommandSuccess = success
-        lastCommandError = error
-        lastCommandAtMs = System.currentTimeMillis()
     }
 
     private fun reportState(endpoint: String, apiKey: String) {
@@ -220,42 +153,26 @@ class AlicePollingManager @Inject constructor(
                 .post(json.toString().toRequestBody("application/json".toMediaType()))
                 .build()
             pollClient.newCall(request).execute().close()
-            Log.d(TAG, "BRIDGE_STATE_REPORTED")
+            Log.d(TAG, "State reported")
         } catch (e: Exception) {
-            Log.e(TAG, "BRIDGE_STATE_ERROR ${e.message}")
+            Log.e(TAG, "State report failed: ${e.message}")
         }
     }
 
-    private fun ack(endpoint: String, apiKey: String, results: List<AckResult>) {
+    private fun ack(endpoint: String, apiKey: String, ids: List<String>) {
         try {
             val json = JSONObject().apply {
-                // Keep ids for compatibility with the pre-5.0 queue API while also sending
-                // per-command outcomes so the provider can return a truthful Yandex result.
-                put("ids", JSONArray(results.map { it.id }))
-                put("results", JSONArray().apply {
-                    results.forEach { result ->
-                        put(JSONObject().apply {
-                            put("id", result.id)
-                            put("success", result.success)
-                            result.error?.let { put("error", it) }
-                        })
-                    }
-                })
+                put("ids", JSONArray(ids))
             }
             val request = Request.Builder()
                 .url("$endpoint/api/ack")
                 .header("X-Api-Key", apiKey)
                 .post(json.toString().toRequestBody("application/json".toMediaType()))
                 .build()
-            pollClient.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    Log.i(TAG, "BRIDGE_ACK_OK count=${results.size}")
-                } else {
-                    Log.w(TAG, "BRIDGE_ACK_HTTP code=${response.code} count=${results.size}")
-                }
-            }
+            pollClient.newCall(request).execute().close()
+            Log.i(TAG, "Acked ${ids.size} command(s)")
         } catch (e: Exception) {
-            Log.e(TAG, "BRIDGE_ACK_ERROR ${e.message}")
+            Log.e(TAG, "Ack failed: ${e.message}")
         }
     }
 }
