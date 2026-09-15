@@ -108,12 +108,13 @@ s = once(
 )
 p.write_text(s)
 
-# Correct the old settings hint: polling is 2.5 s and vehicle writes no longer use D+.
+# Correct the old settings hint: 5.0 uses a held long-poll request for low-latency
+# command delivery, and vehicle writes no longer use D+.
 p = Path("app/src/main/kotlin/com/bydmate/app/ui/settings/SettingsScreen.kt")
 s = p.read_text()
 s = s.replace(
     'SettingHint("Polling опрашивает Worker каждую секунду\\nи выполняет команды через D+ API")',
-    'SettingHint("Command Bridge опрашивает Worker примерно каждые 2,5 с\\nи выполняет только разрешённые команды через BYDMate Helper")',
+    'SettingHint("Command Bridge держит защищённое long-poll соединение с Worker\\nи выполняет только разрешённые команды через BYDMate Helper")',
 )
 p.write_text(s)
 
@@ -123,4 +124,4 @@ Path("app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt").w
     Path(".github/alice-build5-0-polling.kt.txt").read_text()
 )
 
-print("Alice 5.0 command bridge applied: version 64011, live toggle, semantic polling, windows")
+print("Alice 5.0 command bridge applied: version 64011, live toggle, long-poll, windows")
