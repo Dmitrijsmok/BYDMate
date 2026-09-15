@@ -1,0 +1,223 @@
+package com.bydmate.app.data.remote
+
+import android.util.Log
+import com.bydmate.app.data.automation.ActionDispatcher
+import com.bydmate.app.data.repository.SettingsRepository
+import com.bydmate.app.data.vehicle.VehicleApi
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+import javax.inject.Inject
+import javax.inject.Singleton
+
+@Singleton
+class AlicePollingManager @Inject constructor(
+    private val httpClient: OkHttpClient,
+    private val settingsRepository: SettingsRepository,
+    private val sharedAdaptiveLoop: com.bydmate.app.data.loop.SharedAdaptiveLoop,
+    private val vehicleApi: VehicleApi,
+) {
+    private val pollClient = OkHttpClient.Builder()
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(3, TimeUnit.SECONDS)
+        .writeTimeout(3, TimeUnit.SECONDS)
+        .build()
+
+    companion object {
+        private const val TAG = "AlicePolling"
+        private const val POLL_INTERVAL_MS = 2500L
+        private const val STATE_REPORT_EVERY = 10
+    }
+
+    private data class AckResult(val id: String, val success: Boolean, val error: String? = null)
+
+    private var scope: CoroutineScope? = null
+    private var pollingJob: Job? = null
+    private var pollCount = 0
+    private var configMissingLogged = false
+
+    @Volatile var lastCommandId: String? = null
+        private set
+    @Volatile var lastAction: String? = null
+        private set
+    @Volatile var lastCommandSuccess: Boolean? = null
+        private set
+    @Volatile var lastCommandError: String? = null
+        private set
+    @Volatile var lastCommandAtMs: Long = 0L
+        private set
+
+    @Volatile var latestData: DiParsData? = null
+
+    fun start() {
+        if (pollingJob?.isActive == true) return
+        val s = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        scope = s
+        s.launch { sharedAdaptiveLoop.flow.collect { data -> latestData = data } }
+        pollingJob = s.launch {
+            Log.i(TAG, "BRIDGE_POLL_START intervalMs=$POLL_INTERVAL_MS")
+            while (true) {
+                try { poll() } catch (e: Exception) {
+                    Log.e(TAG, "BRIDGE_POLL_ERROR ${e.message}")
+                }
+                delay(POLL_INTERVAL_MS)
+            }
+        }
+    }
+
+    fun stop() {
+        pollingJob?.cancel()
+        pollingJob = null
+        scope?.cancel()
+        scope = null
+        Log.i(TAG, "BRIDGE_POLL_STOP")
+    }
+
+    val isRunning: Boolean get() = pollingJob?.isActive == true
+
+    private suspend fun poll() {
+        val endpoint = settingsRepository.getString(SettingsRepository.KEY_ALICE_ENDPOINT, "").trimEnd('/')
+        val apiKey = settingsRepository.getString(SettingsRepository.KEY_ALICE_API_KEY, "")
+        if (endpoint.isBlank() || apiKey.isBlank()) {
+            if (!configMissingLogged) {
+                configMissingLogged = true
+                Log.w(TAG, "BRIDGE_CONFIG_MISSING endpointSet=${endpoint.isNotBlank()} apiKeySet=${apiKey.isNotBlank()}")
+            }
+            return
+        }
+        configMissingLogged = false
+
+        val request = Request.Builder().url("$endpoint/api/poll").header("X-Api-Key", apiKey).build()
+        val t0 = System.currentTimeMillis()
+        val (elapsed, commands) = pollClient.newCall(request).execute().use { response ->
+            val ms = System.currentTimeMillis() - t0
+            if (!response.isSuccessful) {
+                Log.w(TAG, "BRIDGE_POLL_HTTP code=${response.code} elapsedMs=$ms")
+                return
+            }
+            val body = response.body?.string() ?: return
+            ms to (JSONObject(body).optJSONArray("commands") ?: return)
+        }
+
+        if (commands.length() == 0) {
+            Log.d(TAG, "BRIDGE_POLL_OK elapsedMs=$elapsed commands=0")
+            pollCount++
+            if (pollCount >= STATE_REPORT_EVERY) {
+                pollCount = 0
+                reportState(endpoint, apiKey)
+            }
+            return
+        }
+        Log.i(TAG, "BRIDGE_POLL_OK elapsedMs=$elapsed commands=${commands.length()}")
+
+        val results = mutableListOf<AckResult>()
+        for (i in 0 until commands.length()) {
+            val cmd = commands.getJSONObject(i)
+            val id = cmd.optString("id")
+            if (id.isBlank()) {
+                Log.w(TAG, "BRIDGE_COMMAND_REJECTED id=missing reason=missing_id")
+                continue
+            }
+
+            val resolved = AliceBridgeCommandTranslator.resolve(cmd)
+            if (resolved == null) {
+                val requested = cmd.optString("action", "<missing>")
+                Log.w(TAG, "BRIDGE_COMMAND_REJECTED id=$id action=$requested reason=unsupported_or_invalid")
+                rememberResult(id, requested, false, "unsupported_or_invalid")
+                results += AckResult(id, false, "unsupported_or_invalid")
+                continue
+            }
+
+            val command = resolved.vehicleCommand
+            Log.i(TAG, "BRIDGE_COMMAND_RECEIVED id=$id action=${resolved.action}")
+            val block = ActionDispatcher.safetyBlockReason(command, latestData)
+            if (block != null) {
+                val reason = block.javaClass.simpleName.ifBlank { "safety_gate" }
+                Log.w(TAG, "BRIDGE_COMMAND_REJECTED id=$id action=${resolved.action} reason=$reason")
+                rememberResult(id, resolved.action, false, reason)
+                results += AckResult(id, false, reason)
+                continue
+            }
+
+            Log.i(TAG, "BRIDGE_COMMAND_DISPATCH id=$id action=${resolved.action}")
+            val result = vehicleApi.dispatch(command)
+            val success = result.isSuccess
+            val error = result.exceptionOrNull()?.message
+            rememberResult(id, resolved.action, success, error)
+            Log.i(TAG, "BRIDGE_COMMAND_RESULT id=$id action=${resolved.action} success=$success" +
+                (error?.let { " error=${it.take(160)}" } ?: ""))
+            results += AckResult(id, success, error?.take(240))
+        }
+
+        if (results.isNotEmpty()) ack(endpoint, apiKey, results)
+    }
+
+    private fun rememberResult(id: String, action: String, success: Boolean, error: String?) {
+        lastCommandId = id
+        lastAction = action
+        lastCommandSuccess = success
+        lastCommandError = error
+        lastCommandAtMs = System.currentTimeMillis()
+    }
+
+    private fun reportState(endpoint: String, apiKey: String) {
+        val data = latestData ?: return
+        try {
+            val json = JSONObject().apply {
+                data.windowFL?.let { put("windowFL", it) }
+                data.windowFR?.let { put("windowFR", it) }
+                data.windowRL?.let { put("windowRL", it) }
+                data.windowRR?.let { put("windowRR", it) }
+                data.sunroof?.let { put("sunroof", it) }
+                data.trunk?.let { put("trunk", it) }
+                data.lockFL?.let { put("lockFL", it) }
+                data.acStatus?.let { put("acStatus", it) }
+                data.acTemp?.let { put("acTemp", it) }
+                data.acCirc?.let { put("acCirc", it) }
+                data.insideTemp?.let { put("insideTemp", it) }
+            }
+            val request = Request.Builder().url("$endpoint/api/state").header("X-Api-Key", apiKey)
+                .post(json.toString().toRequestBody("application/json".toMediaType())).build()
+            pollClient.newCall(request).execute().close()
+            Log.d(TAG, "BRIDGE_STATE_REPORTED")
+        } catch (e: Exception) {
+            Log.e(TAG, "BRIDGE_STATE_ERROR ${e.message}")
+        }
+    }
+
+    private fun ack(endpoint: String, apiKey: String, results: List<AckResult>) {
+        try {
+            val json = JSONObject().apply {
+                put("ids", JSONArray(results.map { it.id }))
+                put("results", JSONArray().apply {
+                    results.forEach { result ->
+                        put(JSONObject().apply {
+                            put("id", result.id)
+                            put("success", result.success)
+                            result.error?.let { put("error", it) }
+                        })
+                    }
+                })
+            }
+            val request = Request.Builder().url("$endpoint/api/ack").header("X-Api-Key", apiKey)
+                .post(json.toString().toRequestBody("application/json".toMediaType())).build()
+            pollClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) Log.i(TAG, "BRIDGE_ACK_OK count=${results.size}")
+                else Log.w(TAG, "BRIDGE_ACK_HTTP code=${response.code} count=${results.size}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "BRIDGE_ACK_ERROR ${e.message}")
+        }
+    }
+}
