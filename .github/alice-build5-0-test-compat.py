@@ -9,12 +9,13 @@ def replace(path: str, old: str, new: str, label: str) -> None:
         raise SystemExit(f"Alice5.0 test anchor missing: {label}")
     p.write_text(s.replace(old, new, 1))
 
-# The Alice side-by-side helper patch intentionally renames the helper process/log.
+# The build chain renames the helper progressively alice1 -> alice2 -> alice3 -> alice4.
+# Tests run after the complete 4.9/5.0 chain, so they must assert the final identity.
 p = Path("app/src/test/kotlin/com/bydmate/app/data/autoservice/AdbOnDeviceClientTest.kt")
 s = p.read_text()
 if "bydmate_helper" not in s:
     raise SystemExit("Alice5.0 test anchor missing: helper test identity")
-s = s.replace("bydmate_helper", "bydmate_alice1")
+s = s.replace("bydmate_helper", "bydmate_alice4")
 p.write_text(s)
 
 # Alice 5.0 keeps the production split guard keyed to BuildConfig.APPLICATION_ID.
