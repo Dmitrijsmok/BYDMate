@@ -56,4 +56,10 @@ s = s.replace(
 )
 p.write_text(s)
 
+# Build 1 instruments the legacy polling implementation. Replace it only now, after
+# the complete 4.9 patch chain has consumed its anchors, with the hardened 5.0 bridge.
+Path("app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt").write_text(
+    Path(".github/alice-build5-0-polling.kt.txt").read_text()
+)
+
 print("Alice 5.0 command bridge applied: version 64011, live toggle, safe semantic polling")
