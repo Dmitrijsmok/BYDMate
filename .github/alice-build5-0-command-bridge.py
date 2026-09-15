@@ -35,8 +35,7 @@ new = '''        // Alice 5.0 command bridge: observe the switch continuously so
         // disabling Smart Home takes effect immediately without restarting BYDMate/DiLink.
         serviceScope.launch {
             settingsRepository.observeString(
-                com.bydmate.app.data.repository.SettingsRepository.KEY_ALICE_ENABLED,
-                "false"
+                com.bydmate.app.data.repository.SettingsRepository.KEY_ALICE_ENABLED
             ).collect { raw ->
                 val enabled = raw == "true"
                 Log.i(TAG, "BRIDGE_ENABLE_CHANGED enabled=$enabled")
@@ -45,6 +44,68 @@ new = '''        // Alice 5.0 command bridge: observe the switch continuously so
         }
 '''
 s = once(s, old, new, "TrackingService Alice polling startup")
+p.write_text(s)
+
+# CommandTranslator already owns the validated window action names, but 4.9 only
+# exposes fixed 0/100/vent values. Yandex openable/range can request any 0..100%.
+p = Path("app/src/main/kotlin/com/bydmate/app/data/vehicle/CommandTranslator.kt")
+s = p.read_text()
+s = once(
+    s,
+    '''        FRIDGE_HEAT_REGEX.matchEntire(stripped)?.let { m ->
+            val c = m.groupValues[1].toIntOrNull() ?: return emptyList()
+            return fridgeHeat(c.coerceIn(FRIDGE_HEAT_MIN, FRIDGE_HEAT_MAX))
+        }
+        return emptyList()
+''',
+    '''        FRIDGE_HEAT_REGEX.matchEntire(stripped)?.let { m ->
+            val c = m.groupValues[1].toIntOrNull() ?: return emptyList()
+            return fridgeHeat(c.coerceIn(FRIDGE_HEAT_MIN, FRIDGE_HEAT_MAX))
+        }
+        // Alice 5.0 / Smart Home: arbitrary side-window aperture. Fixed 0/100
+        // commands were already matched by [table] above and therefore keep using
+        // their dedicated open/close channels; 1..99 use the validated % fids.
+        WINDOW_POSITION_REGEX.matchEntire(stripped)?.let { m ->
+            val pct = m.groupValues[2].toIntOrNull() ?: return emptyList()
+            if (pct !in 0..100) return emptyList()
+            val action = when (m.groupValues[1]) {
+                "主驾" -> "window_driver_pos"
+                "副驾" -> "window_passenger_pos"
+                "后左" -> "window_rear_left_pos"
+                "后右" -> "window_rear_right_pos"
+                else -> return emptyList()
+            }
+            return listOf(Resolved(action, pct))
+        }
+        return emptyList()
+''',
+    "dynamic window resolution",
+)
+s = once(
+    s,
+    '''    private val FRIDGE_HEAT_REGEX = Regex("""冰箱制热(\\d+)度""")
+    private const val FRIDGE_COOL_MIN = -6
+''',
+    '''    private val FRIDGE_HEAT_REGEX = Regex("""冰箱制热(\\d+)度""")
+    private val WINDOW_POSITION_REGEX = Regex("""(主驾|副驾|后左|后右)打开(\\d+)""")
+    private const val FRIDGE_COOL_MIN = -6
+''',
+    "window regex",
+)
+s = once(
+    s,
+    '''    private val DYNAMIC_ACTIONS = setOf("ac_temp_main")
+''',
+    '''    private val DYNAMIC_ACTIONS = setOf(
+        "ac_temp_main",
+        "window_driver_pos",
+        "window_passenger_pos",
+        "window_rear_left_pos",
+        "window_rear_right_pos",
+    )
+''',
+    "dynamic window action invariant",
+)
 p.write_text(s)
 
 # Correct the old settings hint: polling is 2.5 s and vehicle writes no longer use D+.
@@ -62,4 +123,4 @@ Path("app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt").w
     Path(".github/alice-build5-0-polling.kt.txt").read_text()
 )
 
-print("Alice 5.0 command bridge applied: version 64011, live toggle, safe semantic polling")
+print("Alice 5.0 command bridge applied: version 64011, live toggle, semantic polling, windows")
