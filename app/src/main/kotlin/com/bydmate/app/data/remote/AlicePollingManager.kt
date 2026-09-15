@@ -28,6 +28,7 @@ class AlicePollingManager @Inject constructor(
     private val sharedAdaptiveLoop: com.bydmate.app.data.loop.SharedAdaptiveLoop,
     private val vehicleApi: VehicleApi,
 ) {
+    // Fast client with short timeouts for polling (main httpClient has 15s)
     private val pollClient = OkHttpClient.Builder()
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(3, TimeUnit.SECONDS)
@@ -36,19 +37,22 @@ class AlicePollingManager @Inject constructor(
     companion object {
         private const val TAG = "AlicePolling"
         private const val POLL_INTERVAL_MS = 2500L
-        private const val STATE_REPORT_EVERY = 10
+        private const val STATE_REPORT_EVERY = 10 // every 10th poll (~25s)
     }
 
     private var scope: CoroutineScope? = null
     private var pollingJob: Job? = null
     private var pollCount = 0
 
+    // Set by TrackingService from DiPlus data — no extra DiPlus calls
     @Volatile var latestData: DiParsData? = null
 
     fun start() {
         if (pollingJob?.isActive == true) return
         val s = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         scope = s
+        // Flow collector: Alice's own subscription to the shared loop so it
+        // doesn't depend on TrackingService writing latestData on every tick.
         s.launch {
             sharedAdaptiveLoop.flow.collect { data -> latestData = data }
         }
@@ -99,6 +103,7 @@ class AlicePollingManager @Inject constructor(
 
         if (commands.length() == 0) {
             Log.d(TAG, "Poll OK (${elapsed}ms) - empty")
+            // Report real device state every Nth poll
             pollCount++
             if (pollCount >= STATE_REPORT_EVERY) {
                 pollCount = 0
@@ -114,6 +119,9 @@ class AlicePollingManager @Inject constructor(
             val id = cmd.getString("id")
             val command = cmd.getString("command")
             Log.i(TAG, "Executing: '$command' (id=$id)")
+            // Alice bypasses ActionDispatcher (raw vehicleApi), so the door-unlock
+            // speed gate is applied here explicitly. Ack anyway so VPS won't retry.
+            // Log-only path — the BlockReason is never shown to a user, so it is not localized.
             val unlockBlock = ActionDispatcher.unlockGateBlockReason(command, latestData?.speed)
             if (unlockBlock != null) {
                 Log.w(TAG, "Blocked: '$command' → $unlockBlock")
@@ -123,6 +131,9 @@ class AlicePollingManager @Inject constructor(
             val result = vehicleApi.dispatch(command)
             val success = result.isSuccess
             Log.i(TAG, "Result: $command → ${if (success) "OK" else "FAIL: ${result.exceptionOrNull()?.message}"}")
+            // Crowd-validation: ack regardless of success. Unmapped/Unsupported commands
+            // get a "done" signal to VPS so Alice does not retry forever. The vehicle_write_log
+            // DAO row carries the actual outcome for diagnostics.
             ackIds.add(id)
         }
 
