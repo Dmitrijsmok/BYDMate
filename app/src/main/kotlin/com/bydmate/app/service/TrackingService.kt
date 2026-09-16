@@ -113,7 +113,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var ttsEngine: com.bydmate.app.voice.TtsEngine
     @Inject lateinit var audioCapture: com.bydmate.app.voice.AudioCapture
     @Inject lateinit var hudController: com.bydmate.app.hud.HudController
-    @Inject lateinit var fidSubscriptionManager: com.bydmate.app.data.subscription.FidSubscriptionManager
+    @Inject lateinit var fidPushChannel: com.bydmate.app.data.push.FidPushChannel
     @Inject lateinit var blindSpotController: com.bydmate.app.camera.BlindSpotController
     @Inject lateinit var logRecorder: com.bydmate.app.diagnostics.LogRecorder
 
@@ -214,6 +214,9 @@ class TrackingService : Service(), LocationListener {
     // (exponential backoff). We refuse to send until `now >= iternioCooldownUntilMs`.
     @Volatile private var iternioCooldownUntilMs: Long = 0L
     @Volatile private var iternioConsecutive5xx: Int = 0
+    // Last cadence state we logged. A trip log has to show the moment the app decided
+    // «стоим» — the interval change is otherwise invisible from the outside.
+    @Volatile private var lastTelemetryState: IternioIntervalPolicy.TelemetryState? = null
     // Webhook cooldown: user endpoints go down for days (VPS off, tunnel gone).
     // Flat 60 s after any failure — a dead URL then costs one request per minute
     // instead of one per second while driving.
@@ -337,6 +340,7 @@ class TrackingService : Service(), LocationListener {
 
         private val _lastData = MutableStateFlow<DiParsData?>(null)
         val lastData: StateFlow<DiParsData?> = _lastData
+
         /** Wall-clock of the last [lastData] update (0 = never). The snapshot itself carries no
          *  timestamp and is never cleared on transport loss, so consumers that voice it to the
          *  driver (agent get_vehicle_state) need this to tell fresh data from stale. */
@@ -521,6 +525,9 @@ class TrackingService : Service(), LocationListener {
                 Log.i(TAG, "fid resolve: daemon binder arrived, retrying")
                 resolveFidCatalog()
             }
+            // A binder that just arrived carries no subscription yet: the daemon clears its
+            // listener table when it dies, and a fresh one starts empty.
+            serviceScope.launch { fidPushChannel.resubscribe("binder accepted") }
             // Tell the daemon we hold its binder so it stops re-announcing it (#64/#148).
             // Must not block the receiver thread — registerClient is a binder transact.
             serviceScope.launch { helperClient.registerClient() }
@@ -726,9 +733,9 @@ class TrackingService : Service(), LocationListener {
         networkAvailableMonitor.start()
         startPolling()
         startCameraMonitor()
-        // Observe-only fid subscriptions (-test builds only): counts events, never
-        // touches the poll above.
-        fidSubscriptionManager.start()
+        // Pushed fid values are laid into the live snapshot as they arrive; the poll above is
+        // untouched and stays the source of truth.
+        serviceScope.launch { fidPushChannel.events.collect { applyPushEvent(it) } }
         // Blind-spot pipeline: idle until the poll below reports the car near the speed
         // threshold, and only when the feature is switched on (default off).
         blindSpotController.start(serviceScope)
@@ -808,10 +815,34 @@ class TrackingService : Service(), LocationListener {
      * was absent at startup still gets read once it comes back), from the binder-arrival
      * callback and from [startFidResolveRetryTimer].
      */
+    /**
+     * Lays a pushed fid value into the live snapshot between two poll ticks. Nothing happens
+     * before the first poll landed (no snapshot to patch) or when the value did not survive its
+     * decoder — the poll stays the source of truth either way.
+     */
+    private fun applyPushEvent(event: com.bydmate.app.helper.push.FidPushEvent) {
+        val field = fidPushChannel.fieldFor(event.fid) ?: return
+        val applied = com.bydmate.app.data.push.FidPushApplier.patch(
+            _lastData, field, event.intValue, event.doubleValue,
+        )
+        if (applied && pushLogThrottle.shouldLog(field)) {
+            Log.i("FidPush", "push fid=${event.fid} $field=${event.intValue}/${event.doubleValue} applied")
+        }
+    }
+
+    /**
+     * One push line per field per second. With every FidMap field subscribed the busy ones
+     * (current, rpm, speed, a window travelling end to end) would otherwise bury the rest of
+     * the log. Only the logging is throttled — every event still patches the snapshot.
+     */
+    private val pushLogThrottle = com.bydmate.app.data.autoservice.LogThrottle(1_000L)
+
     private fun resolveFidCatalog() {
         serviceScope.launch {
             fidCatalogManager.ensureResolved()
-            fidSubscriptionManager.restartForResolvedAddresses()
+            // The one point every daemon path passes through once the daemon is live, on both
+            // transports: startup chain, watchdog respawn, binder arrival and the retry timer.
+            fidPushChannel.resubscribe("fid catalog resolved")
         }
     }
 
@@ -830,7 +861,7 @@ class TrackingService : Service(), LocationListener {
                 // still spawning the daemon would be a wasted one.
                 if (fidCatalogManager.resolvePending) {
                     fidCatalogManager.ensureResolved()
-                    fidSubscriptionManager.restartForResolvedAddresses()
+                    fidPushChannel.resubscribe("fid catalog resolved")
                 }
             }
             Log.i(TAG, "fid resolve: retry timer done (${fidCatalogManager.resolveStatus})")
@@ -1036,7 +1067,13 @@ class TrackingService : Service(), LocationListener {
                 if (!abrpOn && !webhookOn) return@launch
 
                 val state = IternioIntervalPolicy.classifyFromDiPars(data)
-                val intervalMs = IternioIntervalPolicy.intervalSec(state) * 1000L
+                val intervalSec = IternioIntervalPolicy.intervalSec(state)
+                val intervalMs = intervalSec * 1000L
+                if (state != lastTelemetryState) {
+                    Log.i(TAG, "Iternio state: ${lastTelemetryState ?: "-"} -> $state " +
+                        "(gear=${data.gear} speed=${data.speed} gun=${data.chargeGunState})")
+                    lastTelemetryState = state
+                }
                 synchronized(telemetryLock) {
                     if (snapshotMs - lastTelemetryMs < intervalMs) return@launch
                 }
@@ -1058,10 +1095,6 @@ class TrackingService : Service(), LocationListener {
                     ""
                 ).trim().takeIf { it.isNotEmpty() }
 
-                val abrpSendLocation = settingsRepository.getString(
-                    com.bydmate.app.data.repository.SettingsRepository.KEY_ABRP_SEND_LOCATION,
-                    "false"
-                ) == "true"
                 val webhookSendLocation = settingsRepository.getString(
                     com.bydmate.app.data.repository.SettingsRepository.KEY_WEBHOOK_SEND_LOCATION,
                     "false"
@@ -1084,8 +1117,8 @@ class TrackingService : Service(), LocationListener {
                 // 1 Hz. Null → client falls back to DiPars power.
                 val enginePowerKw: Int? = enginePowerKwFromSnapshot(data)
 
-                // Built once per tick and shared: the GPS fields are the only
-                // per-target difference, so they go into a copy (see [withLocation]).
+                // Built once per tick and shared: the webhook's own GPS toggle is the only
+                // per-target difference, so those fields go into a copy (see [withLocation]).
                 val telemetry = iternioTelemetryClient.buildTelemetry(
                     data = data,
                     nominalCapacityKwh = settingsRepository.getBatteryCapacity(),
@@ -1101,14 +1134,24 @@ class TrackingService : Service(), LocationListener {
                 var delivered = false
 
                 if (sendToIternio) {
-                    val location = locationForTelemetry(abrpSendLocation, _lastLocation.value, snapshotMs)
+                    // NO position ever goes to ABRP: it merges telemetry position with the GPS it
+                    // reads on the head unit itself, and the car marker jumps between the two
+                    // sources (ABRP tickets, June 2026). The webhook keeps its own toggle.
+                    // Every real send is logged: without this line a trip log shows nothing
+                    // between two ABRP failures, and «данных нет» has no diagnosis.
+                    Log.i(TAG, "Iternio send: state=$state interval=${intervalSec}s " +
+                        "gear=${data.gear} speed=${data.speed} soc=${data.soc} " +
+                        "hv=${data.hvVoltage ?: "-"}/${data.hvCurrent ?: "-"} " +
+                        "setpoint=${data.acTemp ?: "-"}")
+                    val sentAtMs = System.currentTimeMillis()
                     iternioTelemetryClient.sendTelemetry(
                         apiKey = apiKey,
                         userToken = token,
-                        telemetry = withLocation(telemetry, location),
+                        telemetry = telemetry,
                     ).onSuccess {
                         delivered = true
                         iternioConsecutive5xx = 0
+                        Log.i(TAG, "Iternio sent ok ${System.currentTimeMillis() - sentAtMs}ms")
                     }.onFailure { e ->
                         when (e) {
                             is IternioRateLimitException -> {
@@ -1207,7 +1250,6 @@ class TrackingService : Service(), LocationListener {
         }
 
         alicePollingManager.stop()
-        fidSubscriptionManager.stop()
         blindSpotController.stop()
         cameraStateMonitor.stop()
         _cameraActive.value = false
@@ -1313,7 +1355,6 @@ class TrackingService : Service(), LocationListener {
                 try {
                     _lastData.value = data
                     lastDataAtMs = System.currentTimeMillis()
-                    fidSubscriptionManager.onPollSnapshot(data)
                     blindSpotController.onPollSnapshot(data)
                     alicePollingManager.latestData = data
                     // Cache for AutoserviceChargingDetector — avoids extra parsReader.fetch() inside runCatchUp.

@@ -358,8 +358,12 @@ class LogRecorder internal constructor(
             "NavA11yFeed:*", "NavGuidanceHub:*", "GrantSelfHeal:*",
             // Amap-channel wave: notification lane + parser tags.
             "MediaSessionListener:*", "NaviNotifLane:*", "NaviNotifParser:*",
-            // Blindspot wave: observe-mode fid subscriptions + AVM camera probe.
-            "FidSubscription:*", "CameraProbe:*", "BlindSpot:*",
+            // Blindspot wave: AVM camera probe. FidPush carries the daemon's push
+            // subscription (register results, events) and the app's apply lines.
+            "FidPush:*", "TechPanel:*", "CameraProbe:*", "BlindSpot:*", "CameraMonitor:*",
+            // Diagnostic fid recorder (-test builds): summary only — the events go to its own
+            // file in /sdcard/Download, not here.
+            "FidRec:*",
             // Split-screen wave: session/watchdog decisions, pill+picker overlay, widget tap.
             "SplitSessionMgr:*", "SplitOverlayCtrl:*", "SplitPillView:*",
             "WidgetController:*",
@@ -377,7 +381,14 @@ class LogRecorder internal constructor(
             // Firmware fid catalog: where it came from and every address it moved.
             "FidCatalog:*",
             // Agent wave: one line per model round, tool call and finished turn.
-            "AgentLoop:*"
+            "AgentLoop:*",
+            // Auto-«Поехали»: the click on the Navigator's route preview (ActionDispatcher
+            // carries the split exit/restore and the wait lines around it).
+            "NaviGoButton:*",
+            // Consumption-vs-temperature screen: one line per open with the sample counts.
+            "TripTemperature:*",
+            // Trip recorder: open/close lines carry the outside temperature of both ends.
+            "TripRecorder:*"
         )
     }
 }
