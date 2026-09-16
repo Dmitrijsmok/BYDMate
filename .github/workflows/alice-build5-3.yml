@@ -139,7 +139,7 @@ jobs:
           "$APKSIGNER" verify --verbose --print-certs "$OUTPUT_APK" | tee "$RUNNER_TEMP/alice5.3-signature.txt"
 
           EXPECTED='B839BC11CFAD61EC6A89DE10DC0E5EB74CBA25C57DA116ADE30BF4A89D70C054'
-          ACTUAL="$(awk -F': ' '/Signer #1 certificate SHA-256 digest:/{print toupper($2); exit}' "$RUNNER_TEMP/alice5.3-signature.txt" | tr -d ':')"
+          ACTUAL="$(awk -F': ' '/certificate SHA-256 digest:/{print toupper($2); exit}' "$RUNNER_TEMP/alice5.3-signature.txt" | tr -d ':')"
           SIGNER_COUNT="$(grep -c 'certificate SHA-256 digest:' "$RUNNER_TEMP/alice5.3-signature.txt")"
           test "$ACTUAL" = "$EXPECTED"
           test "$SIGNER_COUNT" -eq 1
