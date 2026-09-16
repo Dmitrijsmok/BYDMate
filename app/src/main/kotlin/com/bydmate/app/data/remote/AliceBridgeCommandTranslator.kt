@@ -9,9 +9,8 @@ import org.json.JSONObject
  * maps to BYDMate's internal command vocabulary, which then goes through
  * CommandTranslator, WriteAllowlist and ActionDispatcher safety gates.
  *
- * 5.1 intentionally exposes a broad test surface. Unsupported model-specific
- * commands still fail closed in CommandTranslator/WriteAllowlist and are removed
- * or refined after in-car validation.
+ * 5.2 is rebased on upstream BYDMate v3.15.5 and deliberately reuses upstream
+ * vehicle command mappings wherever they exist (fan level and airflow included).
  */
 object AliceBridgeCommandTranslator {
     data class Resolved(
@@ -44,11 +43,19 @@ object AliceBridgeCommandTranslator {
                 "设置温度${value}"
             }
 
+            // Upstream v3.15.5 officially exposes fan levels 1..7 (#201).
             "climate.fan_level" -> {
                 val value = json.intValueOrNull() ?: return null
-                if (value !in 0..7) return null
+                if (value !in 1..7) return null
                 "风量${value}"
             }
+
+            // Upstream v3.15.5 airflow-direction vocabulary (#201).
+            "climate.airflow_face" -> "吹面"
+            "climate.airflow_face_feet" -> "吹面吹脚"
+            "climate.airflow_feet" -> "吹脚"
+            "climate.airflow_feet_windshield" -> "吹脚除霜"
+            "climate.airflow_windshield" -> "除霜"
 
             // Seats
             "seat.driver.heat" -> seatCommand("主驾座椅加热", json) ?: return null
@@ -87,9 +94,7 @@ object AliceBridgeCommandTranslator {
             "window.rear_right.vent" -> "后右通风"
             "window.rear_right.position" -> windowPosition("后右", json) ?: return null
 
-            // Aggregate windows. Arbitrary aggregate position is fanned out by the
-            // Worker into the four per-window semantic commands; these fixed aggregate
-            // commands use BYDMate's existing composite vocabulary.
+            // Aggregate windows
             "window.all.open" -> "车窗全开"
             "window.all.close" -> "车窗关闭"
             "window.all.half" -> "车窗半开"
@@ -113,8 +118,7 @@ object AliceBridgeCommandTranslator {
             "sunshade.open" -> "遮阳帘打开"
             "sunshade.close" -> "遮阳帘关闭"
 
-            // Fridge: already supported and live-validated in BYDMate core. Kept on
-            // the semantic bridge even though the first Yandex UI may not expose it.
+            // Fridge
             "fridge.cool" -> "冰箱制冷"
             "fridge.heat" -> "冰箱制热"
             "fridge.off" -> "冰箱关闭"
@@ -170,6 +174,11 @@ object AliceBridgeCommandTranslator {
         "climate.flow_only_off",
         "climate.temperature",
         "climate.fan_level",
+        "climate.airflow_face",
+        "climate.airflow_face_feet",
+        "climate.airflow_feet",
+        "climate.airflow_feet_windshield",
+        "climate.airflow_windshield",
 
         "seat.driver.heat",
         "seat.passenger.heat",
