@@ -98,4 +98,19 @@ if '        "window.front.open",\n' not in s:
     )
 
 p.write_text(s)
-print("Alice 5.3 final patch applied: v3.16.0 accessibility merge + identity + upstream window preset semantics")
+
+# v3.16.0 added CameraForegroundHintTest with the upstream package literal.
+# In the side-by-side Alice build the real application id is com.bydmate.app.alice4,
+# so adapt only that identity assertion; production CameraStateMonitor already uses
+# context.packageName and therefore behaves correctly for the renamed package.
+p = Path("app/src/test/kotlin/com/bydmate/app/data/camera/CameraForegroundHintTest.kt")
+s = p.read_text()
+s = once(
+    s,
+    '        monitor.onForegroundHint("com.bydmate.app")\n',
+    '        monitor.onForegroundHint("com.bydmate.app.alice4")\n',
+    "CameraForegroundHintTest side-by-side package identity",
+)
+p.write_text(s)
+
+print("Alice 5.3 final patch applied: v3.16.0 accessibility merge + identity + upstream window preset semantics + camera test identity")
