@@ -44,7 +44,7 @@ jobs:
       - name: Apply Build 5.1
         run: python3 .github/alice-build5-1-runner.py
 
-      - name: Verify stable Alice baseline and 5.1 app bridge
+      - name: Verify stable Alice baseline and 5.1 broad bridge
         run: |
           grep -R 'applicationId = "com.bydmate.app.alice4"' app/build.gradle.kts
           grep -R 'versionCode = 64012' app/build.gradle.kts
@@ -57,13 +57,26 @@ jobs:
           grep -R 'AliceBridgeCommandTranslator.resolve' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
           grep -R 'AliceAppCommandDispatcher' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
           grep -R 'BRIDGE_APP_COMMAND_RECEIVED' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
-          grep -R 'BRIDGE_APP_COMMAND_RESULT' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
+          grep -R 'rear_trunk_speed_unknown' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
+          grep -R 'put("fanLevel"' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
+
           grep -R 'app.waze.open' app/src/main/kotlin/com/bydmate/app/data/remote/AliceAppCommandDispatcher.kt
-          grep -R 'com.waze' app/src/main/kotlin/com/bydmate/app/data/remote/AliceAppCommandDispatcher.kt
-          grep -R '"climate.temperature"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
-          grep -R '"window.driver.open"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
-          ! grep -R '"doors.unlock" ->' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
-          ! grep -R '"trunk.open" ->' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          grep -R 'app.car_settings.open' app/src/main/kotlin/com/bydmate/app/data/remote/AliceAppCommandDispatcher.kt
+          grep -R 'app.camera.open' app/src/main/kotlin/com/bydmate/app/data/remote/AliceAppCommandDispatcher.kt
+          grep -R 'media.volume' app/src/main/kotlin/com/bydmate/app/data/remote/AliceAppCommandDispatcher.kt
+          grep -R 'com.byd.carsettings' app/src/main/kotlin/com/bydmate/app/data/remote/AliceAppCommandDispatcher.kt
+
+          grep -R '"climate.fan_level"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          grep -R '"climate.front_defrost_on"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          grep -R '"doors.unlock"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          grep -R '"trunk.rear.open"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          grep -R '"sunroof.vent"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          grep -R '"window.all.open"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          grep -R 'FAN_LEVEL_REGEX' app/src/main/kotlin/com/bydmate/app/data/vehicle/CommandTranslator.kt
+          grep -R 'alice5.1-field-test' app/src/main/kotlin/com/bydmate/app/data/vehicle/WriteAllowlist.kt
+
+          # Raw cloud writes are still impossible: only semantic bridge actions exist.
+          ! grep -R 'featureId.*opt\|deviceType.*opt\|writeFid.*opt' app/src/main/kotlin/com/bydmate/app/data/remote
 
       - name: Unit test command bridge
         run: ./gradlew :app:testDebugUnitTest --stacktrace
