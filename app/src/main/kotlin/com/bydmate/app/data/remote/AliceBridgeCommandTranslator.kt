@@ -3,14 +3,15 @@ package com.bydmate.app.data.remote
 import org.json.JSONObject
 
 /**
- * Narrow semantic command surface for the Alice/Yandex bridge.
+ * Semantic command surface for the Alice/Yandex bridge.
  *
- * The cloud side never gets access to raw BYD dev/fid/value writes. It sends one of
- * the actions below; this object translates it to BYDMate's validated internal command
- * vocabulary, which is then resolved by CommandTranslator and WriteAllowlist.
+ * Cloud callers never receive raw dev/fid/value access. Every public action below
+ * maps to BYDMate's internal command vocabulary, which then goes through
+ * CommandTranslator, WriteAllowlist and ActionDispatcher safety gates.
  *
- * 5.0 exposes comfort controls plus the four side windows. Locks, trunks and sunroof
- * remain deliberately absent and therefore fail closed.
+ * 5.1 intentionally exposes a broad test surface. Unsupported model-specific
+ * commands still fail closed in CommandTranslator/WriteAllowlist and are removed
+ * or refined after in-car validation.
  */
 object AliceBridgeCommandTranslator {
     data class Resolved(
@@ -23,6 +24,7 @@ object AliceBridgeCommandTranslator {
         if (action.isBlank()) return null
 
         val command = when (action) {
+            // Climate
             "climate.on" -> "自动空调"
             "climate.off" -> "关闭空调"
             "climate.auto_on" -> "空调自动"
@@ -31,6 +33,10 @@ object AliceBridgeCommandTranslator {
             "climate.recirculation_outer" -> "外循环"
             "climate.rear_defrost_on" -> "后视镜加热"
             "climate.rear_defrost_off" -> "关闭后视镜加热"
+            "climate.front_defrost_on" -> "吹前挡"
+            "climate.front_defrost_off" -> "关闭吹前挡"
+            "climate.flow_only_on" -> "打开空调通风"
+            "climate.flow_only_off" -> "关闭空调通风"
 
             "climate.temperature" -> {
                 val value = json.intValueOrNull() ?: return null
@@ -38,19 +44,29 @@ object AliceBridgeCommandTranslator {
                 "设置温度${value}"
             }
 
+            "climate.fan_level" -> {
+                val value = json.intValueOrNull() ?: return null
+                if (value !in 0..7) return null
+                "风量${value}"
+            }
+
+            // Seats
             "seat.driver.heat" -> seatCommand("主驾座椅加热", json) ?: return null
             "seat.passenger.heat" -> seatCommand("副驾座椅加热", json) ?: return null
             "seat.driver.vent" -> seatCommand("主驾座椅通风", json) ?: return null
             "seat.passenger.vent" -> seatCommand("副驾座椅通风", json) ?: return null
 
+            // Lights
             "light.interior_on" -> "打开车内灯"
             "light.interior_off" -> "关闭车内灯"
             "light.ambient_on" -> "氛围灯打开"
             "light.ambient_off" -> "氛围灯关闭"
+            "light.drl_on" -> "打开日行灯"
+            "light.drl_off" -> "关闭日行灯"
+            "light.hazard_on" -> "双闪打开"
+            "light.hazard_off" -> "双闪关闭"
 
-            // Yandex Smart Home models a window as devices.types.openable. A range/open
-            // capability can request 0..100%, so keep the cloud contract semantic and
-            // translate percentages to BYDMate's existing per-window vocabulary here.
+            // Individual windows
             "window.driver.open" -> "主驾打开100"
             "window.driver.close" -> "主驾打开0"
             "window.driver.vent" -> "主驾通风"
@@ -70,6 +86,48 @@ object AliceBridgeCommandTranslator {
             "window.rear_right.close" -> "后右打开0"
             "window.rear_right.vent" -> "后右通风"
             "window.rear_right.position" -> windowPosition("后右", json) ?: return null
+
+            // Aggregate windows. Arbitrary aggregate position is fanned out by the
+            // Worker into the four per-window semantic commands; these fixed aggregate
+            // commands use BYDMate's existing composite vocabulary.
+            "window.all.open" -> "车窗全开"
+            "window.all.close" -> "车窗关闭"
+            "window.all.half" -> "车窗半开"
+            "window.all.vent" -> "车窗通风"
+
+            // Locks / trunks
+            "doors.lock" -> "车门上锁"
+            "doors.unlock" -> "车门解锁"
+            "trunk.rear.open" -> "开后备箱"
+            "trunk.rear.close" -> "关后备箱"
+            "trunk.front.open" -> "前备箱打开"
+            "trunk.front.close" -> "前备箱关闭"
+
+            // Roof / shade
+            "sunroof.open" -> "天窗打开100"
+            "sunroof.close" -> "天窗打开0"
+            "sunroof.tilt" -> "天窗打开50"
+            "sunroof.vent" -> "天窗通风"
+            "sunroof.comfort" -> "天窗舒适打开"
+            "sunroof.stop" -> "天窗停止"
+            "sunshade.open" -> "遮阳帘打开"
+            "sunshade.close" -> "遮阳帘关闭"
+
+            // Fridge: already supported and live-validated in BYDMate core. Kept on
+            // the semantic bridge even though the first Yandex UI may not expose it.
+            "fridge.cool" -> "冰箱制冷"
+            "fridge.heat" -> "冰箱制热"
+            "fridge.off" -> "冰箱关闭"
+            "fridge.cool_temperature" -> {
+                val value = json.intValueOrNull() ?: return null
+                if (value !in -6..6) return null
+                "冰箱制冷${value}度"
+            }
+            "fridge.heat_temperature" -> {
+                val value = json.intValueOrNull() ?: return null
+                if (value !in 35..50) return null
+                "冰箱制热${value}度"
+            }
 
             else -> return null
         }
@@ -106,15 +164,27 @@ object AliceBridgeCommandTranslator {
         "climate.recirculation_outer",
         "climate.rear_defrost_on",
         "climate.rear_defrost_off",
+        "climate.front_defrost_on",
+        "climate.front_defrost_off",
+        "climate.flow_only_on",
+        "climate.flow_only_off",
         "climate.temperature",
+        "climate.fan_level",
+
         "seat.driver.heat",
         "seat.passenger.heat",
         "seat.driver.vent",
         "seat.passenger.vent",
+
         "light.interior_on",
         "light.interior_off",
         "light.ambient_on",
         "light.ambient_off",
+        "light.drl_on",
+        "light.drl_off",
+        "light.hazard_on",
+        "light.hazard_off",
+
         "window.driver.open",
         "window.driver.close",
         "window.driver.vent",
@@ -131,5 +201,31 @@ object AliceBridgeCommandTranslator {
         "window.rear_right.close",
         "window.rear_right.vent",
         "window.rear_right.position",
+        "window.all.open",
+        "window.all.close",
+        "window.all.half",
+        "window.all.vent",
+
+        "doors.lock",
+        "doors.unlock",
+        "trunk.rear.open",
+        "trunk.rear.close",
+        "trunk.front.open",
+        "trunk.front.close",
+
+        "sunroof.open",
+        "sunroof.close",
+        "sunroof.tilt",
+        "sunroof.vent",
+        "sunroof.comfort",
+        "sunroof.stop",
+        "sunshade.open",
+        "sunshade.close",
+
+        "fridge.cool",
+        "fridge.heat",
+        "fridge.off",
+        "fridge.cool_temperature",
+        "fridge.heat_temperature",
     )
 }
