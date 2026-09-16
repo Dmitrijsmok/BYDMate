@@ -21,13 +21,14 @@ p.write_text(s)
 
 # The historical Browser patch expects the pre-3.16.0 accessibility-event body.
 # alice-build5-3-base-compat.py temporarily normalizes that single hook so the
-# validated Alice chain can apply unchanged. Restore the new v3.16.0 foreground
-# hint here while retaining the Alice Yandex Browser event handling below it.
+# validated Alice chain can apply unchanged. By the end of the 5.2 chain Build95
+# has expanded this method with the vrassistant any-event guard. Restore the new
+# v3.16.0 foreground hint after eventPkg is known, before that guard can return.
 p = Path("app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt")
 s = p.read_text()
-alice_event_anchor = '''        NavA11yFeed.onEvent(this, event)\n\n        if (aliceClickPending && event?.packageName?.toString() == YANDEX_BROWSER_PACKAGE) {\n'''
-merged_event_anchor = '''        NavA11yFeed.onEvent(this, event)\n\n        // Upstream v3.16.0 fast foreground hint. ForegroundHintFilter keeps Android 10 /\n        // DiLink 3 on the legacy-safe path and only performs display-aware filtering on R+.\n        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {\n            val pkg = event.packageName?.toString()\n            if (pkg != null && ForegroundHintFilter.allows(this, event, pkg)) {\n                entryPoint().cameraStateMonitor().onForegroundHint(pkg)\n            }\n        }\n\n        if (aliceClickPending && event?.packageName?.toString() == YANDEX_BROWSER_PACKAGE) {\n'''
-s = once(s, alice_event_anchor, merged_event_anchor, "v3.16.0 foreground hint + Alice accessibility merge")
+post_52_anchor = '''        if (event == null) return\n        val eventPkg = event.packageName?.toString().orEmpty()\n        val nativeTakeover = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)\n'''
+merged_anchor = '''        if (event == null) return\n        val eventPkg = event.packageName?.toString().orEmpty()\n\n        // Upstream v3.16.0 fast foreground hint. ForegroundHintFilter keeps Android 10 /\n        // DiLink 3 on the legacy-safe path and only performs display-aware filtering on R+.\n        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && eventPkg.isNotBlank()) {\n            if (ForegroundHintFilter.allows(this, event, eventPkg)) {\n                entryPoint().cameraStateMonitor().onForegroundHint(eventPkg)\n            }\n        }\n\n        val nativeTakeover = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)\n'''
+s = once(s, post_52_anchor, merged_anchor, "post-5.2 v3.16.0 foreground hint merge")
 p.write_text(s)
 
 # v3.16.0 adds native BYDMate vocabulary for individual window half-open and
