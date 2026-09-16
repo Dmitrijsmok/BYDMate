@@ -53,7 +53,7 @@
     <string name="settings_display_offset_y_desc">Становішча акна: 0 - верх, 50 - цэнтр, 100 - ніз</string>
     <string name="settings_display_scale">Маштаб</string>
     <string name="settings_display_scale_desc">Буйнасць інтэрфейсу: меншае значэнне - драбнейшыя элементы і больш карты ў акне</string>
-    <string name="settings_display_scale_direct_hint">Маштаб дзейнічае толькі ў рэжыме праекцыі «Заводскі». У «Пашыраным» дадатак заўсёды малюецца ў натуральную велічыню.</string>
+    <string name="settings_display_scale_direct_hint">Каб ужыць новы маштаб, выключыце і зноў уключыце вывад на прыборку.</string>
     <!-- Steering-wheel button names (cluster trigger picker) -->
     <string name="steering_button_right_star">Правая зорка</string>
     <string name="steering_button_left_star">Левая зорка</string>
@@ -620,7 +620,7 @@
     <!-- Dashboard -->
     <!-- Top bar -->
     <string name="dashboard_vehicle_data_offline">Няма даных ад аўтамабіля</string>
-    <string name="dashboard_adb_offline">ADB не адказвае</string>
+    <string name="dashboard_adb_offline">Даныя машыны недаступныя</string>
     <string name="dashboard_diplus_offline">DiPlus не адказвае</string>
     <string name="dashboard_status_online">Online</string>
     <string name="dashboard_status_offline">Offline</string>
@@ -1022,6 +1022,18 @@
     <string name="auto_act_temp_20c">Тэмп. 20°C</string>
     <string name="auto_act_temp_22c">Тэмп. 22°C</string>
     <string name="auto_act_temp_25c">Тэмп. 25°C</string>
+    <string name="auto_act_fan_1">Вентылятар 1</string>
+    <string name="auto_act_fan_2">Вентылятар 2</string>
+    <string name="auto_act_fan_3">Вентылятар 3</string>
+    <string name="auto_act_fan_4">Вентылятар 4</string>
+    <string name="auto_act_fan_5">Вентылятар 5</string>
+    <string name="auto_act_fan_6">Вентылятар 6</string>
+    <string name="auto_act_fan_7">Вентылятар 7</string>
+    <string name="auto_act_wind_face">Абдзьмух: у твар</string>
+    <string name="auto_act_wind_face_feet">Абдзьмух: твар і ногі</string>
+    <string name="auto_act_wind_feet">Абдзьмух: у ногі</string>
+    <string name="auto_act_wind_feet_windshield">Абдзьмух: ногі і шкло</string>
+    <string name="auto_act_wind_windshield">Абдзьмух: на шкло</string>
     <string name="auto_act_recirculation">Цыркуляцыя ўнутр.</string>
     <string name="auto_act_fresh_air">Цыркуляцыя знешн.</string>
     <string name="auto_act_windshield_defog_on">Абдзьмуванне лабавога ўкл</string>
@@ -1145,7 +1157,7 @@
     <string name="voice_listening">Слухаю</string>
     <string name="voice_thinking">Думаю</string>
     <string name="voice_error_model_missing">Галасавая мадэль не загружана. Спампуйце яе ў Наладах, раздзел Голас-агент.</string>
-    <string name="voice_error_lang_not_ru">Галасавыя каманды разумеюць толькі рускую мову. У Наладах выберыце Мову голасу: Русский.</string>
+    <string name="voice_error_lang_not_ru">Галасавыя каманды разумеюць толькі рускую мову. У Наладах → Праграма выберыце Мову: Русский.</string>
     <string name="voice_block_park_required">Патрэбны паркінг</string>
 
     <!-- GigaAM v3: free-form Russian speech recognition (offline) -->
@@ -1172,7 +1184,7 @@
     <!-- TTS: offline synthesis of agent replies (Phase 2) -->
     <string name="settings_tts_header">Адказы агента</string>
     <string name="settings_tts_toggle">Агучваць адказы агента</string>
-    <string name="settings_tts_subtitle">Афлайн-сінтэз маўлення, рускі голас</string>
+    <string name="settings_tts_subtitle">Агент адказвае ўголас, працуе без інтэрнэту.</string>
     <string name="settings_tts_model_delete">Выдаліць</string>
     <string name="settings_tts_download_failed">Не ўдалося спампаваць голас</string>
     <string name="settings_voice_volume_hint">Гучнасць адказаў рэгулюецца сістэмным каналам Voice: кнопкі гучнасці на рулі ці Налады гуку машыны</string>
@@ -1199,7 +1211,7 @@
 
     <!-- TTS: keys for online voices (Wave N) -->
     <string name="settings_tts_keys_header">Ключы для анлайн-галасоў</string>
-    <string name="settings_tts_keys_openrouter_hint">Ключ і мадэль бяруцца з раздзела «AI падключэнні».</string>
+    <string name="settings_tts_keys_openrouter_hint">Ключ і мадэль бяруцца з раздзела «Інтэграцыі» → «AI падключэнні».</string>
     <string name="settings_minimax_provider_label">Правайдар</string>
     <string name="settings_minimax_provider_official">Афіцыйны</string>
     <string name="settings_minimax_provider_fal">fal.ai</string>
@@ -1227,20 +1239,25 @@
     <string name="settings_agent_gender_male">Мужчынскі</string>
     <string name="settings_agent_gender_female">Жаночы</string>
     <string name="settings_agent_gender_hint">Дзейнічае на ўсе галасы: у кожнай крыніцы ёсць мужчынскі і жаночы варыянт</string>
+    <string name="settings_route_navigator_label">Навігатар для маршрутаў</string>
+    <string name="settings_route_navigator_yandex">Яндэкс Навігатар</string>
+    <string name="settings_route_navigator_dgis">2ГІС</string>
+    <string name="settings_route_navigator_hint">Якую праграму адкрываць для маршрутаў і пошуку на карце</string>
     <string name="settings_agent_memory_title">Памяць пра кіроўцу</string>
     <string name="settings_agent_memory_hint">Агент запамінае імя і ўстойлівыя перавагі, калі вы яму пра гэта кажаце. Скажыце «забудзь …», каб прыбраць адзін факт</string>
     <string name="settings_agent_memory_empty">Пакуль нічога не запомнена</string>
     <string name="settings_agent_memory_forget_all">Забыць усё</string>
+    <string name="settings_agent_memory_forget_one">Забыць</string>
 
     <!-- Voice agent (Phase 1) -->
     <string name="agent_enable_title">Галасавы AI-агент</string>
-    <string name="agent_enable_desc">Свабодныя пытанні і каманды праз LLM (OpenRouter). Ключ API бярэцца з раздзела «Інтэграцыі».</string>
+    <string name="agent_enable_desc">Адказвае сваімі словамі на складаныя пытанні і каманды. Патрэбны ключ: задайце яго ў раздзеле «Інтэграцыі».</string>
     <string name="agent_model_shared_caption">Ключ OpenRouter і мадэль для агента наладжваюцца ў раздзеле Інтэграцыі</string>
     <string name="agent_chat_open">Чат з агентам (адладка)</string>
     <string name="agent_test_model_button">Тэст мадэлі</string>
     <string name="agent_test_model_running">Праверка мадэлі...</string>
     <string name="agent_test_model_result">%1$s: адказ за %2$.1f с - \"%3$s\"</string>
-    <string name="agent_test_model_disabled">Памылка: агент выключаны ці не наладжаны</string>
+    <string name="agent_test_model_disabled">Спачатку ўключыце агента і задайце ключ у раздзеле «Інтэграцыі».</string>
     <string name="agent_exa_api_key_label">Exa API Key (вэб-пошук)</string>
 
     <!-- Voice agent (Wave J): multi-provider LLM connections -->
@@ -1257,7 +1274,7 @@
     <string name="settings_conn_model_label">Мадэль (id)</string>
     <string name="settings_conn_check">Праверыць</string>
     <string name="settings_conn_checking">Правяраю…</string>
-    <string name="settings_zai_hint">Бясплатная glm-4.7-flash, рэкамендуецца як асноўная</string>
+    <string name="settings_zai_hint">Бясплатны варыянт, адказвае павольней. Падыходзіць як запасны.</string>
     <string name="settings_custom_hint">Любы OpenAI-сумяшчальны API. Прэсет падстаўляе адрас і мадэль, ключ свой.</string>
     <string name="settings_custom_extra_json_label">Дадатковыя параметры запыту (JSON)</string>
     <string name="settings_custom_extra_json_hint">Дадаюцца ў кожны запыт да гэтага сервера, напрыклад {\"thinking\": false} каб выключыць разважанні</string>
@@ -1462,9 +1479,10 @@
     <string name="tech_hint_power">Колькі энергіі батарэя аддае прама зараз. Плюс: машына траціць (разгон, клімат). Мінус: батарэя прымае энергію: рэкуперацыя пры тармажэнні ці зарадка ад станцыі. Другая лічба: з якой хуткасцю сыходзіць зарад, працэнтаў за гадзіну. На прыпынку гэта расход бартавой электронікі.</string>
     <string name="tech_hint_12v">Напруга звычайнага 12-вольтавага акумулятара, які сілкуе электроніку. На заведзенай машыне 13…14,5 В. Калі на стаянцы ніжэй за 12 В, акумулятар слабее.</string>
     <string name="tech_hint_insulation">Супраціў паміж высакавольтнай батарэяй і кузавам. Чым больш, тым лепш: норма адзінкі мегаом. Падае да 0,5 МОм і ніжэй: дзесьці пашкоджана ізаляцыя, пара на сэрвіс.</string>
-    <string name="tech_hint_bms_limits">Столь, колькі кантролер батарэі дазваляе прама зараз: колькі прыняць на зарадцы (станцыя можа даць менш) і колькі аддаць на разгон. На халоднай ці амаль поўнай батарэі абодва значэнні ніжэйшыя: таму зімой зарадка павольнейшая, а рэкуперацыя слабейшая.</string>
+    <string name="tech_hint_bms_limits">Колькі батарэя гатовая прымаць на зарадцы і аддаваць працяглы час, паводле даных яе кантролера. На кароткім разгоне машына бярэ больш за даступнае, гэта нармальна: пікавы ліміт на некалькі секунд вышэйшы. На халоднай ці амаль поўнай батарэі абодва значэнні ніжэйшыя: зімой зарадка павольнейшая, а рэкуперацыя слабейшая.</string>
     <string name="tech_hint_cells">Батарэя складаецца з сотняў ячэек. Паказаны самая слабая і самая моцная і розніца паміж імі. Розніца да 20…30 мВ у норме. Пастаянна вялікая розніца: адна з ячэек старэе хутчэй за іншыя.</string>
     <string name="tech_hint_motors">Тэмпература электраматораў і інвертараў, якія імі кіруюць. У звычайнай яздзе да 60…80°. Пры доўгім разгоне ці буксіроўцы грэюцца мацней, і машына сама зніжае магутнасць, пакуль яны не астынуць.</string>
     <string name="tech_hint_compressor">Колькі ватаў спажывае кампрэсар кандыцыянера і цеплавой помпы. Гэта галоўны спажывец акрамя матораў: улетку ў спёку і зімой у мароз ён прыкметна з’ядае запас ходу.</string>
     <string name="tech_hint_tyres">Ціск і тэмпература кожнага кола ад датчыкаў у шынах. Ціск расце на 0,2…0,3 бар па меры прагрэву ў паездцы, гэта нармальна. Адно кола прыкметна ніжэй за іншыя: праверце, ці не спускае яно.</string>
+    <string name="tech_order_hint">Утрымлівайце картку, каб памяняць парадак</string>
 </resources>

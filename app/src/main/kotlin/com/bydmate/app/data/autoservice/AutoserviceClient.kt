@@ -1,6 +1,7 @@
 package com.bydmate.app.data.autoservice
 
 import android.util.Log
+import com.bydmate.app.data.nativestack.FidAddresses
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -66,12 +67,23 @@ class AutoserviceClientImpl @Inject constructor(
         // means autoservice is responding. SoH alone is fragile during BMS
         // recalibration after a full charge (can return -1.0f sentinel for
         // tens of seconds while the rest of the bus is fine).
-        getInt(FidRegistry.DEV_STATISTIC, FidRegistry.FID_SOH)?.let { return true }
-        getFloat(FidRegistry.DEV_STATISTIC, FidRegistry.FID_LIFETIME_KWH)?.let { return true }
-        getFloat(FidRegistry.DEV_STATISTIC, FidRegistry.FID_SOC)?.let { return true }
+        getInt("soh")?.let { return true }
+        getFloat("totalElecConsumption")?.let { return true }
+        getFloat("soc")?.let { return true }
         Log.w(TAG, "isAvailable: all 3 probe fids returned sentinel")
         return false
     }
+
+    /**
+     * Reads the address [FidMap] holds for [field]. The address is looked up per call
+     * through [FidAddresses], so these one-shot snapshots follow the firmware catalog
+     * exactly like the poll loop does.
+     */
+    private suspend fun getInt(field: String): Int? =
+        FidAddresses.of(field).let { getInt(it.device, it.fid) }
+
+    private suspend fun getFloat(field: String): Float? =
+        FidAddresses.of(field).let { getFloat(it.device, it.fid) }
 
     override suspend fun getIntRaw(dev: Int, fid: Int): Int? {
         val cmd = "service call autoservice ${FidRegistry.TX_GET_INT} i32 $dev i32 $fid"
@@ -121,30 +133,37 @@ class AutoserviceClientImpl @Inject constructor(
 
     override suspend fun readBatterySnapshot(): BatteryReading? {
         if (!adb.isConnected()) return null
+        // One table snapshot for the odometer: its scale must be the one that goes with the
+        // address the raw word came from (our own fid reports tenths of a km, a catalog
+        // address on another firmware reports whole km), and the global table can be
+        // swapped by the catalog resolution between the two lookups.
+        val table = FidAddresses.table
+        val mileageAddress = table.address("mileage")
         return BatteryReading(
-            sohPercent = getInt(FidRegistry.DEV_STATISTIC, FidRegistry.FID_SOH)?.toFloat(),
-            socPercent = getFloat(FidRegistry.DEV_STATISTIC, FidRegistry.FID_SOC),
-            lifetimeKwh = getFloat(FidRegistry.DEV_STATISTIC, FidRegistry.FID_LIFETIME_KWH),
-            lifetimeMileageKm = getInt(FidRegistry.DEV_STATISTIC, FidRegistry.FID_LIFETIME_MILEAGE)?.let { it / 10f },
-            voltage12v = getFloat(FidRegistry.DEV_BODYWORK, FidRegistry.FID_OTA_BATTERY_POWER_VOLTAGE),
+            sohPercent = getInt("soh")?.toFloat(),
+            socPercent = getFloat("soc"),
+            lifetimeKwh = getFloat("totalElecConsumption"),
+            lifetimeMileageKm = getInt(mileageAddress.device, mileageAddress.fid)
+                ?.let { (it * table.scale("mileage")).toFloat() },
+            voltage12v = getFloat("voltage12v"),
             readAtMs = System.currentTimeMillis()
         )
     }
 
     override suspend fun getEnginePowerKw(): Int? {
         if (!adb.isConnected()) return null
-        return getInt(FidRegistry.DEV_ENGINE, FidRegistry.FID_ENGINE_POWER)
+        return getInt("power")
     }
 
     override suspend fun readChargingSnapshot(): ChargingReading? {
         if (!adb.isConnected()) return null
         return ChargingReading(
-            gunConnectState = getInt(FidRegistry.DEV_CHARGING, FidRegistry.FID_GUN_CONNECT_STATE),
-            chargingType = getInt(FidRegistry.DEV_CHARGING, FidRegistry.FID_CHARGING_TYPE),
-            chargeBatteryVoltV = getInt(FidRegistry.DEV_CHARGING, FidRegistry.FID_CHARGE_BATTERY_VOLT),
-            batteryType = getInt(FidRegistry.DEV_CHARGING, FidRegistry.FID_BATTERY_TYPE),
-            chargingCapacityKwh = getFloat(FidRegistry.DEV_CHARGING, FidRegistry.FID_CHARGING_CAPACITY),
-            bmsState = getInt(FidRegistry.DEV_CHARGING, FidRegistry.FID_CHARGING_BMS_STATE),
+            gunConnectState = getInt("chargeGunState"),
+            chargingType = getInt("chargingType"),
+            chargeBatteryVoltV = getInt("chargeBatteryVolt"),
+            batteryType = getInt("batteryType"),
+            chargingCapacityKwh = getFloat("chargingCapacity"),
+            bmsState = getInt("bmsState"),
             readAtMs = System.currentTimeMillis()
         )
     }

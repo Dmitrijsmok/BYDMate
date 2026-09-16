@@ -1,8 +1,11 @@
 package com.bydmate.app.ui.tech
 
+import com.bydmate.app.data.nativestack.MotorSplit
+import com.bydmate.app.data.nativestack.motorSplitPercent
 import com.bydmate.app.domain.battery.AvgSoc
 import com.bydmate.app.domain.battery.AvgSocProvider
 import com.bydmate.app.domain.battery.BatteryState
+import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.domain.battery.BatteryStateRepository
 import com.bydmate.app.service.TrackingService
 import androidx.lifecycle.ViewModel
@@ -34,7 +37,12 @@ class TechPanelViewModelTest {
      *  TrackingService flows — resetMain() alone would leave them running across tests. */
     private val store = ViewModelStore()
 
-    @Before fun setUp() { Dispatchers.setMain(testDispatcher) }
+    @Before fun setUp() {
+        Dispatchers.setMain(testDispatcher)
+        savedOrder = ""
+        hintSeen = false
+        hintFlagWrites = 0
+    }
 
     @After fun tearDown() {
         store.clear()
@@ -61,6 +69,18 @@ class TechPanelViewModelTest {
         return ViewModelProvider(store, factory)[TechPanelViewModel::class.java]
     }
 
+    /** The two settings rows the card order lives in, kept in memory across reads and writes. */
+    private var savedOrder = ""
+    private var hintSeen = false
+    private var hintFlagWrites = 0
+
+    private fun settings(): SettingsRepository = mockk<SettingsRepository>(relaxed = true).also { r ->
+        coEvery { r.getTechCardOrder() } answers { savedOrder }
+        coEvery { r.setTechCardOrder(any()) } answers { savedOrder = firstArg() }
+        coEvery { r.isTechOrderHintSeen() } answers { hintSeen }
+        coEvery { r.setTechOrderHintSeen() } answers { hintFlagWrites++; hintSeen = true }
+    }
+
     private fun buildViewModel(
         battery: BatteryState? = null,
         avg: AvgSoc = AvgSoc(null, null),
@@ -71,7 +91,7 @@ class TechPanelViewModelTest {
             )
         val avgProvider = mockk<AvgSocProvider>()
         coEvery { avgProvider.compute(any()) } returns avg
-        return scoped(TechPanelViewModel(repo, avgProvider))
+        return scoped(TechPanelViewModel(repo, avgProvider, settings()))
     }
 
     // --- null mapping -------------------------------------------------------
@@ -155,7 +175,7 @@ class TechPanelViewModelTest {
         val avgProvider = mockk<AvgSocProvider>()
         coEvery { avgProvider.compute(any()) } returns AvgSoc(null, null)
 
-        val vm = scoped(TechPanelViewModel(repo, avgProvider))
+        val vm = scoped(TechPanelViewModel(repo, avgProvider, settings()))
         testDispatcher.scheduler.advanceUntilIdle()
 
         assertEquals(false, vm.uiState.value.autoserviceOnline)
@@ -229,5 +249,120 @@ class TechPanelViewModelTest {
         assertEquals("-370", rpmForDisplay(-370)?.toString())
         assertEquals("1200", rpmForDisplay(1200)?.toString())
         assertNull(rpmForDisplay(null))
+    }
+
+    /** Measured on the car: the split follows the two motor currents on a shared bus. */
+    @Test
+    fun `motor split follows the current ratio`() {
+        assertEquals(MotorSplit.Share(15, 85), motorSplitPercent(7.9f, 45.3f))
+        assertEquals(MotorSplit.Share(12, 88), motorSplitPercent(0.6f, 4.5f))
+        assertEquals(MotorSplit.Share(0, 100), motorSplitPercent(0.0f, 5.7f))
+        assertEquals(MotorSplit.Share(100, 0), motorSplitPercent(5.7f, 0.0f))
+    }
+
+    /** Regeneration sign is unverified, so only the magnitudes decide the split. */
+    @Test
+    fun `motor split ignores the sign of the currents`() {
+        assertEquals(MotorSplit.Share(15, 85), motorSplitPercent(-7.9f, -45.3f))
+        assertEquals(MotorSplit.Share(15, 85), motorSplitPercent(7.9f, -45.3f))
+    }
+
+    /** Parked: both motors idle, so the row shows dashes instead of an invented 50/50. */
+    @Test
+    fun `motor split is idle while the car draws nothing`() {
+        assertEquals(MotorSplit.Idle, motorSplitPercent(0.0f, 0.0f))
+        assertEquals(MotorSplit.Idle, motorSplitPercent(0.2f, 0.2f))
+    }
+
+    /** A car that does not report the pair (single motor) hides the row entirely. */
+    @Test
+    fun `motor split is null when either current is missing`() {
+        assertNull(motorSplitPercent(null, null))
+        assertNull(motorSplitPercent(1.0f, null))
+        assertNull(motorSplitPercent(null, 1.0f))
+    }
+
+    /** The motor currents alone are enough to draw the motors card. */
+    @Test
+    fun `motor currents open the motors card`() {
+        assertTrue(TechPanelUiState(motorCurrentFront = 7.9f, motorCurrentRear = 45.3f).showMotors)
+    }
+
+    // --- card order ---------------------------------------------------------
+
+    @Test
+    fun `without a saved order the cards keep their factory places`() = runTest {
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(TechCardOrder.DEFAULT, vm.uiState.value.cardOrder)
+        assertTrue("first open must explain the gesture", vm.uiState.value.showOrderHint)
+    }
+
+    @Test
+    fun `a saved order is restored on open`() = runTest {
+        savedOrder = "tyres,motors,battery_now,limits,history,climate"
+        hintSeen = true
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(
+            listOf(
+                TechCard.TYRES, TechCard.MOTORS, TechCard.BATTERY_NOW,
+                TechCard.LIMITS, TechCard.HISTORY, TechCard.CLIMATE,
+            ),
+            vm.uiState.value.cardOrder,
+        )
+        assertFalse("the hint is retired once a drag has happened", vm.uiState.value.showOrderHint)
+    }
+
+    /** A version that adds a card must not drop it just because the stored order predates it;
+     *  an id that no longer exists must not crash the screen either. */
+    @Test
+    fun `cards missing from the saved order are appended, unknown ids ignored`() = runTest {
+        savedOrder = "tyres,ghost_card,motors"
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(
+            listOf(
+                TechCard.TYRES, TechCard.MOTORS, TechCard.BATTERY_NOW,
+                TechCard.LIMITS, TechCard.HISTORY, TechCard.CLIMATE,
+            ),
+            vm.uiState.value.cardOrder,
+        )
+    }
+
+    @Test
+    fun `a drag persists the new order and retires the hint`() = runTest {
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.moveCard(TechCard.TYRES, TechCard.BATTERY_NOW)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(TechCard.TYRES, vm.uiState.value.cardOrder.first())
+        assertEquals("tyres,battery_now,limits,history,motors,climate", savedOrder)
+        assertTrue(hintSeen)
+        assertFalse(vm.uiState.value.showOrderHint)
+
+        // The flag is already set: a second drag must not write it again.
+        vm.moveCard(TechCard.CLIMATE, TechCard.TYRES)
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, hintFlagWrites)
+    }
+
+    /** Hidden cards drop out of the grid but keep their place in the stored order. */
+    @Test
+    fun `only the cards with data are laid out`() {
+        val state = TechPanelUiState(
+            cardOrder = listOf(
+                TechCard.TYRES, TechCard.MOTORS, TechCard.BATTERY_NOW,
+                TechCard.LIMITS, TechCard.HISTORY, TechCard.CLIMATE,
+            ),
+            motorRpmFront = 1200,
+            soc = 43,
+        )
+        assertEquals(listOf(TechCard.MOTORS, TechCard.BATTERY_NOW), state.visibleCards)
     }
 }

@@ -1,5 +1,6 @@
 package com.bydmate.app.agent
 
+import android.util.Log
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.voice.AgentIdentity
 import com.bydmate.app.voice.AgentPersona
@@ -29,9 +30,15 @@ class AgentOrchestrator @Inject constructor(
     private val isMoving: () -> Boolean = { false },
     private val identity: () -> AgentIdentity = { AgentIdentity("", AgentPersona.NAVIGATOR) },
     private val memoryBlock: () -> String = { "" },
+    private val dayMemory: DayMemory = DayMemory(prefs = null),
 ) {
     /** Test seam — deterministic clock for the session TTL. */
     internal var nowMs: () -> Long = { System.currentTimeMillis() }
+
+    /** Test seam — one line per traced step of the turn. Production writes to logcat under
+     *  [TAG], which the log recorder captures, so a "the agent lied" report is diagnosable
+     *  from the user's own log. */
+    internal var trace: (String) -> Unit = { Log.i(TAG, it) }
 
     private val mutex = Mutex()
     private val history = mutableListOf<AgentMessage>()
@@ -58,11 +65,15 @@ class AgentOrchestrator @Inject constructor(
             history += AgentMessage.User(if (isMoving()) "$text $MOVING_TAG" else text)
             try {
                 trimHistory()
-                return runLoop(
-                    history, buildSystemPrompt(), tools.schemas(),
+                val result = runLoop(
+                    history, systemMessages(), tools.schemas(),
                     allowAutomationTools = true, onSentence,
                     onTerminal = { lastAnswerAt = nowMs() },
                 )
+                // Only finished exchanges are worth keeping: an error or a disabled agent is
+                // not something the driver referred to and must not come back tomorrow.
+                if (result is AgentResult.Answer) dayMemory.record(text, result.text, nowMs())
+                return result
             } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
                 // Roll history back to the entry snapshot: a cancelled turn must not leave an
                 // unpaired tool_calls Assistant (the next ask would be rejected by the provider).
@@ -109,35 +120,80 @@ class AgentOrchestrator @Inject constructor(
             val text = userText.trim()
             if (text.isEmpty()) return AgentResult.Disabled
             val messages = mutableListOf<AgentMessage>(AgentMessage.User(text))
-            return runLoop(messages, buildSystemPrompt(includeMemory = false), tools.schemas(includeAutomationTools = false),
+            return runLoop(messages, systemMessages(includeMemory = false), tools.schemas(includeAutomationTools = false),
                 allowAutomationTools = false, onSentence = null, onTerminal = {})
         } finally {
             mutex.unlock()
         }
     }
 
-    // Everything here is stable across the turns of one session (date and persona change far
-    // more slowly than the conversation), so system + tools stay a byte-identical prefix and
-    // the provider's prompt cache keeps hitting. Per-turn state — driving or not — rides on
-    // the user message instead (see [MOVING_TAG]). Driver facts move at the same slow pace:
-    // only a remember_fact/forget_fact call rewrites the block, and that is rare by design.
-    // A detached turn (automation rule, not the driver) neither reads nor writes the memory.
-    private fun buildSystemPrompt(includeMemory: Boolean = true): String = SYSTEM_PROMPT +
-        "\nСегодня " + SimpleDateFormat("d MMMM yyyy 'года,' EEEE", Locale("ru"))
+    /**
+     * Two system messages, and the split is the point: the first is [SYSTEM_PROMPT] and
+     * nothing else, byte-identical on every turn of every day, so the provider can cache it
+     * (the backend puts the cache breakpoint on exactly this message). Everything that moves
+     * — today's date, the persona, the driver facts — goes into the second one, after the
+     * breakpoint. Per-turn state (driving or not) rides on the user message instead (see
+     * [MOVING_TAG]). A detached turn (automation rule, not the driver) carries no memory —
+     * neither the driver facts nor today's exchanges.
+     */
+    private fun systemMessages(includeMemory: Boolean = true): List<AgentMessage> {
+        val dynamic = "Сегодня " + SimpleDateFormat("d MMMM yyyy 'года,' EEEE", Locale("ru"))
             .format(Date(nowMs())) + "." +
-        AgentPersonaPrompt.block(identity()) +
-        (if (includeMemory) memoryBlock() else "")
+            AgentPersonaPrompt.block(identity()) +
+            (if (includeMemory) memoryBlock() + dayMemory.promptBlock(nowMs()) else "")
+        return listOf(AgentMessage.System(SYSTEM_PROMPT), AgentMessage.System(dynamic))
+    }
 
     /** The LLM/tool loop shared by [ask] (live, persistent history) and [askDetached]
      *  (automation origin, throwaway messages). [onTerminal] fires exactly where the live
      *  path used to stamp lastAnswerAt. Caller must hold [mutex]. */
     private suspend fun runLoop(
         messages: MutableList<AgentMessage>,
-        systemPrompt: String,
+        systemMessages: List<AgentMessage>,
         toolSchemas: JSONArray,
         allowAutomationTools: Boolean,
         onSentence: ((String) -> Unit)?,
         onTerminal: () -> Unit,
+    ): AgentResult {
+        val startedAt = nowMs()
+        val rounds = intArrayOf(0)
+        val tracer = AgentTrace({ nowMs() }, { line -> trace(line) })
+        var outcome = "cancelled"
+        try {
+            val result = runLoopTraced(
+                messages, systemMessages, toolSchemas, allowAutomationTools, onSentence, onTerminal,
+                rounds, tracer,
+            )
+            outcome = when (result) {
+                is AgentResult.Answer -> "answer"
+                is AgentResult.Error -> "error: " + AgentTrace.clip(result.message)
+                AgentResult.Disabled -> "disabled"
+            }
+            return result
+        } finally {
+            tracer.turn(nowMs() - startedAt, rounds[0], outcome)
+        }
+    }
+
+    /** The answer as the driver gets it: trimmed, and marked with [TRUNCATED_MARK] when
+     *  max_tokens cut it, so a reply that stops mid-sentence is visibly a cut and not a bug. */
+    private fun finalAnswer(reply: AgentReply): String {
+        val answer = reply.content?.trim().orEmpty()
+        if (answer.isEmpty() || reply.finishReason != FINISH_LENGTH) return answer
+        return if (answer.endsWith(TRUNCATED_MARK)) answer else answer + TRUNCATED_MARK
+    }
+
+    /** The loop itself; [rounds] carries the LLM round count out to the tracing wrapper. */
+    @Suppress("LongParameterList")
+    private suspend fun runLoopTraced(
+        messages: MutableList<AgentMessage>,
+        systemMessages: List<AgentMessage>,
+        toolSchemas: JSONArray,
+        allowAutomationTools: Boolean,
+        onSentence: ((String) -> Unit)?,
+        onTerminal: () -> Unit,
+        rounds: IntArray,
+        tracer: AgentTrace,
     ): AgentResult {
         val outcomes = mutableListOf<AgentToolOutcome>()
         val callCounts = mutableMapOf<String, Int>()
@@ -147,18 +203,21 @@ class AgentOrchestrator @Inject constructor(
             // the chunker falls out of scope at the end of this iteration (only completed
             // sentences were forwarded); the final turn flushes its tail below.
             val chunker = if (onSentence != null) SentenceChunker() else null
+            rounds[0]++
+            tracer.roundStarted()
             val onDelta: ((String) -> Unit)? = if (onSentence != null && chunker != null) {
-                { d -> chunker.feed(d).forEach(onSentence) }
+                { d -> tracer.delta(); chunker.feed(d).forEach(onSentence) }
             } else null
             val reply = backend
-                .chat(listOf(AgentMessage.System(systemPrompt)) + messages, toolSchemas, onDelta)
+                .chat(systemMessages + messages, toolSchemas, onDelta)
                 .getOrElse {
-                    return AgentResult.Error(
-                        (it as? LlmError)?.userMessage ?: "Нет связи с сервером, скажи простую команду"
-                    )
+                    val message = (it as? LlmError)?.userMessage ?: "Нет связи с сервером, скажи простую команду"
+                    tracer.replyFailed(message)
+                    return AgentResult.Error(message)
                 }
+            tracer.reply(reply)
             if (reply.toolCalls.isEmpty()) {
-                val answer = reply.content?.trim().orEmpty()
+                val answer = finalAnswer(reply)
                 if (answer.isEmpty()) return AgentResult.Error("Пустой ответ модели")
                 if (onSentence != null) chunker?.flush()?.let(onSentence)
                 messages += AgentMessage.Assistant(answer)
@@ -173,6 +232,7 @@ class AgentOrchestrator @Inject constructor(
                     // Loop guard: the model re-requests an identical call; feed it a synthetic
                     // error instead of executing, and give up after MAX_LOOP_STRIKES rounds.
                     loopStrikes++
+                    tracer.tool(call, "loop-guard", 0L, "")
                     outcomes += AgentToolOutcome(call.name, false)
                     messages += AgentMessage.Tool(call.id, LOOP_ERROR)
                     if (loopStrikes >= MAX_LOOP_STRIKES) {
@@ -189,10 +249,12 @@ class AgentOrchestrator @Inject constructor(
                     continue
                 }
                 callCounts[key] = seen + 1
+                val toolStart = nowMs()
                 val res = tools.execute(call, allowAutomationTools)
                 // ok = the tool JSON has no "error" key; unparseable output counts as ok
                 // (free-form success payloads like web_search results are not errors).
                 val ok = runCatching { !JSONObject(res).has("error") }.getOrDefault(true)
+                tracer.tool(call, if (ok) "ok" else "error", nowMs() - toolStart, res)
                 outcomes += AgentToolOutcome(call.name, ok)
                 messages += AgentMessage.Tool(call.id, res)
             }
@@ -227,6 +289,8 @@ class AgentOrchestrator @Inject constructor(
     }
 
     companion object {
+        private const val TAG = "AgentLoop"
+
         /** Appended to the driver's own line while the car moves; the terse-answer rule for it
          *  lives in the static [SYSTEM_PROMPT]. */
         internal const val MOVING_TAG = "(машина в движении)"
@@ -236,6 +300,11 @@ class AgentOrchestrator @Inject constructor(
         private const val MAX_HISTORY = 20
         private const val MAX_IDENTICAL_CALLS = 2
         private const val MAX_LOOP_STRIKES = 2
+
+        /** Provider stop reason meaning the answer hit max_tokens, plus the mark that makes
+         *  such a cut visible in the pill and in the journal. */
+        private const val FINISH_LENGTH = "length"
+        private const val TRUNCATED_MARK = "…"
         private const val LOOP_ERROR =
             """{"error":"этот вызов уже выполнялся с теми же аргументами, смени подход или ответь пользователю"}"""
         internal val SYSTEM_PROMPT = """
@@ -255,6 +324,10 @@ class AgentOrchestrator @Inject constructor(
               инструментом, потом действуй, в ответе назови факт и что сделал.
             - Запрос неоднозначен - задай ОДИН короткий уточняющий вопрос, не гадай
               ("Какое окно - водителя или все?").
+            - Если в разделе О ВОДИТЕЛЕ есть его привычка по комфорту (температура климата,
+              уровень подогрева, режим обдува), а команда её не уточняет ("включи климат",
+              "подогрей сиденье") - примени сохранённое значение и назови его в ответе
+              ("Климат на 22, как обычно").
             - Факты о машине, поездках и зарядках бери ТОЛЬКО из инструментов, не выдумывай.
             - BYDMate видит только электрическую часть машины: расход и запас считаются
               в кВт·ч по батарее, данных о топливе и ДВС у тебя нет. Не рассуждай о типе
@@ -282,7 +355,13 @@ class AgentOrchestrator @Inject constructor(
             Места (гео-точки). Для триггеров place_enter/place_exit сначала проверь имя через
             list_places; если Места нет - предложи создать его через create_place. Триггер
             time_range "HH:MM-HH:MM" с одинаковым началом и концом срабатывает ровно в этот
-            момент времени. После create_automation подтверди имя, триггер и действия.
+            момент времени.
+            - Если в просьбе про автоматизацию не хватает триггера, порога или действия, или их
+              можно понять двумя способами ("когда холодно", "если заряд низкий", "включи
+              климат по утрам") - задай ОДИН короткий уточняющий вопрос и только потом создавай
+              правило. Не додумывай ни порог, ни время, ни действие.
+            - create_automation возвращает поле rule с кратким описанием созданного правила:
+              прочитай его водителю целиком, чтобы он услышал, что именно создано.
 
             О ПРИЛОЖЕНИИ: BYDMate ведёт журнал поездок и зарядок (GPS-маршруты, расход,
             стоимость), показывает статистику и AI-инсайты, умеет автоматизации

@@ -53,7 +53,7 @@
     <string name="settings_display_offset_y_desc">Położenie okna: 0 - góra, 50 - środek, 100 - dół</string>
     <string name="settings_display_scale">Skala</string>
     <string name="settings_display_scale_desc">Wielkość interfejsu: mniejsza wartość - drobniejsze elementy i więcej mapy w oknie</string>
-    <string name="settings_display_scale_direct_hint">Skala działa tylko w trybie projekcji „Fabryczny”. W trybie „Rozszerzony” aplikacja zawsze renderuje się w rozmiarze natywnym.</string>
+    <string name="settings_display_scale_direct_hint">Aby zastosować nową skalę, wyłącz i ponownie włącz wyświetlanie na zestawie wskaźników.</string>
     <!-- Steering-wheel button names (cluster trigger picker) -->
     <string name="steering_button_right_star">Prawa gwiazdka</string>
     <string name="steering_button_left_star">Lewa gwiazdka</string>
@@ -620,7 +620,7 @@
     <!-- Dashboard -->
     <!-- Top bar -->
     <string name="dashboard_vehicle_data_offline">Brak danych z auta</string>
-    <string name="dashboard_adb_offline">ADB nie odpowiada</string>
+    <string name="dashboard_adb_offline">Dane auta niedostępne</string>
     <string name="dashboard_diplus_offline">DiPlus nie odpowiada</string>
     <string name="dashboard_status_online">Online</string>
     <string name="dashboard_status_offline">Offline</string>
@@ -1022,6 +1022,18 @@
     <string name="auto_act_temp_20c">Temp. 20°C</string>
     <string name="auto_act_temp_22c">Temp. 22°C</string>
     <string name="auto_act_temp_25c">Temp. 25°C</string>
+    <string name="auto_act_fan_1">Nawiew 1</string>
+    <string name="auto_act_fan_2">Nawiew 2</string>
+    <string name="auto_act_fan_3">Nawiew 3</string>
+    <string name="auto_act_fan_4">Nawiew 4</string>
+    <string name="auto_act_fan_5">Nawiew 5</string>
+    <string name="auto_act_fan_6">Nawiew 6</string>
+    <string name="auto_act_fan_7">Nawiew 7</string>
+    <string name="auto_act_wind_face">Nawiew: na twarz</string>
+    <string name="auto_act_wind_face_feet">Nawiew: twarz i nogi</string>
+    <string name="auto_act_wind_feet">Nawiew: na nogi</string>
+    <string name="auto_act_wind_feet_windshield">Nawiew: nogi i szyba</string>
+    <string name="auto_act_wind_windshield">Nawiew: na szybę</string>
     <string name="auto_act_recirculation">Obieg wewnętrzny</string>
     <string name="auto_act_fresh_air">Obieg zewnętrzny</string>
     <string name="auto_act_windshield_defog_on">Nawiew na przednią szybę wł.</string>
@@ -1145,7 +1157,7 @@
     <string name="voice_listening">Słucham</string>
     <string name="voice_thinking">Myślę</string>
     <string name="voice_error_model_missing">Model głosowy nie jest pobrany. Pobierz go w Ustawieniach, sekcja Asystent głosowy.</string>
-    <string name="voice_error_lang_not_ru">Komendy głosowe rozumieją tylko mowę rosyjską. W Ustawieniach wybierz Język głosu: Русский.</string>
+    <string name="voice_error_lang_not_ru">Komendy głosowe rozumieją tylko mowę rosyjską. W Ustawieniach → Aplikacja wybierz Język: Русский.</string>
     <string name="voice_block_park_required">Wymagany parking</string>
 
     <!-- GigaAM v3: free-form Russian speech recognition (offline) -->
@@ -1172,7 +1184,7 @@
     <!-- TTS: offline synthesis of agent replies (Phase 2) -->
     <string name="settings_tts_header">Odpowiedzi agenta</string>
     <string name="settings_tts_toggle">Czytaj odpowiedzi agenta na głos</string>
-    <string name="settings_tts_subtitle">Synteza mowy offline, rosyjski głos</string>
+    <string name="settings_tts_subtitle">Agent odpowiada na głos, działa bez internetu.</string>
     <string name="settings_tts_model_delete">Usuń</string>
     <string name="settings_tts_download_failed">Nie udało się pobrać głosu</string>
     <string name="settings_voice_volume_hint">Głośność odpowiedzi reguluje systemowy kanał Voice: przyciski głośności na kierownicy albo Ustawienia dźwięku auta</string>
@@ -1199,7 +1211,7 @@
 
     <!-- TTS: keys for online voices (Wave N) -->
     <string name="settings_tts_keys_header">Klucze do głosów online</string>
-    <string name="settings_tts_keys_openrouter_hint">Klucz i model brane są z sekcji „Połączenia AI”.</string>
+    <string name="settings_tts_keys_openrouter_hint">Klucz i model brane są z sekcji „Integracje” → „Połączenia AI”.</string>
     <string name="settings_minimax_provider_label">Dostawca</string>
     <string name="settings_minimax_provider_official">Oficjalny</string>
     <string name="settings_minimax_provider_fal">fal.ai</string>
@@ -1227,20 +1239,25 @@
     <string name="settings_agent_gender_male">Męska</string>
     <string name="settings_agent_gender_female">Żeńska</string>
     <string name="settings_agent_gender_hint">Działa na wszystkie głosy: każde źródło ma wariant męski i żeński</string>
+    <string name="settings_route_navigator_label">Nawigacja dla tras</string>
+    <string name="settings_route_navigator_yandex">Yandex Navigator</string>
+    <string name="settings_route_navigator_dgis">2GIS</string>
+    <string name="settings_route_navigator_hint">Która aplikacja otwiera się dla tras i wyszukiwania na mapie</string>
     <string name="settings_agent_memory_title">Pamięć o kierowcy</string>
     <string name="settings_agent_memory_hint">Agent zapamiętuje imię i stałe preferencje, gdy mu o tym powiesz. Powiedz „zapomnij …”, aby usunąć jeden fakt</string>
     <string name="settings_agent_memory_empty">Na razie nic nie zapamiętano</string>
     <string name="settings_agent_memory_forget_all">Zapomnij wszystko</string>
+    <string name="settings_agent_memory_forget_one">Zapomnij</string>
 
     <!-- Voice agent (Phase 1) -->
     <string name="agent_enable_title">Głosowy agent AI</string>
-    <string name="agent_enable_desc">Swobodne pytania i komendy przez LLM (OpenRouter). Klucz API brany jest z sekcji „Integracje”.</string>
+    <string name="agent_enable_desc">Odpowiada własnymi słowami na trudne pytania i komendy. Potrzebny klucz: ustaw go w sekcji „Integracje”.</string>
     <string name="agent_model_shared_caption">Klucz OpenRouter i model dla agenta ustawia się w sekcji Integracje</string>
     <string name="agent_chat_open">Czat z agentem (debug)</string>
     <string name="agent_test_model_button">Test modelu</string>
     <string name="agent_test_model_running">Sprawdzanie modelu...</string>
     <string name="agent_test_model_result">%1$s: odpowiedź w %2$.1f s - \"%3$s\"</string>
-    <string name="agent_test_model_disabled">Błąd: agent wyłączony lub nieskonfigurowany</string>
+    <string name="agent_test_model_disabled">Najpierw włącz agenta i ustaw klucz w sekcji „Integracje”.</string>
     <string name="agent_exa_api_key_label">Exa API Key (wyszukiwanie w sieci)</string>
 
     <!-- Voice agent (Wave J): multi-provider LLM connections -->
@@ -1257,7 +1274,7 @@
     <string name="settings_conn_model_label">Model (id)</string>
     <string name="settings_conn_check">Sprawdź</string>
     <string name="settings_conn_checking">Sprawdzam…</string>
-    <string name="settings_zai_hint">Darmowy glm-4.7-flash, zalecany jako podstawowy</string>
+    <string name="settings_zai_hint">Wariant darmowy, odpowiada wolniej. Nadaje się jako zapasowy.</string>
     <string name="settings_custom_hint">Dowolne API zgodne z OpenAI. Ustawienie wstępne podstawia adres i model, klucz jest twój.</string>
     <string name="settings_custom_extra_json_label">Dodatkowe parametry żądania (JSON)</string>
     <string name="settings_custom_extra_json_hint">Dodawane do każdego żądania do tego serwera, na przykład {\"thinking\": false} aby wyłączyć rozumowanie</string>
@@ -1462,9 +1479,10 @@
     <string name="tech_hint_power">Ile energii akumulator oddaje w tej chwili. Plus: samochód zużywa (przyspieszanie, klimatyzacja). Minus: akumulator przyjmuje energię: rekuperacja przy hamowaniu albo ładowanie ze stacji. Druga liczba: jak szybko ubywa ładunku, procent na godzinę. Na postoju to zużycie przez elektronikę pokładową.</string>
     <string name="tech_hint_12v">Napięcie zwykłego akumulatora 12 V, który zasila elektronikę. Przy uruchomionym samochodzie 13…14,5 V. Jeśli na postoju spada poniżej 12 V, akumulator słabnie.</string>
     <string name="tech_hint_insulation">Rezystancja między akumulatorem wysokiego napięcia a nadwoziem. Im większa, tym lepiej: normą są pojedyncze megaomy. Spadek do 0,5 MΩ i niżej oznacza uszkodzoną gdzieś izolację, czas do serwisu.</string>
-    <string name="tech_hint_bms_limits">Pułap, na który sterownik akumulatora pozwala w tej chwili: ile przyjąć przy ładowaniu (stacja może dać mniej) i ile oddać na przyspieszanie. Przy zimnym lub prawie pełnym akumulatorze obie wartości są niższe: dlatego zimą ładowanie jest wolniejsze, a rekuperacja słabsza.</string>
+    <string name="tech_hint_bms_limits">Ile akumulator jest gotów przyjąć przy ładowaniu i oddawać w sposób ciągły, według jego sterownika. Przy krótkim przyspieszeniu samochód bierze więcej niż dostępna wartość, to normalne: limit szczytowy jest przez kilka sekund wyższy. Przy zimnym lub prawie pełnym akumulatorze obie wartości są niższe: zimą ładowanie jest wolniejsze, a rekuperacja słabsza.</string>
     <string name="tech_hint_cells">Akumulator składa się z setek ogniw. Pokazane są najsłabsze, najmocniejsze i różnica między nimi. Różnica do 20…30 mV jest normalna. Stale duża różnica oznacza, że jedno ogniwo starzeje się szybciej niż pozostałe.</string>
     <string name="tech_hint_motors">Temperatura silników elektrycznych i falowników, które nimi sterują. W zwykłej jeździe do 60…80°. Przy długim przyspieszaniu lub holowaniu grzeją się mocniej, a samochód sam obniża moc, aż ostygną.</string>
     <string name="tech_hint_compressor">Ile watów pobiera sprężarka klimatyzacji i pompy ciepła. To główny odbiornik poza silnikami: latem w upał i zimą na mrozie zauważalnie zjada zasięg.</string>
     <string name="tech_hint_tyres">Ciśnienie i temperatura każdego koła z czujników w oponach. Ciśnienie rośnie o 0,2…0,3 bar w miarę nagrzewania się opon w trasie, to normalne. Jeśli jedno koło ma wyraźnie mniej niż pozostałe, sprawdź, czy nie schodzi z niego powietrze.</string>
+    <string name="tech_order_hint">Przytrzymaj kartę, aby zmienić kolejność</string>
 </resources>

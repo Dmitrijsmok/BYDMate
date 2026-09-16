@@ -43,6 +43,8 @@ open class SettingsRepository @Inject constructor(
         const val KEY_IDLE_DRAIN_CLEANUP_DONE = "idle_drain_cleanup_done"
         const val KEY_CONSUMPTION_RECALC_DONE = "consumption_recalc_done"
         const val KEY_IDLE_DRAIN_V2_CLEANUP = "idle_drain_v2_cleanup"
+        /** One-time repair of trips holding an impossible energydata kWh value. */
+        const val KEY_ENERGY_KWH_SANITY_DONE = "energydata_kwh_sanity_v1_done"
         /** DriveMode trigger value "0" (old "NORMAL") rewritten to the real NORMAL code "3". */
         const val KEY_DRIVEMODE_RULE_MIGRATION = "drivemode_rule_migration_v2"
         const val KEY_OPENROUTER_API_KEY = "openrouter_api_key"
@@ -106,6 +108,10 @@ open class SettingsRepository @Inject constructor(
         // Included in the diagnostic dump — logcat rotates out the startup
         // window within minutes on DiLink, so field reports need this.
         const val KEY_CATCHUP_JOURNAL = "catchup_journal"
+        /** Comma-separated TechCard ids in the order the driver dragged them into. */
+        const val KEY_TECH_CARD_ORDER = "tech_card_order"
+        /** "true" once a card has actually been dragged — hides the reorder hint. */
+        const val KEY_TECH_ORDER_HINT_SEEN = "tech_card_order_hint_seen"
         const val KEY_MIGRATION_V2_4_17 = "migration_v2_4_17_done"
         const val KEY_INSIGHT_CACHE_V2_MIGRATION_DONE = "insight_cache_v2_migration_done"
         // One-shot migration flag: v2.8.1 — clear stale "DIPLUS" data_source value
@@ -158,6 +164,7 @@ open class SettingsRepository @Inject constructor(
             Currency("RUB", "₽"),
             Currency("UAH", "₴"),
             Currency("KZT", "₸"),
+            Currency("AMD", "֏"),
             Currency("USD", "$"),
             Currency("EUR", "€"),
             Currency("PLN", "zł"),
@@ -322,6 +329,12 @@ open class SettingsRepository @Inject constructor(
     suspend fun setConsumptionRecalcDone() =
         setString(KEY_CONSUMPTION_RECALC_DONE, "true")
 
+    suspend fun isEnergyKwhSanityDone(): Boolean =
+        getString(KEY_ENERGY_KWH_SANITY_DONE, "false") == "true"
+
+    suspend fun setEnergyKwhSanityDone() =
+        setString(KEY_ENERGY_KWH_SANITY_DONE, "true")
+
     suspend fun getMapTileSource(): String =
         getString(KEY_MAP_TILE_SOURCE, DEFAULT_MAP_TILE_SOURCE)
 
@@ -392,6 +405,18 @@ open class SettingsRepository @Inject constructor(
         "trip${n}_corr_ms" to state.corrMs.toString(),
         "trip${n}_corr_excl" to if (state.excludeStraddling) "1" else "0",
     ))
+
+    suspend fun getTechCardOrder(): String =
+        getString(KEY_TECH_CARD_ORDER, "")
+
+    suspend fun setTechCardOrder(ids: String) =
+        setString(KEY_TECH_CARD_ORDER, ids)
+
+    suspend fun isTechOrderHintSeen(): Boolean =
+        getString(KEY_TECH_ORDER_HINT_SEEN, "false") == "true"
+
+    suspend fun setTechOrderHintSeen() =
+        setString(KEY_TECH_ORDER_HINT_SEEN, "true")
 
     suspend fun isMigrationV2_4_17Done(): Boolean =
         getString(KEY_MIGRATION_V2_4_17, "false") == "true"

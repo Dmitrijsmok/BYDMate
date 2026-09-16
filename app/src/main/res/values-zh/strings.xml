@@ -53,7 +53,7 @@
     <string name="settings_display_offset_y_desc">窗口位置：0 - 顶部，50 - 居中，100 - 底部</string>
     <string name="settings_display_scale">缩放</string>
     <string name="settings_display_scale_desc">界面大小：数值越小，界面元素越小，地图显示越多</string>
-    <string name="settings_display_scale_direct_hint">缩放仅在“出厂”投屏模式下生效。“扩展”模式下应用始终按原始大小显示。</string>
+    <string name="settings_display_scale_direct_hint">要应用新的缩放，请关闭并重新打开仪表盘投送。</string>
     <string name="settings_section_places_title">地点</string>
     <string name="settings_section_application_title">应用</string>
     <string name="settings_smart_home_section_title">智能家居</string>
@@ -546,7 +546,7 @@
     <!-- Dashboard -->
     <string name="dashboard_vehicle_data_offline">未收到车辆数据</string>
     <string name="dashboard_diplus_offline">DiPlus 无响应</string>
-    <string name="dashboard_adb_offline">ADB 无响应</string>
+    <string name="dashboard_adb_offline">车辆数据不可用</string>
     <string name="dashboard_status_online">在线</string>
     <string name="dashboard_status_offline">离线</string>
 
@@ -969,6 +969,18 @@
     <string name="auto_act_temp_20c">温度 20°C</string>
     <string name="auto_act_temp_22c">温度 22°C</string>
     <string name="auto_act_temp_25c">温度 25°C</string>
+    <string name="auto_act_fan_1">风量 1</string>
+    <string name="auto_act_fan_2">风量 2</string>
+    <string name="auto_act_fan_3">风量 3</string>
+    <string name="auto_act_fan_4">风量 4</string>
+    <string name="auto_act_fan_5">风量 5</string>
+    <string name="auto_act_fan_6">风量 6</string>
+    <string name="auto_act_fan_7">风量 7</string>
+    <string name="auto_act_wind_face">出风：吹面</string>
+    <string name="auto_act_wind_face_feet">出风：吹面吹脚</string>
+    <string name="auto_act_wind_feet">出风：吹脚</string>
+    <string name="auto_act_wind_feet_windshield">出风：吹脚除霜</string>
+    <string name="auto_act_wind_windshield">出风：除霜</string>
     <string name="auto_act_recirculation">内循环</string>
     <string name="auto_act_fresh_air">外循环</string>
     <string name="auto_act_windshield_defog_on">前挡风除雾开</string>
@@ -1108,7 +1120,7 @@
     <string name="voice_listening">聆听中</string>
     <string name="voice_thinking">思考中</string>
     <string name="voice_error_model_missing">语音模型尚未下载。请在设置的语音助手部分下载。</string>
-    <string name="voice_error_lang_not_ru">语音命令目前仅支持俄语。请在设置中将语音语言设为俄语。</string>
+    <string name="voice_error_lang_not_ru">语音命令目前仅支持俄语。请在「设置 → 应用」中将语言设为 Русский。</string>
     <string name="voice_block_park_required">需要挂入 P 挡</string>
 
     <!-- GigaAM v3: free-form Russian speech recognition (offline) -->
@@ -1135,7 +1147,7 @@
     <!-- TTS: offline synthesis of agent replies (Phase 2) -->
     <string name="settings_tts_header">智能体回复</string>
     <string name="settings_tts_toggle">朗读智能体回复</string>
-    <string name="settings_tts_subtitle">离线语音合成，俄语音色</string>
+    <string name="settings_tts_subtitle">智能体出声回答，无需联网。</string>
     <string name="settings_tts_model_delete">删除</string>
     <string name="settings_tts_download_failed">语音包下载失败</string>
     <string name="settings_voice_volume_hint">回复音量由系统 Voice 声道控制：方向盘音量按键或车辆的声音设置</string>
@@ -1162,7 +1174,7 @@
 
     <!-- TTS: keys for online voices (Wave N) -->
     <string name="settings_tts_keys_header">在线语音密钥</string>
-    <string name="settings_tts_keys_openrouter_hint">密钥和模型在「AI 连接」中配置。</string>
+    <string name="settings_tts_keys_openrouter_hint">密钥和模型取自「集成」→「AI 连接」。</string>
     <string name="settings_minimax_provider_label">提供方</string>
     <string name="settings_minimax_provider_official">官方</string>
     <string name="settings_minimax_provider_fal">fal.ai</string>
@@ -1190,20 +1202,25 @@
     <string name="settings_agent_gender_male">男声</string>
     <string name="settings_agent_gender_female">女声</string>
     <string name="settings_agent_gender_hint">对所有语音生效：每种音色都有男声和女声版本</string>
+    <string name="settings_route_navigator_label">路线导航应用</string>
+    <string name="settings_route_navigator_yandex">Yandex 导航</string>
+    <string name="settings_route_navigator_dgis">2GIS</string>
+    <string name="settings_route_navigator_hint">规划路线和地图搜索时打开哪个应用</string>
     <string name="settings_agent_memory_title">驾驶员记忆</string>
     <string name="settings_agent_memory_hint">当你告诉智能体时，它会记住你的名字和长期偏好。说“忘记……”即可删除某一条</string>
     <string name="settings_agent_memory_empty">暂无记忆内容</string>
     <string name="settings_agent_memory_forget_all">全部忘记</string>
+    <string name="settings_agent_memory_forget_one">忘记</string>
 
     <!-- Voice agent (Phase 1) -->
     <string name="agent_enable_title">语音AI助手</string>
-    <string name="agent_enable_desc">通过LLM（OpenRouter）自由提问和控制。使用「集成」中的API密钥。</string>
+    <string name="agent_enable_desc">用自己的话回答复杂问题和指令。需要密钥：请在「集成」中设置。</string>
     <string name="agent_model_shared_caption">智能体的 OpenRouter 密钥和模型在"集成"页中配置</string>
     <string name="agent_chat_open">智能体聊天（调试）</string>
     <string name="agent_test_model_button">测试模型</string>
     <string name="agent_test_model_running">正在测试模型...</string>
     <string name="agent_test_model_result">%1$s：%2$.1f 秒后回复 - \"%3$s\"</string>
-    <string name="agent_test_model_disabled">错误：智能体已禁用或未配置</string>
+    <string name="agent_test_model_disabled">请先开启智能体，并在「集成」中设置密钥。</string>
     <string name="agent_exa_api_key_label">Exa API Key（网络搜索）</string>
 
     <!-- Voice agent (Wave J): multi-provider LLM connections -->
@@ -1220,7 +1237,7 @@
     <string name="settings_conn_model_label">模型 (id)</string>
     <string name="settings_conn_check">检查</string>
     <string name="settings_conn_checking">检查中…</string>
-    <string name="settings_zai_hint">免费 glm-4.7-flash，推荐设为主模型</string>
+    <string name="settings_zai_hint">免费方案，回复较慢。适合作为备用。</string>
     <string name="settings_custom_hint">任何兼容 OpenAI 的 API。预设会填入地址和模型，密钥需自备。</string>
     <string name="settings_custom_extra_json_label">附加请求参数 (JSON)</string>
     <string name="settings_custom_extra_json_hint">会加入发送到该服务器的每个请求，例如 {\"thinking\": false} 可关闭推理</string>
@@ -1424,9 +1441,10 @@
     <string name="tech_hint_power">电池此刻输出多少能量。正值：车辆在消耗（加速、空调）。负值：电池在吸收能量，可能是制动能量回收，也可能是在充电桩充电。第二个数值：电量下降的速度，每小时百分比。停车时代表车载电子设备的耗电。</string>
     <string name="tech_hint_12v">为电子设备供电的普通 12 伏蓄电池电压。车辆启动时为 13…14,5 V。停车时低于 12 V，说明蓄电池在变弱。</string>
     <string name="tech_hint_insulation">高压电池与车身之间的绝缘电阻。数值越大越好：正常为几兆欧。若降到 0,5 MΩ 及以下，说明某处绝缘受损，该去维修了。</string>
-    <string name="tech_hint_bms_limits">电池控制器此刻允许的上限：充电时能吸收多少（充电桩可能给得更少），以及加速时能输出多少。电池偏冷或接近充满时两个数值都更低：所以冬天充电更慢、能量回收更弱。</string>
+    <string name="tech_hint_bms_limits">根据电池控制器的数据，电池充电时能接受多少、持续输出时能给出多少。短时加速时车辆会超过可用值，这是正常的：峰值上限在几秒内更高。电池偏冷或接近充满时两个数值都更低：冬天充电更慢，能量回收更弱。</string>
     <string name="tech_hint_cells">电池由数百个电芯组成。这里显示最弱的、最强的以及两者之差。差值在 20…30 mV 以内属正常。长期差值偏大，说明某个电芯老化得比其他更快。</string>
     <string name="tech_hint_motors">电机及其驱动逆变器的温度。日常行驶在 60…80° 以内。长时间加速或拖挂时温度更高，车辆会自行降低功率直到冷却。</string>
     <string name="tech_hint_compressor">空调与热泵压缩机消耗多少瓦。它是除电机之外的主要用电设备：夏天酷热、冬天严寒时会明显缩短续航。</string>
     <string name="tech_hint_tyres">来自胎压传感器的每个车轮的压力和温度。行驶中轮胎升温后压力会升高 0,2…0,3 bar，属于正常。若某个车轮明显低于其他，请检查是否漏气。</string>
+    <string name="tech_order_hint">长按卡片可调整顺序</string>
 </resources>

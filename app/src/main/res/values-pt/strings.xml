@@ -50,7 +50,7 @@
     <string name="settings_display_offset_y_desc">Posição da janela: 0 - topo, 50 - centro, 100 - parte inferior</string>
     <string name="settings_display_scale">Escala</string>
     <string name="settings_display_scale_desc">Tamanho da interface: valor menor - elementos menores e mais mapa na janela</string>
-    <string name="settings_display_scale_direct_hint">A escala funciona apenas no modo de projeção «De fábrica». No modo «Estendido» o aplicativo é sempre exibido em tamanho nativo.</string>
+    <string name="settings_display_scale_direct_hint">Para aplicar a nova escala, desligue e ligue novamente a saída para o painel.</string>
     <!-- Steering-wheel button names (cluster trigger picker) -->
     <string name="steering_button_right_star">Estrela direita</string>
     <string name="steering_button_left_star">Estrela esquerda</string>
@@ -513,7 +513,7 @@
     <string name="widget_trash_release">solte - widget oculto</string>
     <string name="widget_trash_hint">arraste aqui para ocultar</string>
     <string name="dashboard_vehicle_data_offline">Sem dados do veículo</string>
-    <string name="dashboard_adb_offline">ADB não está respondendo</string>
+    <string name="dashboard_adb_offline">Dados do carro indisponíveis</string>
     <string name="dashboard_diplus_offline">DiPlus não está respondendo</string>
     <string name="dashboard_status_online">Online</string>
     <string name="dashboard_status_offline">Offline</string>
@@ -862,6 +862,18 @@
     <string name="auto_act_temp_20c">Temp. 20°C</string>
     <string name="auto_act_temp_22c">Temp. 22°C</string>
     <string name="auto_act_temp_25c">Temp. 25°C</string>
+    <string name="auto_act_fan_1">Ventilação 1</string>
+    <string name="auto_act_fan_2">Ventilação 2</string>
+    <string name="auto_act_fan_3">Ventilação 3</string>
+    <string name="auto_act_fan_4">Ventilação 4</string>
+    <string name="auto_act_fan_5">Ventilação 5</string>
+    <string name="auto_act_fan_6">Ventilação 6</string>
+    <string name="auto_act_fan_7">Ventilação 7</string>
+    <string name="auto_act_wind_face">Fluxo de ar: rosto</string>
+    <string name="auto_act_wind_face_feet">Fluxo de ar: rosto e pés</string>
+    <string name="auto_act_wind_feet">Fluxo de ar: pés</string>
+    <string name="auto_act_wind_feet_windshield">Fluxo de ar: pés e para-brisa</string>
+    <string name="auto_act_wind_windshield">Fluxo de ar: para-brisa</string>
     <string name="auto_act_recirculation">Circulação interna</string>
     <string name="auto_act_fresh_air">Circulação externa</string>
     <string name="auto_act_windshield_defog_on">Desemb. para-brisa lig.</string>
@@ -990,7 +1002,7 @@
     <string name="settings_conn_model_label">Modelo (id)</string>
     <string name="settings_conn_check">Verificar</string>
     <string name="settings_conn_checking">Verificando…</string>
-    <string name="settings_zai_hint">glm-4.7-flash gratuita, recomendada como principal</string>
+    <string name="settings_zai_hint">Opção gratuita, responde mais devagar. Serve como reserva.</string>
     <string name="settings_custom_hint">Qualquer API compatível com OpenAI. A predefinição preenche o endereço e o modelo, a chave é sua.</string>
     <string name="settings_custom_extra_json_label">Parâmetros extra do pedido (JSON)</string>
     <string name="settings_custom_extra_json_hint">Adicionados a cada pedido a este servidor, por exemplo {\"thinking\": false} para desativar o raciocínio</string>
@@ -1039,7 +1051,7 @@
 
     <!-- TTS: keys for online voices (Wave N) -->
     <string name="settings_tts_keys_header">Chaves para vozes online</string>
-    <string name="settings_tts_keys_openrouter_hint">A chave e o modelo são configurados em «Conexões de IA».</string>
+    <string name="settings_tts_keys_openrouter_hint">A chave e o modelo vêm da seção «Integrações» → «Conexões de IA».</string>
     <string name="settings_minimax_provider_label">Provedor</string>
     <string name="settings_minimax_provider_official">Oficial</string>
     <string name="settings_minimax_provider_fal">fal.ai</string>
@@ -1067,10 +1079,15 @@
     <string name="settings_agent_gender_male">Masculino</string>
     <string name="settings_agent_gender_female">Feminino</string>
     <string name="settings_agent_gender_hint">Aplica-se a todas as vozes: cada fonte tem uma opção masculina e feminina</string>
+    <string name="settings_route_navigator_label">Navegador para rotas</string>
+    <string name="settings_route_navigator_yandex">Yandex Navigator</string>
+    <string name="settings_route_navigator_dgis">2GIS</string>
+    <string name="settings_route_navigator_hint">Qual aplicativo abre para rotas e busca no mapa</string>
     <string name="settings_agent_memory_title">Memória sobre o motorista</string>
     <string name="settings_agent_memory_hint">O agente memoriza o nome e as preferências constantes quando você lhe diz isso. Diga “esqueça …” para remover um fato</string>
     <string name="settings_agent_memory_empty">Nada memorizado ainda</string>
     <string name="settings_agent_memory_forget_all">Esquecer tudo</string>
+    <string name="settings_agent_memory_forget_one">Esquecer</string>
     <string name="settings_voice_button_mic_header">Botão e microfone</string>
     <string name="settings_section_service_title">Serviço e dados</string>
     <string name="settings_battery_capacity_desc">Usado para estimar autonomia e custo</string>
@@ -1134,7 +1151,7 @@
     <string name="voice_listening">Ouvindo</string>
     <string name="voice_thinking">Pensando</string>
     <string name="voice_error_model_missing">O modelo de voz não está baixado. Baixe-o em Configurações, seção Agente de voz.</string>
-    <string name="voice_error_lang_not_ru">Os comandos de voz entendem apenas fala em russo. Em Configurações, defina Idioma de voz: Russo.</string>
+    <string name="voice_error_lang_not_ru">Os comandos de voz entendem apenas fala em russo. Em Configurações → Aplicativo escolha Idioma: Русский.</string>
     <string name="voice_block_park_required">É necessário estar em P</string>
     <string name="settings_asr_gigaam_title">Reconhecimento de fala</string>
     <string name="settings_asr_gigaam_ready">Modelo pronto</string>
@@ -1152,20 +1169,20 @@
     <string name="settings_voice_journal_entry_description">Últimas 50 sessões de voz</string>
     <string name="settings_tts_header">Respostas do agente</string>
     <string name="settings_tts_toggle">Falar as respostas do agente em voz alta</string>
-    <string name="settings_tts_subtitle">Síntese de fala offline, voz russa</string>
+    <string name="settings_tts_subtitle">O agente responde em voz alta, funciona sem internet.</string>
     <string name="settings_tts_model_delete">Excluir</string>
     <string name="settings_tts_download_failed">Falha ao baixar a voz</string>
     <string name="settings_voice_volume_hint">O volume das respostas é controlado pelo canal Voice do sistema: botões de volume no volante ou configurações de som do carro</string>
 
     <!-- Voice AI agent -->
     <string name="agent_enable_title">Agente de IA por voz</string>
-    <string name="agent_enable_desc">Perguntas e comandos livres via LLM (OpenRouter). Usa a chave de API da seção Integrações.</string>
+    <string name="agent_enable_desc">Responde com as próprias palavras a perguntas e comandos complexos. Precisa de uma chave: defina-a na seção «Integrações».</string>
     <string name="agent_model_shared_caption">A chave OpenRouter e o modelo do agente são configurados na seção Integrações</string>
     <string name="agent_chat_open">Chat com o agente (depuração)</string>
     <string name="agent_test_model_button">Testar modelo</string>
     <string name="agent_test_model_running">Testando o modelo…</string>
     <string name="agent_test_model_result">%1$s: respondeu em %2$.1f s - \"%3$s\"</string>
-    <string name="agent_test_model_disabled">Erro: agente desativado ou não configurado</string>
+    <string name="agent_test_model_disabled">Primeiro ligue o agente e defina a chave na seção «Integrações».</string>
     <string name="agent_exa_api_key_label">Exa API Key (busca na web)</string>
 
     <!-- HUD navigation -->
@@ -1306,9 +1323,10 @@
     <string name="tech_hint_power">Quanta energia a bateria está a entregar agora. Positivo: o carro está a gastar (aceleração, climatização). Negativo: a bateria está a receber energia, seja regeneração ao travar seja carregamento num carregador. Segundo número: a que velocidade a carga está a esgotar-se, por cento à hora. Quando parado é o consumo da eletrónica de bordo.</string>
     <string name="tech_hint_12v">Tensão da bateria normal de 12 volts que alimenta a eletrónica. Com o carro ligado fica entre 13…14,5 V. Se estacionado ficar abaixo de 12 V, a bateria está a enfraquecer.</string>
     <string name="tech_hint_insulation">Resistência entre a bateria de alta tensão e a carroçaria. Quanto maior, melhor: o normal são alguns megaohms. Se descer para 0,5 MΩ ou menos, há isolamento danificado nalgum ponto, é hora de ir à oficina.</string>
-    <string name="tech_hint_bms_limits">O teto que o controlador da bateria permite neste momento: quanto receber ao carregar (a estação pode dar menos) e quanto entregar na aceleração. Com a bateria fria ou quase cheia ambos os valores são menores: por isso no inverno a carga é mais lenta e a regeneração mais fraca.</string>
+    <string name="tech_hint_bms_limits">Quanto a bateria está pronta a receber ao carregar e a entregar de forma contínua, segundo o seu controlador. Numa aceleração curta o carro consome mais do que o valor disponível, e isso é normal: o limite de pico é mais alto durante alguns segundos. Com a bateria fria ou quase cheia ambos os valores são menores: no inverno a carga é mais lenta e a regeneração mais fraca.</string>
     <string name="tech_hint_cells">A bateria é feita de centenas de células. São mostradas a mais fraca, a mais forte e a diferença entre elas. Uma diferença até 20…30 mV é normal. Uma diferença sempre grande significa que uma célula envelhece mais depressa do que as outras.</string>
     <string name="tech_hint_motors">Temperatura dos motores elétricos e dos inversores que os comandam. Na condução normal até 60…80°. Em acelerações longas ou a rebocar aquecem mais, e o carro reduz a potência sozinho até arrefecerem.</string>
     <string name="tech_hint_compressor">Quantos watts consome o compressor do ar condicionado e da bomba de calor. É o principal consumidor além dos motores: no calor do verão e no frio do inverno reduz bastante a autonomia.</string>
     <string name="tech_hint_tyres">Pressão e temperatura de cada roda a partir dos sensores nos pneus. A pressão sobe 0,2…0,3 bar à medida que os pneus aquecem durante a viagem, é normal. Se uma roda estiver bastante abaixo das outras, verifique se está a perder ar.</string>
+    <string name="tech_order_hint">Mantenha o cartão premido para mudar a ordem</string>
 </resources>

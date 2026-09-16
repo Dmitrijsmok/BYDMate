@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import com.bydmate.app.cluster.ClusterMode
 import com.bydmate.app.cluster.ClusterVoiceControl
+import com.bydmate.app.camera.BlindSpotPreferences
 import com.bydmate.app.data.automation.ActionDispatcher
 import com.bydmate.app.data.automation.ActionValidationError
 import com.bydmate.app.data.automation.AutomationEngine
@@ -24,6 +25,8 @@ import com.bydmate.app.data.local.entity.PlaceEntity
 import com.bydmate.app.data.local.entity.RuleEntity
 import com.bydmate.app.data.local.entity.TriggerDef
 import com.bydmate.app.data.remote.InsightStatsAggregator
+import com.bydmate.app.data.nativestack.MotorSplit
+import com.bydmate.app.data.nativestack.motorSplitPercent
 import com.bydmate.app.data.remote.InsightsManager
 import com.bydmate.app.data.remote.OpenRouterClient
 import com.bydmate.app.data.repository.PlaceRepository
@@ -54,6 +57,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import com.bydmate.app.split.DisabledSplitPreferences
 import com.bydmate.app.split.Pane
 import com.bydmate.app.split.SplitPair
@@ -118,6 +122,14 @@ class AgentTools @Inject constructor(
         driverMemory = memory
     }
 
+    /** Sorted names of the enabled automations, kept in step with the rules table by
+     *  [startRuleWatcher]; null until the first emission. */
+    @Volatile private var cachedRuleNames: List<String>? = null
+    private val ruleWatcherStarted = AtomicBoolean(false)
+
+    /** Test seam — scope the rules-table watcher collects on. */
+    internal var ruleWatchScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     /** Test seam — deterministic time for period queries. */
     internal var nowMs: () -> Long = { System.currentTimeMillis() }
 
@@ -129,12 +141,6 @@ class AgentTools @Inject constructor(
 
     /** Test seam — scope that runs a confirmed dangerous dispatch off the UI thread. */
     internal var confirmScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    /** Test seam — poll interval for re-reading the cluster IPC mode after apply(). */
-    internal var clusterPollIntervalMs = 500L
-
-    /** Test seam — poll attempts before giving up (30 x 500ms = 15s worst case). */
-    internal var clusterPollAttempts = 30
 
     /** Test seam — live GPS position, default reads TrackingService's last known fix. */
     internal var locationProvider: () -> Pair<Double, Double>? =
@@ -192,6 +198,35 @@ class AgentTools @Inject constructor(
         return DispatchResult(false,
             "интент отправлен, но Навигатор не вышел на передний план: маршрут скорее всего " +
                 "не построен, предложи пользователю открыть Навигатор вручную")
+    }
+
+    /**
+     * Names of the enabled automations for the run_automation enum — the only part of the
+     * tool schemas that moves with user data. Recomputing it from the DB on every turn both
+     * costs a query on the voice path and can reshuffle the tail of the static prefix, which
+     * throws away the provider's prompt cache. The rules table is mirrored into a sorted
+     * cache instead: Room re-emits [RuleDao.getAll] after every insert/update/delete, so a
+     * rule edit invalidates the cache exactly once and nothing else does.
+     *
+     * Until the first emission (and wherever the table cannot be watched) this falls back to
+     * a direct read, so the enum is never silently empty.
+     */
+    private suspend fun enabledRuleNames(): List<String> {
+        startRuleWatcher()
+        cachedRuleNames?.let { return it }
+        return runCatchingCancellable { ruleDao.getEnabled() }.getOrDefault(emptyList())
+            .map { it.name }.sorted()
+    }
+
+    private fun startRuleWatcher() {
+        if (!ruleWatcherStarted.compareAndSet(false, true)) return
+        ruleWatchScope.launch {
+            runCatchingCancellable {
+                ruleDao.getAll().collect { rules ->
+                    cachedRuleNames = rules.filter { it.enabled }.map { it.name }.sorted()
+                }
+            }
+        }
     }
 
     private fun queryLauncherApps(): List<Pair<String, String>> {
@@ -308,7 +343,7 @@ class AgentTools @Inject constructor(
             listOf("query"),
         ))
         if (includeAutomationTools) {
-            val ruleNames = runCatchingCancellable { ruleDao.getEnabled() }.getOrDefault(emptyList()).map { it.name }
+            val ruleNames = enabledRuleNames()
             put(tool(
                 "run_automation",
                 if (ruleNames.isEmpty()) "Запустить сохранённую автоматизацию по имени. Сейчас включённых автоматизаций нет."
@@ -616,13 +651,16 @@ class AgentTools @Inject constructor(
                                         "yandex_music", "sentry", "hotspot", "app_launch",
                                         "cluster_projection", "speak", "agent_query",
                                         "split_screen", "split_screen_close",
-                                        "split_screen_toggle")))
-                                    .put("description", "Тип действия. split_screen_close и " +
-                                        "split_screen_toggle дополнительных полей не требуют"))
+                                        "split_screen_toggle", "youtube", "go_home")))
+                                    .put("description", "Тип действия. split_screen_close, " +
+                                        "split_screen_toggle и go_home дополнительных полей не требуют"))
+                                // No second enum: the same ~90 ids already ship with
+                                // vehicle_control, and repeating them here cost ~2 kB of the
+                                // static prefix on every single turn.
                                 .put("command_id", JSONObject()
                                     .put("type", "string")
-                                    .put("enum", JSONArray(AgentCommandCatalog.ALL.map { it.id }))
-                                    .put("description", "Только для kind=param: идентификатор команды"))
+                                    .put("description", "Только для kind=param: идентификатор команды " +
+                                        "из списка инструмента vehicle_control"))
                                 .put("value", JSONObject().put("type", "integer")
                                     .put("description", "Только для kind=param: значение, если команда его требует"))
                                 .put("ms", JSONObject().put("type", "integer")
@@ -642,7 +680,10 @@ class AgentTools @Inject constructor(
                                 .put("url", JSONObject().put("type", "string")
                                     .put("description", "Только для kind=url: ссылка со схемой, например https://"))
                                 .put("mode", JSONObject().put("type", "string")
-                                    .put("description", "Только для kind=yandex_music: режим, например mybeat"))
+                                    .put("description", "Для kind=yandex_music: режим, например mybeat. " +
+                                        "Для kind=youtube: play (включить) или search (открыть поиск), по умолчанию play"))
+                                .put("query", JSONObject().put("type", "string")
+                                    .put("description", "Только для kind=youtube: что искать на YouTube"))
                                 .put("on", JSONObject().put("type", "boolean")
                                     .put("description", "Для kind=sentry: включить/выключить охрану. Для kind=cluster_projection: true = вывести проекцию на приборку, false = убрать. Для kind=hotspot: включить/выключить точку доступа Wi-Fi"))
                                 .put("app", JSONObject().put("type", "string")
@@ -757,6 +798,16 @@ class AgentTools @Inject constructor(
         putIf("ac_on", d.acStatus?.let { it == 1 })
         putIf("ac_temp_c", d.acTemp)
         putIf("fan_level", d.fanLevel)
+        // Same 1..5 enum the blow-direction actions write (CommandTranslator ac_wind_mode):
+        // the agent could set it but not read it back, which is worse than not having it.
+        putIf("ac_wind_mode", when (d.acWindMode) {
+            1 -> "в лицо"
+            2 -> "в лицо и ноги"
+            3 -> "в ноги"
+            4 -> "в ноги и на стекло"
+            5 -> "на стекло"
+            else -> null
+        })
         putIf("recirculation_inner", d.acCirc?.let { it == 1 })
         putIf("defrost_front_on", d.acDefrostFront?.let { it == 1 })
         putIf("ac_auto_mode", d.acCtrlMode?.let { it == 0 })
@@ -780,6 +831,10 @@ class AgentTools @Inject constructor(
         putIf("tire_press_fr_kpa", d.tirePressFR)
         putIf("tire_press_rl_kpa", d.tirePressRL)
         putIf("tire_press_rr_kpa", d.tirePressRR)
+        putIf("tire_temp_fl_c", d.tyreTempFL)
+        putIf("tire_temp_fr_c", d.tyreTempFR)
+        putIf("tire_temp_rl_c", d.tyreTempRL)
+        putIf("tire_temp_rr_c", d.tyreTempRR)
         // Deterministic low-pressure flag so the model reliably warns by voice.
         // 210 kPa is ~16% below the Leopard 3 cold placard (~250 kPa).
         val tirePressures = listOfNotNull(d.tirePressFL, d.tirePressFR, d.tirePressRL, d.tirePressRR)
@@ -787,6 +842,19 @@ class AgentTools @Inject constructor(
             o.put("tire_pressure_warning",
                 "давление в одном из колёс ниже нормы, предупреди водителя")
         }
+        // Power split between the motors, from the same helper the «Техника» screen uses.
+        // Null = single-motor car or no data; Idle = standing still, where the ratio is noise.
+        when (val split = motorSplitPercent(d.motorCurrentFront, d.motorCurrentRear)) {
+            is MotorSplit.Share -> {
+                o.put("motor_share_front_pct", split.frontPercent)
+                o.put("motor_share_rear_pct", split.rearPercent)
+            }
+            MotorSplit.Idle -> o.put("motor_share", "моторы сейчас не тянут")
+            null -> Unit
+        }
+        // What the BMS allows right now; the peak on hard acceleration is higher.
+        putIf("bms_max_charge_kw", d.bmsMaxChargeKw)
+        putIf("bms_max_discharge_kw", d.bmsMaxDischargeKw)
         putIf("voltage_12v", d.voltage12v)
         putIf("battery_temp_avg_c", d.avgBatTemp)
         putIf("battery_temp_max_c", d.maxBatTemp)
@@ -821,6 +889,12 @@ class AgentTools @Inject constructor(
         putIf("ambient_light_level_1dark_5bright", d.lightLevel)
         putIf("key_fob_battery_ok", d.keyBatteryStatus?.let { it == 0 })
         putIf("rain_detected", d.rain?.let { it == 1 })
+        // Blind-spot cameras are a BYDMate feature, not a car parameter: the driver asks why
+        // the picture does not appear, and the answer is usually "off" or "below the threshold".
+        runCatchingCancellable { BlindSpotPreferences(context) }.getOrNull()?.let { bs ->
+            o.put("blind_spot_cameras_enabled", bs.enabled)
+            if (bs.enabled) o.put("blind_spot_cameras_from_kmh", bs.thresholdKmh)
+        }
         // Deterministic belt flag (same pattern as tire_pressure_warning): moving with
         // the driver unbuckled, or an occupied front passenger seat unbuckled.
         val moving = (d.speed ?: 0) > 0
@@ -1651,9 +1725,10 @@ class AgentTools @Inject constructor(
 
     // --- cluster projection ---
 
-    // Drive ClusterProjectionManager the same way the steering-wheel star does, then re-read to
-    // confirm. The write fid is closed, so projection only takes when the manual preconditions
-    // hold — on failure we voice back the honest, non-automatable hint.
+    // Drive the projection through the SAME ActionDispatcher path as a "cluster_projection"
+    // automation action. The dispatcher already applies the mode and polls it back, so the
+    // verdict in DispatchResult is the honest one and the voice turn waits for exactly one
+    // poll (5 s budget) instead of a second 15 s poll of its own.
     private suspend fun setClusterProjection(args: JSONObject): String {
         if (!args.has("on")) return """{"error":"не указано, включить или выключить проекцию"}"""
         val on = args.optBoolean("on")
@@ -1667,21 +1742,13 @@ class AgentTools @Inject constructor(
         if (before == want) return JSONObject().put("ok", true)
             .put("note", if (on) "$label уже на приборке" else "проекции уже нет на приборке")
             .toString()
-        clusterVoiceControl.apply(on)
-        // setMode is async (scope.launch + mutex) and the full on-sequence (daemon start,
-        // compositor power-up, virtual display, app launch) can take well over 2s on a cold
-        // start. Poll until the mode lands instead of a single fixed-delay check — the old
-        // 2s check reported a false "не включилась" while the projection was still coming up.
-        var after: ClusterMode? = null
-        for (attempt in 1..clusterPollAttempts) {
-            delay(clusterPollIntervalMs)
-            after = runCatchingCancellable { clusterVoiceControl.projectionMode() }.getOrNull()
-            if (after == want) break
-        }
-        val failure = runCatchingCancellable { clusterVoiceControl.lastFailure() }.getOrNull()
+        val result = actionDispatcher.dispatch(
+            ActionDef(command = "cluster_projection", displayName = "Вывод на приборку",
+                kind = "cluster_projection", payload = if (on) "1" else "0"), data = null)
         return when {
-            after == want -> JSONObject().put("ok", true).put("app", label).toString()
-            on && failure == "daemon" -> JSONObject().put("ok", false)
+            result.success -> JSONObject().put("ok", true).put("app", label).toString()
+            // The daemon restart is a "try again in a minute", not a failed command.
+            on && result.reason == ActionDispatcher.DAEMON_RESTART_REASON -> JSONObject().put("ok", false)
                 .put("note", "служебный процесс перезапускается, попробуй ещё раз через минуту").toString()
             on -> JSONObject().put("error",
                 "проекция не включилась. Попробуй повторить команду через несколько секунд").toString()
@@ -1792,7 +1859,9 @@ class AgentTools @Inject constructor(
                 if (mgr.state.value is SplitSessionState.Idle) {
                     return """{"error":"сплит не запущен"}"""
                 }
-                mgr.mirror()
+                // mirror() is a silent no-op in half a dozen states (pane on the cluster,
+                // move in progress): report the reason instead of an empty "готово".
+                mgr.mirror()?.let { return JSONObject().put("error", it).toString() }
                 OK
             }
             "swap" -> {
@@ -1941,12 +2010,20 @@ class AgentTools @Inject constructor(
         )
         runCatchingCancellable { ruleDao.insert(rule) }
             .getOrElse { return """{"error":"не удалось создать автоматизацию"}""" }
+        // One compact Russian line the model is told to read back: the driver hears exactly
+        // what was created and catches a wrong threshold or action on the spot.
         return JSONObject()
             .put("ok", true)
             .put("name", name)
+            .put("rule", ruleSummary(name, trigger, actions))
             .put("hint", "скажи «выключи автоматизацию $name» чтобы отключить")
             .toString()
     }
+
+    /** One spoken line describing the rule that was just created, so the model can repeat it
+     *  back instead of an unverifiable "готово". Both display names are already Russian. */
+    private fun ruleSummary(name: String, trigger: TriggerDef, actions: List<ActionDef>): String =
+        "«$name»: если ${trigger.displayName}, то " + actions.joinToString(", ") { it.displayName }
 
     /** Enum trigger params persist a numeric code; the agent may pass the code ("4") or the
      *  human label it saw in get_vehicle_state ("D"/"d"). Returns the code, or null when the
@@ -2152,6 +2229,15 @@ class AgentTools @Inject constructor(
                 Built.Value(ActionDef(command = "yandex_music", displayName = "Я.Музыка",
                     kind = "yandex_music", payload = JSONObject().put("mode", mode).toString()))
             }
+            "youtube" -> {
+                val query = a.optString("query").trim()
+                if (query.isEmpty()) return Built.Error("не указано, что включить на YouTube (поле query)")
+                val mode = a.optString("mode").trim().takeIf { it == "search" } ?: "play"
+                Built.Value(ActionDef(command = "", displayName = "YouTube: $query", kind = "youtube",
+                    payload = JSONObject().put("mode", mode).put("query", query).toString()))
+            }
+            "go_home" -> Built.Value(
+                ActionDef(command = "", displayName = "Домой", kind = "go_home"))
             "sentry" -> {
                 val on = requireBoolArg(a, "on") ?: return Built.Error("не указано состояние охранного режима")
                 Built.Value(ActionDef(command = "sentry",

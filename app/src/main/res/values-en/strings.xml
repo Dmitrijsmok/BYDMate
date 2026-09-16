@@ -49,7 +49,7 @@
     <string name="settings_display_offset_y_desc">Window position: 0 - top, 50 - center, 100 - bottom</string>
     <string name="settings_display_scale">Scale</string>
     <string name="settings_display_scale_desc">UI size: lower value - smaller elements and more map in the window</string>
-    <string name="settings_display_scale_direct_hint">Scale applies only in the Factory projection mode. In Extended the app always renders at its native size.</string>
+    <string name="settings_display_scale_direct_hint">To apply the new scale, turn the cluster output off and on again.</string>
     <!-- Steering-wheel button names (cluster trigger picker) -->
     <string name="steering_button_right_star">Right star</string>
     <string name="steering_button_left_star">Left star</string>
@@ -521,7 +521,7 @@
     <string name="widget_trash_release">release - widget hidden</string>
     <string name="widget_trash_hint">drag here to hide</string>
     <string name="dashboard_vehicle_data_offline">No vehicle data</string>
-    <string name="dashboard_adb_offline">ADB is not responding</string>
+    <string name="dashboard_adb_offline">Car data unavailable</string>
     <string name="dashboard_diplus_offline">DiPlus is not responding</string>
     <string name="dashboard_status_online">Online</string>
     <string name="dashboard_status_offline">Offline</string>
@@ -870,6 +870,18 @@
     <string name="auto_act_temp_20c">Temp 20°C</string>
     <string name="auto_act_temp_22c">Temp 22°C</string>
     <string name="auto_act_temp_25c">Temp 25°C</string>
+    <string name="auto_act_fan_1">Fan 1</string>
+    <string name="auto_act_fan_2">Fan 2</string>
+    <string name="auto_act_fan_3">Fan 3</string>
+    <string name="auto_act_fan_4">Fan 4</string>
+    <string name="auto_act_fan_5">Fan 5</string>
+    <string name="auto_act_fan_6">Fan 6</string>
+    <string name="auto_act_fan_7">Fan 7</string>
+    <string name="auto_act_wind_face">Airflow: face</string>
+    <string name="auto_act_wind_face_feet">Airflow: face and feet</string>
+    <string name="auto_act_wind_feet">Airflow: feet</string>
+    <string name="auto_act_wind_feet_windshield">Airflow: feet and windshield</string>
+    <string name="auto_act_wind_windshield">Airflow: windshield</string>
     <string name="auto_act_recirculation">Recirculation</string>
     <string name="auto_act_fresh_air">Fresh Air</string>
     <string name="auto_act_windshield_defog_on">Windshield Defog On</string>
@@ -993,7 +1005,7 @@
     <string name="voice_listening">Listening</string>
     <string name="voice_thinking">Thinking</string>
     <string name="voice_error_model_missing">Voice model is not downloaded. Get it in Settings, Voice agent section.</string>
-    <string name="voice_error_lang_not_ru">Voice commands understand Russian speech only. Set Voice language to Russian in Settings.</string>
+    <string name="voice_error_lang_not_ru">Voice commands understand Russian speech only. In Settings → Application pick Language: Русский.</string>
     <string name="voice_block_park_required">Park required</string>
 
     <!-- GigaAM v3: free-form Russian speech recognition (offline) -->
@@ -1020,7 +1032,7 @@
     <!-- TTS: offline synthesis of agent replies (Phase 2) -->
     <string name="settings_tts_header">Agent replies</string>
     <string name="settings_tts_toggle">Speak agent replies aloud</string>
-    <string name="settings_tts_subtitle">Offline speech synthesis, Russian voice</string>
+    <string name="settings_tts_subtitle">The agent answers aloud, works without the internet.</string>
     <string name="settings_tts_model_delete">Delete</string>
     <string name="settings_tts_download_failed">Failed to download voice</string>
     <string name="settings_voice_volume_hint">Reply volume is controlled by the system Voice channel: steering-wheel volume buttons or the car\'s Sound settings</string>
@@ -1047,7 +1059,7 @@
 
     <!-- TTS: keys for online voices (Wave N) -->
     <string name="settings_tts_keys_header">Keys for online voices</string>
-    <string name="settings_tts_keys_openrouter_hint">The key and model are configured in AI connections.</string>
+    <string name="settings_tts_keys_openrouter_hint">The key and model are taken from Integrations → AI connections.</string>
     <string name="settings_minimax_provider_label">Provider</string>
     <string name="settings_minimax_provider_official">Official</string>
     <string name="settings_minimax_provider_fal">fal.ai</string>
@@ -1075,20 +1087,25 @@
     <string name="settings_agent_gender_male">Male</string>
     <string name="settings_agent_gender_female">Female</string>
     <string name="settings_agent_gender_hint">Applies to all voices: each source has a male and a female option</string>
+    <string name="settings_route_navigator_label">Navigator for routes</string>
+    <string name="settings_route_navigator_yandex">Yandex Navigator</string>
+    <string name="settings_route_navigator_dgis">2GIS</string>
+    <string name="settings_route_navigator_hint">Which app opens for routes and map search</string>
     <string name="settings_agent_memory_title">Driver memory</string>
     <string name="settings_agent_memory_hint">The agent remembers your name and lasting preferences when you tell it to. Say “forget …” to drop a single fact</string>
     <string name="settings_agent_memory_empty">Nothing remembered yet</string>
     <string name="settings_agent_memory_forget_all">Forget everything</string>
+    <string name="settings_agent_memory_forget_one">Forget</string>
 
     <!-- Voice agent (Phase 1) -->
     <string name="agent_enable_title">Voice AI agent</string>
-    <string name="agent_enable_desc">Free-form questions and commands via an LLM (OpenRouter). Uses the API key from Integrations.</string>
+    <string name="agent_enable_desc">Answers complex questions and commands in its own words. Needs a key: set it in Integrations.</string>
     <string name="agent_model_shared_caption">The OpenRouter key and model for the agent are configured in Integrations</string>
     <string name="agent_chat_open">Agent chat (debug)</string>
     <string name="agent_test_model_button">Test model</string>
     <string name="agent_test_model_running">Testing model...</string>
     <string name="agent_test_model_result">%1$s: answered in %2$.1f s - \"%3$s\"</string>
-    <string name="agent_test_model_disabled">Error: agent disabled or not configured</string>
+    <string name="agent_test_model_disabled">First turn the agent on and set a key in Integrations.</string>
     <string name="agent_exa_api_key_label">Exa API Key (web search)</string>
 
     <!-- Voice agent (Wave J): multi-provider LLM connections -->
@@ -1105,7 +1122,7 @@
     <string name="settings_conn_model_label">Model (id)</string>
     <string name="settings_conn_check">Check</string>
     <string name="settings_conn_checking">Checking…</string>
-    <string name="settings_zai_hint">Free glm-4.7-flash, recommended as the primary model</string>
+    <string name="settings_zai_hint">Free option, replies more slowly. Good as a backup.</string>
     <string name="settings_custom_hint">Any OpenAI-compatible API. A preset fills in the URL and model, bring your own key.</string>
     <string name="settings_custom_extra_json_label">Extra request parameters (JSON)</string>
     <string name="settings_custom_extra_json_hint">Merged into every request to this server, for example {\"thinking\": false} to switch reasoning off</string>
@@ -1310,9 +1327,10 @@
     <string name="tech_hint_power">How much energy the battery is giving out right now. Plus: the car is spending it (acceleration, climate). Minus: the battery is taking energy in, either regeneration while braking or charging from a charger. Second number: how fast the charge is draining, percent per hour. When parked this is the onboard electronics draw.</string>
     <string name="tech_hint_12v">Voltage of the ordinary 12-volt battery that powers the electronics. With the car running it is 13…14.5 V. If it is below 12 V while parked, the battery is getting weak.</string>
     <string name="tech_hint_insulation">Resistance between the high-voltage battery and the body. The higher the better: a few megaohms is normal. Falling towards 0.5 MΩ and below means insulation is damaged somewhere, time for a service.</string>
-    <string name="tech_hint_bms_limits">The ceiling the battery controller allows right now: how much to take in while charging (a charger may give less) and how much to give out for acceleration. On a cold or nearly full battery both values are lower: that is why charging is slower and regeneration weaker in winter.</string>
+    <string name="tech_hint_bms_limits">How much the battery is ready to take in while charging and to give out continuously, according to its controller. During a short burst of acceleration the car draws more than the available figure, and that is normal: the peak limit is higher for a few seconds. On a cold or nearly full battery both values are lower: in winter charging is slower and regeneration weaker.</string>
     <string name="tech_hint_cells">The battery is made of hundreds of cells. Shown are the weakest one, the strongest one and the difference between them. A difference up to 20…30 mV is normal. A permanently large difference means one cell is ageing faster than the others.</string>
     <string name="tech_hint_motors">Temperature of the electric motors and of the inverters that drive them. In ordinary driving up to 60…80°. During long acceleration or towing they get hotter and the car reduces power itself until they cool down.</string>
     <string name="tech_hint_compressor">How many watts the air conditioning and heat pump compressor draws. It is the main consumer besides the motors: in summer heat and in winter frost it noticeably eats into the range.</string>
     <string name="tech_hint_tyres">Pressure and temperature of each wheel from the sensors in the tyres. Pressure rises by 0.2…0.3 bar as the tyres warm up on a trip, that is normal. If one wheel is noticeably lower than the others, check whether it is losing air.</string>
+    <string name="tech_order_hint">Hold a card to change the order</string>
 </resources>

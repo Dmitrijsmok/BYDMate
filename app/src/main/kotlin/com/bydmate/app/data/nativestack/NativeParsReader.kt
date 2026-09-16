@@ -8,6 +8,7 @@ import com.bydmate.app.data.vehicle.BatchReadItem
 import com.bydmate.app.data.vehicle.HelperClient
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
@@ -28,8 +29,15 @@ class NativeParsReader @Inject constructor(
     private val gate: BatchReadGate,
 ) : ParsReader {
 
-    private val batchItems: List<BatchReadItem> =
-        FidMap.entries.map { BatchReadItem(it.transact, it.device, it.fid) }
+    /**
+     * Batch request for one poll tick, built against [table] — the snapshot of
+     * [FidAddresses] this fetch works from. Same entries in the same order, so the reply
+     * still lines up with [FidMap.entries] index by index.
+     */
+    private fun batchItems(table: ResolvedFidTable): List<BatchReadItem> = FidMap.entries.map {
+        val address = table.address(it.field)
+        BatchReadItem(it.transact, address.device, address.fid)
+    }
 
     /**
      * Last driveMode the car actually reported. The fid answers 0 while a mode switch is in
@@ -41,33 +49,42 @@ class NativeParsReader @Inject constructor(
     /** Keeps the raw tech-panel line to one per 5 s on the 1 s DRIVE cadence. */
     private val techLogThrottle = com.bydmate.app.data.autoservice.LogThrottle(5_000L)
 
-    override suspend fun fetch(): DiParsData? = when (gate.mode()) {
-        BatchMode.ACTIVE -> fetchViaBatch() ?: fetchViaAdb()
-        BatchMode.OFF -> fetchViaAdb()
-        BatchMode.VALIDATING -> {
-            val adb = fetchViaAdb()
-            val batchRaw = helperClient.readBatch(batchItems)
-            if (batchRaw == null) {
-                gate.recordBatchUnavailable()
-            } else {
-                gate.recordComparison(
-                    adb,
-                    // Shadow snapshot: compared, never returned — so it must not update
-                    // any state a returned snapshot depends on (see stickyDriveMode).
-                    assembleSnapshot(
-                        decodeBatch(batchRaw),
-                        windowRrRawFromBatch(batchRaw),
-                        rememberSticky = false,
-                    ),
-                )
+    /**
+     * One snapshot of [FidAddresses] per fetch. The global table is @Volatile and the
+     * catalog resolution can install a new one at any moment: taking the address from one
+     * table and the scale from another would decode a word read at the old address with
+     * the new scale (a 10x odometer glitch for one tick).
+     */
+    override suspend fun fetch(): DiParsData? {
+        val table = FidAddresses.table
+        return when (gate.mode()) {
+            BatchMode.ACTIVE -> fetchViaBatch(table) ?: fetchViaAdb(table)
+            BatchMode.OFF -> fetchViaAdb(table)
+            BatchMode.VALIDATING -> {
+                val adb = fetchViaAdb(table)
+                val batchRaw = helperClient.readBatch(batchItems(table))
+                if (batchRaw == null) {
+                    gate.recordBatchUnavailable()
+                } else {
+                    gate.recordComparison(
+                        adb,
+                        // Shadow snapshot: compared, never returned — so it must not update
+                        // any state a returned snapshot depends on (see stickyDriveMode).
+                        assembleSnapshot(
+                            decodeBatch(batchRaw, table),
+                            windowRrRawFromBatch(batchRaw),
+                            rememberSticky = false,
+                        ),
+                    )
+                }
+                adb // the proven path stays primary until promotion
             }
-            adb // the proven path stays primary until promotion
         }
     }
 
-    private suspend fun fetchViaBatch(): DiParsData? {
-        val pairs = helperClient.readBatch(batchItems) ?: return null
-        return assembleSnapshot(decodeBatch(pairs), windowRrRawFromBatch(pairs))
+    private suspend fun fetchViaBatch(table: ResolvedFidTable): DiParsData? {
+        val pairs = helperClient.readBatch(batchItems(table)) ?: return null
+        return assembleSnapshot(decodeBatch(pairs, table), windowRrRawFromBatch(pairs))
     }
 
     /** Raw pre-decode windowRR value when the read itself succeeded, else null. */
@@ -82,12 +99,12 @@ class NativeParsReader @Inject constructor(
      * on the raw IEEE-754 bits — mirroring AutoserviceClient.getInt/getFloat +
      * the per-entry decode in fetchViaAdb.
      */
-    private fun decodeBatch(pairs: List<Pair<Int, Int>>): Map<String, Any?> {
+    private fun decodeBatch(pairs: List<Pair<Int, Int>>, table: ResolvedFidTable): Map<String, Any?> {
         val decoded = mutableMapOf<String, Any?>()
         FidMap.entries.forEachIndexed { i, entry ->
             val (status, word) = pairs[i]
             val value: Any? = if (status != 0) null else when (entry.transact) {
-                5 -> decodeTx5(entry, SentinelDecoder.decodeInt(word))
+                5 -> decodeTx5(entry, SentinelDecoder.decodeInt(word), table)
                 7 -> SentinelDecoder.parseFloatFromShellInt(word)?.let { f ->
                     ParamDecoder.decodeFloat(java.lang.Float.floatToRawIntBits(f), entry.decoder)
                 }
@@ -95,16 +112,17 @@ class NativeParsReader @Inject constructor(
             }
             decoded[entry.field] = value
         }
-        logTechRaw(pairs)
+        logTechRaw(pairs, decoded)
         return decoded
     }
 
     /**
      * One throttled line with the RAW (pre-sentinel) words of every tech-panel fid, so a
      * single test drive settles the unproven ones (motor currents, battery temp extremes)
-     * without another build. Values the batch failed to read print as "?".
+     * without another build. Values the batch failed to read print as "?". The motor split is
+     * the only decoded value here: it must read exactly as the «Техника» card renders it.
      */
-    private fun logTechRaw(pairs: List<Pair<Int, Int>>) {
+    private fun logTechRaw(pairs: List<Pair<Int, Int>>, decoded: Map<String, Any?>) {
         if (!techLogThrottle.shouldLog("tech")) return
         fun raw(field: String): String {
             val i = FidMap.entries.indexOfFirst { it.field == field }
@@ -128,11 +146,12 @@ class NativeParsReader @Inject constructor(
                 "comp=${raw("compressorW")} ac=${raw("acStatus")} " +
                 "tyT=${raw("tyreTempFL")}/${raw("tyreTempFR")}/${raw("tyreTempRL")}/${raw("tyreTempRR")} " +
                 "acc=${raw("pedalAccel")} brk=${raw("pedalBrake")} " +
-                "cF=${raw("motorCurrentFront")} cR=${raw("motorCurrentRear")}"
+                "cF=${raw("motorCurrentFront")} cR=${raw("motorCurrentRear")} " +
+                "split=${splitText(decoded)}"
         )
     }
 
-    private suspend fun fetchViaAdb(): DiParsData? {
+    private suspend fun fetchViaAdb(table: ResolvedFidTable): DiParsData? {
         if (!autoservice.isAvailable()) return null
 
         // Decoded values keyed by FidEntry.field.
@@ -144,17 +163,18 @@ class NativeParsReader @Inject constructor(
         var windowRrRaw: Int? = null
 
         for (entry in FidMap.entries) {
+            val address = table.address(entry.field)
             val value: Any? = when {
                 entry === windowRrEntry -> {
-                    windowRrRaw = autoservice.getIntRaw(entry.device, entry.fid)
-                    decodeTx5(entry, windowRrRaw?.let { SentinelDecoder.decodeInt(it) })
+                    windowRrRaw = autoservice.getIntRaw(address.device, address.fid)
+                    decodeTx5(entry, windowRrRaw?.let { SentinelDecoder.decodeInt(it) }, table)
                 }
-                entry.transact == 5 -> decodeTx5(entry, autoservice.getInt(entry.device, entry.fid))
+                entry.transact == 5 -> decodeTx5(entry, autoservice.getInt(address.device, address.fid), table)
                 entry.transact == 7 -> {
                     // AutoserviceClient.getFloat already rejects float sentinels (-1.0f, NaN, Inf).
                     // Convert Float back to its raw IEEE-754 bits so ParamDecoder.decodeFloat
                     // can apply its SentinelDecoder path (which also rejects -1.0f etc.).
-                    val f = autoservice.getFloat(entry.device, entry.fid)
+                    val f = autoservice.getFloat(address.device, address.fid)
                     if (f == null) null
                     else ParamDecoder.decodeFloat(java.lang.Float.floatToRawIntBits(f), entry.decoder)
                 }
@@ -170,16 +190,22 @@ class NativeParsReader @Inject constructor(
     // plain out-of-range number (Dolphin cabin temp, #180) left no trace in any dump.
     private val rejectLog = com.bydmate.app.data.autoservice.LogThrottle()
 
-    /** tx=5 decode tail, shared by the plain reads, the daemon batch and the raw windowRR sample. */
-    private fun decodeTx5(entry: FidEntry, raw: Int?): Any? = raw?.let {
+    /**
+     * tx=5 decode tail, shared by the plain reads, the daemon batch and the raw windowRR
+     * sample. [table] is the fetch's own snapshot: the scale must be the one that goes with
+     * the address the word was read from.
+     */
+    private fun decodeTx5(entry: FidEntry, raw: Int?, table: ResolvedFidTable): Any? = raw?.let {
         val value = when (entry.decoder) {
-            Decoder.INT_SCALED -> ParamDecoder.decodeScaled(it, entry.scale)
+            Decoder.INT_SCALED -> ParamDecoder.decodeScaled(it, table.scale(entry.field))
             else               -> ParamDecoder.decodeInt(it, entry.decoder)
         }
         if (value == null && rejectLog.shouldLog(entry.field)) {
+            val address = table.address(entry.field)
             android.util.Log.w(
                 "NativeParsReader",
-                "decode rejected: ${entry.field} dev=${entry.device} fid=${entry.fid} decoder=${entry.decoder} raw=$it"
+                "decode rejected: ${entry.field} dev=${address.device} " +
+                    "fid=${address.fid} decoder=${entry.decoder} raw=$it"
             )
         }
         value
@@ -344,10 +370,12 @@ class NativeParsReader @Inject constructor(
             autoWipers          = autoWipers,
             bmsState            = bmsState,
             insulationKohm      = ranged("insulationKohm", 0..65000),
-            motorTempFront      = ranged("motorTempFront", -50..150),
-            motorTempRear       = ranged("motorTempRear", -50..150),
-            inverterTempFront   = ranged("inverterTempFront", -50..150),
-            inverterTempRear    = ranged("inverterTempRear", -50..150),
+            // -40 is the scale floor the firmware reports for a motor/inverter the car does not
+            // have (#186: FWD Song Plus showed -40 for the rear pair); treat it as absent.
+            motorTempFront      = ranged("motorTempFront", -39..150),
+            motorTempRear       = ranged("motorTempRear", -39..150),
+            inverterTempFront   = ranged("inverterTempFront", -39..150),
+            inverterTempRear    = ranged("inverterTempRear", -39..150),
             hvVoltage           = hvVoltage,
             hvCurrent           = hvCurrent,
             batteryPowerW       = batteryPowerW,
@@ -355,6 +383,8 @@ class NativeParsReader @Inject constructor(
             bmsMaxDischargeKw   = ranged("bmsMaxDischargeKw", 0..1000),
             motorRpmFront       = ranged("motorRpmFront", -20000..20000),
             motorRpmRear        = ranged("motorRpmRear", -20000..20000),
+            motorCurrentFront   = motorAmps(decoded, "motorCurrentFront"),
+            motorCurrentRear    = motorAmps(decoded, "motorCurrentRear"),
             compressorW         = ranged("compressorW", 0..20000),
             tyreTempFL          = ranged("tyreTempFL", -50..150),
             tyreTempFR          = ranged("tyreTempFR", -50..150),
@@ -391,3 +421,25 @@ class NativeParsReader @Inject constructor(
         val windowRrIndex: Int = FidMap.entries.indexOf(windowRrEntry)
     }
 }
+
+/**
+ * Motor current as DiParsData holds it: the decoded reading, dropped when it falls outside the
+ * physical envelope. Both motors share the traction bus voltage, so the two magnitudes alone
+ * give the front/rear power split.
+ */
+private fun motorAmps(decoded: Map<String, Any?>, field: String): Float? =
+    (decoded[field] as? Double)?.takeIf { abs(it) <= MAX_MOTOR_CURRENT_A }?.toFloat()
+
+/** The split as the «Техника» card computes it, from the very values the card is given. */
+private fun splitText(decoded: Map<String, Any?>): String =
+    when (
+        val split = motorSplitPercent(
+            motorAmps(decoded, "motorCurrentFront"),
+            motorAmps(decoded, "motorCurrentRear"),
+        )
+    ) {
+        null, MotorSplit.Idle -> "-"
+        is MotorSplit.Share -> "${split.frontPercent}%/${split.rearPercent}%"
+    }
+
+private const val MAX_MOTOR_CURRENT_A = 2000.0

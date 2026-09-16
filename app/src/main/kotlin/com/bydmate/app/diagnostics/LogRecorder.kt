@@ -338,7 +338,7 @@ class LogRecorder internal constructor(
             "-s", "BootReceiver:*",
             "TrackingService:*", "TripTracker:*",
             "HistoryImporter:*", "EnergyDataReader:*",
-            "AutoserviceClient:*", "AdbOnDeviceClient:*",
+            "AutoserviceClient:*", "AdbOnDevice:*",
             "IternioTelemetryClient:*", "BatteryHealthRepository:*",
             "ChargesViewModel:*", "ChargeRepository:*",
             // v3.0.3: widen coverage to write/daemon/automation subsystems
@@ -373,7 +373,11 @@ class LogRecorder internal constructor(
             // plus the protocol client, which reports the TLS upgrade and the handshake outcome.
             "AdbRestore:*", "AdbProtocolClient:*",
             // Window channel probe verdicts (percent family vs CTRL, #79/#64).
-            "WindowChannelRouter:*"
+            "WindowChannelRouter:*",
+            // Firmware fid catalog: where it came from and every address it moved.
+            "FidCatalog:*",
+            // Agent wave: one line per model round, tool call and finished turn.
+            "AgentLoop:*"
         )
     }
 }

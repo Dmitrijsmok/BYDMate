@@ -29,10 +29,12 @@ import com.bydmate.app.cluster.ClusterProjectionManager
 import com.bydmate.app.cluster.MAX_PROJECTION_PCT
 import com.bydmate.app.cluster.cameraNeedsCompositor
 import com.bydmate.app.cluster.geometryFor
+import com.bydmate.app.data.camera.CameraStateMonitor
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.autoservice.SentinelDecoder
 import com.bydmate.app.data.vehicle.BatchReadItem
 import com.bydmate.app.data.vehicle.HelperClient
+import com.bydmate.app.ui.widget.WidgetController
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -80,6 +82,8 @@ class BlindSpotController @Inject constructor(
     private val helper: HelperClient,
     /** Shared with [ClusterProjectionManager] — one instance, one timeline (#135). */
     private val clusterJournal: ClusterJournal,
+    /** Tells when the factory 360 view is on screen; its windows own the screen, not ours. */
+    private val cameraStateMonitor: CameraStateMonitor,
 ) {
     private val probe = AvmCameraProbe()
     private val telemetry = BlindSpotTelemetryGate()
@@ -120,6 +124,8 @@ class BlindSpotController @Inject constructor(
     /** elapsedRealtime of the last transition to a shown side; the stall watchdog counts from here. */
     private var shownAt = 0L
     private var lastRequestedSide = BlindSpotSide.NONE
+    /** Last seen state of the factory 360 view, so only the transition is logged. */
+    private var lastNativeCameraForeground = false
     private var cameraOpen = false
     private var compositorPowered = false   // last CONFIRMED compositor state
     private var compositorTarget = false    // last requested state, in flight or applied
@@ -234,6 +240,15 @@ class BlindSpotController @Inject constructor(
         // A missing gear is not "not reverse": fall back to the last snapshot that read cleanly,
         // which the loss watchdog above keeps younger than 3 s.
         val gearIsReverse = (sample?.gear ?: state.lastValid?.gear) == BLIND_SPOT_GEAR_REVERSE
+        val nativeCameraForeground = cameraStateMonitor.active.value
+        if (nativeCameraForeground != lastNativeCameraForeground) {
+            lastNativeCameraForeground = nativeCameraForeground
+            val verb = if (nativeCameraForeground) "hidden" else "released"
+            Log.i(TAG, "native camera foreground=$nativeCameraForeground: blind-spot $verb")
+            clusterJournal.append(
+                "camera: native 360 ${if (nativeCameraForeground) "up, hide" else "down, release"}"
+            )
+        }
         val decision = decideBlindSpot(
             BlindSpotInput(
                 blink = sample?.blink,
@@ -241,6 +256,7 @@ class BlindSpotController @Inject constructor(
                 gearIsReverse = gearIsReverse,
                 thresholdKmh = prefs.thresholdKmh,
                 telemetryAgeMs = state.ageMs,
+                nativeCameraForeground = nativeCameraForeground,
             )
         )
 
@@ -527,6 +543,7 @@ class BlindSpotController @Inject constructor(
         shownSide = side
         if (side != BlindSpotSide.NONE) shownAt = SystemClock.elapsedRealtime()
         Log.i(TAG, "show $previous -> $side")
+        syncWidgetSuppression()
         if (side == BlindSpotSide.LEFT) {
             requestCompositor(true)
         } else {
@@ -534,6 +551,18 @@ class BlindSpotController @Inject constructor(
             if (previous == BlindSpotSide.LEFT) requestCompositor(false)
         }
         if (side != BlindSpotSide.RIGHT) pipWindow?.setGlow(false)
+    }
+
+    /**
+     * Keeps the floating dashboard widget out of the camera image: it is drawn above our window
+     * on the main screen (VadimV, 2026-09-12). Nothing is persisted — the release just lets the
+     * widget's own rules decide again, and a teardown releases it too, so it can never stay hidden.
+     */
+    private fun syncWidgetSuppression() {
+        WidgetController.setSuppressed(
+            WIDGET_SUPPRESS_REASON,
+            blindSpotCoversMainScreen(shownSide, clusterOnMainScreen),
+        )
     }
 
     /** Fire-and-forget compositor switch for the show path; one job at a time. */
@@ -649,6 +678,8 @@ class BlindSpotController @Inject constructor(
             // No windows left, so nothing is shown regardless of where the flips left them.
             shownSide = BlindSpotSide.NONE
             lastRequestedSide = BlindSpotSide.NONE
+            // Nothing is shown any more, so the widget comes back even if applyShow above failed.
+            syncWidgetSuppression()
             windowsAttachedAt = 0L
             cameraOpenedAt = 0L
             coolingSince = 0L
@@ -890,6 +921,8 @@ class BlindSpotController @Inject constructor(
 
     private companion object {
         const val TAG = "BlindSpot"
+        /** Suppression key handed to WidgetController while a window covers the main screen. */
+        const val WIDGET_SUPPRESS_REASON = "blind-spot camera"
 
         // Telemetry read through the daemon (Leopard 3, on-car 2026-07-31).
         const val TX_INT = 5

@@ -32,6 +32,7 @@ import com.bydmate.app.R
 import com.bydmate.app.cluster.ClusterProjectionManager
 import com.bydmate.app.data.automation.AutomationEngine
 import com.bydmate.app.data.remote.AlicePollingManager
+import com.bydmate.app.data.nativestack.FidCatalogManager
 import com.bydmate.app.data.nativestack.ParsReader
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.IternioIntervalPolicy
@@ -41,6 +42,7 @@ import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.data.remote.IternioTelemetryClient
 import com.bydmate.app.data.remote.WebhookTelemetryClient
 import com.bydmate.app.data.repository.ChargeRepository
+import com.bydmate.app.helper.HelperBinderHolder
 import com.bydmate.app.domain.tracker.TripState
 import com.bydmate.app.domain.tracker.TripTracker
 import com.bydmate.app.domain.calculator.BigNumberCalculator
@@ -100,6 +102,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var sharedAdaptiveLoop: com.bydmate.app.data.loop.SharedAdaptiveLoop
     @Inject lateinit var tripRecorder: com.bydmate.app.data.trips.TripRecorder
     @Inject lateinit var helperBootstrap: com.bydmate.app.data.vehicle.HelperBootstrap
+    @Inject lateinit var fidCatalogManager: FidCatalogManager
     @Inject lateinit var helperClient: com.bydmate.app.data.vehicle.HelperClient
     @Inject lateinit var continuousAsr: com.bydmate.app.voice.ContinuousAsr
     @Inject lateinit var asrLoadGuard: com.bydmate.app.voice.AsrLoadGuard
@@ -499,6 +502,31 @@ class TrackingService : Service(), LocationListener {
         // HUD output resumes with the service on cars where the user enabled it.
         hudController.startIfEnabled()
 
+        // A daemon can be spawned by any ensureRunning() caller (GrantSelfHeal reassert, Settings,
+        // cluster) after the startup resolve already failed with "daemon unreachable" — crazyhack's
+        // Song Plus, build 456. The binder arrival is the one signal every spawn path shares.
+        // installOnAccepted, not a plain assignment: a re-announce may have started this very
+        // process and been accepted before the service existed, and every later broadcast is
+        // rejected as already_held — the daemon would never learn we hold it.
+        HelperBinderHolder.installOnAccepted {
+            // A binder that lands while a spawn failure is on record is a late arrival: the
+            // poll window gave up on this daemon, the token stayed armed and the broadcast
+            // was adopted anyway. Drop the failure so the dump stops naming DAEMON_SILENT
+            // next to a healthy daemon.
+            if (helperBootstrap.lastSpawnFailure() != null) {
+                Log.i(TAG, "helper binder arrived after spawn window; adopted")
+                helperBootstrap.clearLastSpawnFailure()
+            }
+            if (fidCatalogManager.resolvePending) {
+                Log.i(TAG, "fid resolve: daemon binder arrived, retrying")
+                resolveFidCatalog()
+            }
+            // Tell the daemon we hold its binder so it stops re-announcing it (#64/#148).
+            // Must not block the receiver thread — registerClient is a binder transact.
+            serviceScope.launch { helperClient.registerClient() }
+        }
+        startFidResolveRetryTimer()
+
         // Reset the live trip-distance companion flow — stale value from a prior
         // service instance in the same process must not leak to the widget before
         // the first polling tick overwrites it.
@@ -586,6 +614,9 @@ class TrackingService : Service(), LocationListener {
                 val ok = helperBootstrap.ensureRunning()
                 Log.i(TAG, "HelperBootstrap.ensureRunning → $ok")
                 ChainLog.append(this@TrackingService, "Helper daemon: ${if (ok) "alive" else "unreachable"}")
+                // Not gated on ok: a cached catalog resolves over the ADB read path without the
+                // daemon, and without one the call just returns and the respawn path retries.
+                resolveFidCatalog()
                 // Reconcile the native-assistant package state with the toggle in BOTH
                 // directions once the daemon is live, so a drift self-heals. An earlier
                 // enable/disable can silently miss the daemon (bootstrap race, or the daemon
@@ -766,6 +797,43 @@ class TrackingService : Service(), LocationListener {
         // (up to ~85 MB on early-adopter installs). No-op once deleted.
         serviceScope.launch(Dispatchers.IO) {
             runCatching { File(filesDir, "vosk").deleteRecursively() }
+        }
+    }
+
+    /**
+     * Reads the firmware's fid catalog and re-registers the subscriptions if it moved any of
+     * their addresses. On its own IO coroutine, because it ends in a probe round on the car
+     * and must not hold up the caller. Until it lands every reader uses the compiled
+     * constants. Called from the startup chain, from the watchdog respawn (so a daemon that
+     * was absent at startup still gets read once it comes back), from the binder-arrival
+     * callback and from [startFidResolveRetryTimer].
+     */
+    private fun resolveFidCatalog() {
+        serviceScope.launch {
+            fidCatalogManager.ensureResolved()
+            fidSubscriptionManager.restartForResolvedAddresses()
+        }
+    }
+
+    /**
+     * Retry timer for the fid catalog. Lives OUTSIDE the poll flow on purpose: the flow only
+     * emits when the autoservice probe passes, and on a car whose probe fids the catalog would
+     * move the probe cannot pass until the catalog is resolved — a retry on the poll tick could
+     * never fire there (crazyhack, Song Plus, build 456). Bounded by MAX_RESOLVE_ATTEMPTS in
+     * FidCatalogManager; the respawn path keeps its own attempt beyond that budget.
+     */
+    private fun startFidResolveRetryTimer() {
+        serviceScope.launch {
+            while (fidCatalogManager.resolveOpen) {
+                delay(FidCatalogManager.RETRY_INTERVAL_MS)
+                // Only after the startup attempt has run: an attempt spent while ensureRunning() is
+                // still spawning the daemon would be a wasted one.
+                if (fidCatalogManager.resolvePending) {
+                    fidCatalogManager.ensureResolved()
+                    fidSubscriptionManager.restartForResolvedAddresses()
+                }
+            }
+            Log.i(TAG, "fid resolve: retry timer done (${fidCatalogManager.resolveStatus})")
         }
     }
 
@@ -1156,6 +1224,7 @@ class TrackingService : Service(), LocationListener {
         // (WorkManager restarts the service into the same process, reusing the
         // singleton). Cancelling here left confirm-action callbacks dead until
         // process death.
+        HelperBinderHolder.installOnAccepted(null)
         serviceScope.cancel()
 
         // Remove GPS listener to prevent leak
@@ -1329,6 +1398,9 @@ class TrackingService : Service(), LocationListener {
                                 // back usually means the ADB channel under it is gone (port closed by
                                 // a reboot).
                                 adbRestoreManager.attemptIfNeeded(if (respawned) "helper_respawned" else "watchdog")
+                                // A daemon that just came back is also the first chance to read
+                                // the fid catalog when it was unreachable at startup.
+                                if (respawned) resolveFidCatalog()
                             }
                         }
                     }
@@ -1510,11 +1582,19 @@ class TrackingService : Service(), LocationListener {
                     // Self-grant while the classic port still answers, regardless of the restore
                     // toggle: on firmwares that close the port at every reboot this is the last
                     // moment a shell command can reach us, and the permission is what lets the
-                    // app turn wireless debugging on later. Idempotent.
-                    val secureSettings = adbOnDeviceClient.grantWriteSecureSettings("com.bydmate.app")
-                    val held = checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) ==
+                    // app turn wireless debugging on later. Skipped once held: the extra `pm grant`
+                    // on every service start is the only new traffic on the classic socket since
+                    // v3.13.1, and on a trinket unit the daemon spawn stopped being dispatched (#64).
+                    val alreadyHeld = checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) ==
                         PackageManager.PERMISSION_GRANTED
-                    Log.i(TAG, "WRITE_SECURE_SETTINGS grant: $secureSettings held=$held")
+                    if (alreadyHeld) {
+                        Log.i(TAG, "WRITE_SECURE_SETTINGS grant: skipped, already held")
+                    } else {
+                        val secureSettings = adbOnDeviceClient.grantWriteSecureSettings("com.bydmate.app")
+                        val held = checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) ==
+                            PackageManager.PERMISSION_GRANTED
+                        Log.i(TAG, "WRITE_SECURE_SETTINGS grant: $secureSettings held=$held")
+                    }
                 } else {
                     Log.w(TAG, "ADB connect refused — camera detection may be inactive until appop is granted manually")
                     // Trigger 1: the port is dead on service start — try to bring it back.

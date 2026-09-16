@@ -16,6 +16,7 @@ import android.provider.MediaStore
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.bydmate.app.R
+import com.bydmate.app.cluster.ClusterMode
 import com.bydmate.app.cluster.ClusterVoiceControl
 import com.bydmate.app.data.local.entity.ActionDef
 import com.bydmate.app.data.remote.DiParsData
@@ -30,6 +31,7 @@ import com.bydmate.app.split.SplitStartResult
 import com.bydmate.app.util.appLocalizedContext
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
@@ -183,6 +185,9 @@ class ActionDispatcher @Inject constructor(
          * a call. NOT windows/climate/sunroof/door-lock/front-trunk (low harm or
          * already speed-gated). Pure function — unit-testable without Android.
          */
+        /** Projection failed because the cluster daemon is restarting: retriable, not broken. */
+        internal const val DAEMON_RESTART_REASON = "служебный процесс перезапускается"
+
         internal fun isDangerousAction(action: ActionDef): Boolean = when (action.kind) {
             "param" -> isDoorUnlockCommand(action.command) || isRearTrunkOpenCommand(action.command)
             "sentry" -> action.payload == "0"
@@ -273,6 +278,10 @@ class ActionDispatcher @Inject constructor(
     private val notifCounter = AtomicInteger(USER_NOTIF_BASE_ID)
 
     // Test seam: real impl asks MediaSessionManager for active sessions via our listener component.
+    /** Test seam -- how long to wait for the cluster projection to actually come up. */
+    internal var clusterPollIntervalMs = 500L
+    internal var clusterPollAttempts = 10
+
     internal var activeMediaControllers: () -> List<MediaController> = {
         runCatching {
             val msm = context.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
@@ -343,17 +352,39 @@ class ActionDispatcher @Inject constructor(
 
     // --- cluster projection (steering-wheel star key path, via ClusterVoiceControl) ---
 
-    /** ClusterVoiceControl.apply() is fire-and-forget (async setMode under the manager's mutex,
-     *  like the star key) and never throws, so there is no synchronous success/failure to report
-     *  here beyond payload validation -- this stays fail-soft the same way dispatchSentry does. */
-    private fun dispatchClusterProjection(action: ActionDef): DispatchResult {
+    /**
+     * ClusterVoiceControl.apply() is fire-and-forget (async setMode under the manager's mutex,
+     * like the star key), so the only honest verdict comes from reading the mode back. We wait
+     * for it up to [clusterPollAttempts] x [clusterPollIntervalMs] and report a failure when the
+     * projection never reached the requested state.
+     *
+     * This applies to automation-origin dispatches too, by design: a rule whose "projection on"
+     * step silently did nothing must show up as a failed step, exactly like a rejected vehicle
+     * write. The gate semantics above (speed limits, CAN/SHELL blocking) are untouched -- this
+     * only changes what a dispatched-but-ineffective projection reports.
+     */
+    private suspend fun dispatchClusterProjection(action: ActionDef): DispatchResult {
         val on = when (action.payload) {
             "1" -> true
             "0" -> false
             else -> return DispatchResult(false, "Некорректное состояние проекции на приборку")
         }
+        val want = if (on) ClusterMode.FULLSCREEN else ClusterMode.OFF
         clusterVoiceControl.apply(on)
-        return DispatchResult(true)
+        repeat(clusterPollAttempts) {
+            if (clusterVoiceControl.projectionMode() == want) return DispatchResult(true)
+            delay(clusterPollIntervalMs)
+        }
+        if (clusterVoiceControl.projectionMode() == want) return DispatchResult(true)
+        val reason = if (clusterVoiceControl.lastFailure() == "daemon") {
+            DAEMON_RESTART_REASON
+        } else if (on) {
+            "проекция на приборку не включилась"
+        } else {
+            "проекция с приборки не убралась"
+        }
+        Log.w(TAG, "cluster projection did not reach $want: $reason")
+        return DispatchResult(false, reason)
     }
 
     /** "speak": say the payload text verbatim via the voice coordinator (orb + duck + TTS). */
@@ -616,14 +647,25 @@ class ActionDispatcher @Inject constructor(
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             return tryStartActivity(intent, "navigate_shortcut:$shortcut")
         }
-        // Free-text destination: open Navigator's map search (route needs coordinates,
+        // #190: which map app the user picked for routes and map search. 2GIS that is not
+        // installed falls back to Yandex for this action, and says so in the result reason.
+        val chosen = RouteNavigatorUris.normalize(
+            context.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null))
+        val fellBack = chosen == RouteNavigatorUris.DGIS &&
+            !isPackageInstalled(RouteNavigatorUris.DGIS_PACKAGE)
+        if (fellBack) Log.i(TAG, "navigate: 2gis not installed, falling back to yandex")
+        val navigator = if (fellBack) RouteNavigatorUris.YANDEX else chosen
+        val fallbackReason = if (fellBack) "2ГИС не установлен, открыт Яндекс Навигатор" else null
+        // Free-text destination: open the map search (route needs coordinates,
         // which the agent does not have for arbitrary addresses).
         val query = payload.optString("query").takeIf(String::isNotBlank)
         if (query != null) {
-            val intent = Intent(Intent.ACTION_VIEW,
-                Uri.parse("yandexnavi://map_search?text=${Uri.encode(query)}"))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            return tryStartActivity(intent, "navigate_search:$query")
+            return startNavigate(
+                navigator, RouteNavigatorUris.MODE_SEARCH,
+                RouteNavigatorUris.search(navigator, query),
+                "navigate_search:$query", fallbackReason,
+            )
         }
         val lat = payload.optDouble("lat", Double.NaN)
         val lon = payload.optDouble("lon", Double.NaN)
@@ -631,18 +673,37 @@ class ActionDispatcher @Inject constructor(
         // Show-only mode: drop a pin instead of building a route ("где находится X").
         if (payload.optBoolean("show", false)) {
             val desc = payload.optString("label").takeIf(String::isNotBlank)
-            val showUri = buildString {
-                append("yandexnavi://show_point_on_map?lat=$lat&lon=$lon&zoom=14")
-                if (desc != null) append("&desc=${Uri.encode(desc)}")
-            }
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(showUri))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            return tryStartActivity(intent, "navigate_show:$lat,$lon")
+            return startNavigate(
+                navigator, RouteNavigatorUris.MODE_SHOW,
+                RouteNavigatorUris.showPoint(navigator, lat, lon, desc),
+                "navigate_show:$lat,$lon", fallbackReason,
+            )
         }
-        val uri = "yandexnavi://build_route_on_map?lat_to=$lat&lon_to=$lon"
+        return startNavigate(
+            navigator, RouteNavigatorUris.MODE_ROUTE,
+            RouteNavigatorUris.route(navigator, lat, lon),
+            "navigate:$lat,$lon", fallbackReason,
+        )
+    }
+
+    /**
+     * Fires one navigation deep link and journals which app it went to (#190).
+     *
+     * The package is pinned for 2GIS only: the Yandex links have always resolved by scheme, and
+     * pinning them now would break any head unit whose navigator ships under another package.
+     */
+    private fun startNavigate(
+        navigator: String, mode: String, uri: String, label: String, fallbackReason: String?,
+    ): DispatchResult {
+        Log.i(TAG, "navigate: app=$navigator mode=$mode uri=$uri")
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        return tryStartActivity(intent, "navigate:$lat,$lon")
+        if (navigator == RouteNavigatorUris.DGIS) {
+            intent.setPackage(RouteNavigatorUris.DGIS_PACKAGE)
+        }
+        val result = tryStartActivity(intent, label)
+        return if (result.success && fallbackReason != null) result.copy(reason = fallbackReason)
+        else result
     }
 
     private suspend fun openUrl(action: ActionDef): DispatchResult {

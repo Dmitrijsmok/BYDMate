@@ -276,11 +276,18 @@ class SettingsViewModelConnectionsTest {
             driverMemory = com.bydmate.app.agent.DriverMemory(
                 ctx.getSharedPreferences("voice", Context.MODE_PRIVATE)
             ),
+            dayMemory = com.bydmate.app.agent.DayMemory(
+                ctx.getSharedPreferences("voice", Context.MODE_PRIVATE)
+            ),
             adbRestoreManager = com.bydmate.app.data.autoservice.AdbRestoreManager(
                 com.bydmate.app.data.autoservice.AdbRestorePreferencesImpl(ctx),
                 mockk(relaxed = true),
                 kotlinx.coroutines.test.TestScope(),
             ),
+            fidCatalogManager = mockk(relaxed = true),
+            writeAllowlist = com.bydmate.app.data.vehicle.WriteAllowlist.EMPTY,
+            ruleDao = mockk(relaxed = true),
+            voiceJournal = com.bydmate.app.voice.VoiceJournal(),
         )
     }
 
@@ -416,7 +423,7 @@ class SettingsViewModelConnectionsTest {
         testDispatcher.scheduler.advanceUntilIdle()
 
         assertEquals(SettingsViewModel.DEFAULT_OPENROUTER_MODEL, vm.uiState.value.openRouterModel)
-        assertEquals("gemini-3.1-flash-lite", vm.uiState.value.openRouterModelName)
+        assertEquals("gemini-3.8-flash", vm.uiState.value.openRouterModelName)
     }
 
     @Test fun `testConnection second tap while running is ignored`() = runTest {

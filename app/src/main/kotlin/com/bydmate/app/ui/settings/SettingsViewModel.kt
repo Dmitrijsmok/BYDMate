@@ -69,6 +69,7 @@ import com.bydmate.app.cluster.DEFAULT_VOICE_KEYCODE
 import com.bydmate.app.voice.AgentPersona
 import com.bydmate.app.voice.TtsGender
 import com.bydmate.app.voice.VoiceController
+import com.bydmate.app.voice.VoiceJournal
 import com.bydmate.app.voice.RuStressMarker
 import com.bydmate.app.voice.TtsEngine
 import com.bydmate.app.voice.TtsModelManager
@@ -180,6 +181,8 @@ data class SettingsUiState(
     val agentName: String = "",
     val agentPersona: String = AgentPersona.NAVIGATOR.id,
     val agentGender: String = "m",
+    /** #190: which map app the navigate action opens — "yandex" (default) or "dgis". */
+    val routeNavigator: String = com.bydmate.app.data.automation.RouteNavigatorUris.YANDEX,
     /** Long-term facts the agent remembered about the driver (DriverMemory). */
     val agentMemoryFacts: List<String> = emptyList(),
     // Wave J: multi-provider LLM connections (OpenRouter / z.ai / custom)
@@ -251,7 +254,12 @@ class SettingsViewModel @Inject constructor(
     private val splitSessionManager: com.bydmate.app.split.SplitSessionManager,
     private val splitJournal: com.bydmate.app.split.SplitJournal,
     private val driverMemory: com.bydmate.app.agent.DriverMemory,
+    private val dayMemory: com.bydmate.app.agent.DayMemory,
     private val adbRestoreManager: com.bydmate.app.data.autoservice.AdbRestoreManager,
+    private val fidCatalogManager: com.bydmate.app.data.nativestack.FidCatalogManager,
+    private val writeAllowlist: com.bydmate.app.data.vehicle.WriteAllowlist,
+    private val ruleDao: com.bydmate.app.data.local.dao.RuleDao,
+    private val voiceJournal: VoiceJournal,
 ) : ViewModel() {
 
     private val _appLanguage = MutableStateFlow(localePreferences.getLanguage() ?: "ru")
@@ -408,6 +416,10 @@ class SettingsViewModel @Inject constructor(
                 .getString("agent_persona", null) ?: AgentPersona.NAVIGATOR.id
             val agentGender = appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
                 .getString("agent_gender", "m") ?: "m"
+            val routeNavigator = com.bydmate.app.data.automation.RouteNavigatorUris.normalize(
+                appContext.getSharedPreferences(
+                    com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
+                ).getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null))
 
             // Wave J: multi-provider LLM connections
             val zaiApiKey = settingsRepository.getString(SettingsRepository.KEY_ZAI_API_KEY, "")
@@ -468,6 +480,7 @@ class SettingsViewModel @Inject constructor(
                     agentName = agentName,
                     agentPersona = agentPersona,
                     agentGender = agentGender,
+                    routeNavigator = routeNavigator,
                     agentMemoryFacts = driverMemory.facts(),
                     zaiApiKey = zaiApiKey,
                     customName = customName,
@@ -1429,6 +1442,21 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
+     * Picks the map app the navigate action opens (#190): "yandex" (default) or "dgis".
+     * Persisted in the same SharedPreferences("voice") file as the other agent settings, which
+     * is where [com.bydmate.app.data.automation.ActionDispatcher] reads it on every route.
+     */
+    fun setRouteNavigator(value: String) {
+        val normalized = com.bydmate.app.data.automation.RouteNavigatorUris.normalize(value)
+        _uiState.update { it.copy(routeNavigator = normalized) }
+        appContext.getSharedPreferences(
+            com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
+        ).edit()
+            .putString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, normalized)
+            .apply()
+    }
+
+    /**
      * Switches the agent's gender ("m"/"f"). Persists into SharedPreferences("voice")
      * under "agent_gender", same access pattern as setAgentPersona. If the currently
      * selected TTS voice doesn't match the new gender, switches it to its counterpart
@@ -1454,10 +1482,18 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(agentMemoryFacts = driverMemory.facts()) }
     }
 
-    /** Drops every remembered fact. No confirmation: the driver can tell them to the agent again. */
+    /** Drops everything the agent remembers: the long-term facts and today's exchanges alike.
+     *  No confirmation: the driver can tell them to the agent again. */
     fun forgetAgentMemory() {
         driverMemory.forgetAll()
+        dayMemory.forgetAll()
         _uiState.update { it.copy(agentMemoryFacts = emptyList()) }
+    }
+
+    /** Drops one remembered fact: a single wrong fact should not cost the driver the whole list. */
+    fun forgetAgentFact(fact: String) {
+        driverMemory.forget(fact)
+        _uiState.update { it.copy(agentMemoryFacts = driverMemory.facts()) }
     }
 
     /**
@@ -1487,8 +1523,12 @@ class SettingsViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "SettingsViewModel"
-        /** Slug verified in the live OpenRouter catalog (2026-07-08). */
-        internal const val DEFAULT_OPENROUTER_MODEL = "google/gemini-3.1-flash-lite"
+        /** Slug verified in the live OpenRouter catalog (2026-09-14); the fastest Flash of
+         *  the current line, which is what the voice path is tuned for. */
+        internal const val DEFAULT_OPENROUTER_MODEL = "google/gemini-3.8-flash"
+        /** Voice sessions printed in the dump's agent section (newest first). */
+        private const val AGENT_DUMP_ENTRIES = 20
+        private const val AGENT_DUMP_ANSWER_CHARS = 200
         private const val PREVIEW_VOICE_TEXT =
             "Маршрут построен. Через двести метров поверните направо."
         private const val AGENT_TEST_PROMPT =
@@ -1517,11 +1557,37 @@ class SettingsViewModel @Inject constructor(
             HelperDiagnostics(
                 alive = runCatching { helperClient.isAlive() }.getOrNull(),
                 // One binder round-trip for all ten seat reads.
-                seats = runCatching { helperClient.readBatch(SeatsDiagnostics.batchItems) }.getOrNull(),
+                seats = runCatching { helperClient.readBatch(SeatsDiagnostics.batchItems()) }.getOrNull(),
             )
         }
         return withTimeoutOrNull(HELPER_DIAG_BUDGET_MS) { probe.await() }
             ?: HelperDiagnostics(null, null)
+    }
+
+    /** One-line trigger summary for the dump: param, operator and value only. */
+    private fun describeTriggers(json: String): String {
+        val triggers = com.bydmate.app.data.local.entity.TriggerDef.listFromJson(json)
+        if (triggers.isEmpty()) return if (json.isBlank() || json == "[]") "(none)" else "(unparseable)"
+        // kind + placeId: place_enter / place_exit share value="enter", only the kind
+        // tells them apart, and the id tells which geofence (name is user data, omitted).
+        return triggers.joinToString(" ") {
+            val place = it.placeId?.let { id -> " placeId=$id" } ?: ""
+            "[${it.kind}$place param=${it.param} op=${it.operator} value=${it.value}]"
+        }
+    }
+
+    /**
+     * One-line action summary for the dump. The command string is printed only for
+     * kind="param" (a fixed vehicle command); every other kind carries user data in
+     * its payload/command (phone number, address, notification text), so only the
+     * kind is printed.
+     */
+    private fun describeActions(json: String): String {
+        val actions = com.bydmate.app.data.local.entity.ActionDef.listFromJson(json)
+        if (actions.isEmpty()) return if (json.isBlank() || json == "[]") "(none)" else "(unparseable)"
+        return actions.joinToString(" ") {
+            if (it.kind == "param") "[param ${it.command}]" else "[${it.kind}]"
+        }
     }
 
     /**
@@ -1566,6 +1632,10 @@ class SettingsViewModel @Inject constructor(
                 appendLine("data_source: $dataSource")
                 appendLine("battery_capacity: raw=\"$capacityRaw\" parsed=$capacityParsed")
                 appendLine("abrp_enabled: $abrpEnabled token_len=$abrpTokenLen car_model=\"$abrpCarModel\"")
+                appendLine("route_navigator=" + com.bydmate.app.data.automation.RouteNavigatorUris.normalize(
+                    appContext.getSharedPreferences(
+                        com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
+                    ).getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null)))
                 val secureSettingsGranted = appContext.checkSelfPermission(
                     android.Manifest.permission.WRITE_SECURE_SETTINGS
                 ) == android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -1608,6 +1678,60 @@ class SettingsViewModel @Inject constructor(
             } else {
                 val ageS = (System.currentTimeMillis() - TrackingService.lastDataAtMs) / 1000
                 appendLine("age_s=$ageS gear=${live.gear} speed=${live.speed} powerState=${live.powerState} soc=${live.soc}")
+            }
+
+            // Automation rules (#177): issue reports about a rule that "does nothing"
+            // are undiagnosable without the rule itself. Action payloads stay out —
+            // they hold phone numbers, addresses and notification text.
+            appendLine("--- rules ---")
+            try {
+                val rules = ruleDao.getAllList()
+                if (rules.isEmpty()) {
+                    appendLine("(no rules)")
+                } else {
+                    rules.forEach { rule ->
+                        val last = rule.lastTriggeredAt?.let {
+                            SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(it))
+                        } ?: "(never)"
+                        appendLine(
+                            "rule id=${rule.id} \"${rule.name}\" enabled=${rule.enabled} " +
+                                "logic=${rule.triggerLogic} park=${rule.requirePark} " +
+                                "once=${rule.fireOncePerTrip} confirm=${rule.confirmBeforeExecute} " +
+                                "cooldown=${rule.cooldownSeconds}s fired=${rule.triggerCount} last=$last"
+                        )
+                        appendLine("  triggers: " + describeTriggers(rule.triggers))
+                        appendLine("  actions: " + describeActions(rule.actions))
+                    }
+                }
+            } catch (e: Exception) {
+                appendLine("(failed to gather rules: ${e.message})")
+            }
+
+            // Voice agent: which connection/model answered and what the last turns did.
+            // The journal is a RAM ring buffer, so this is the only place a user report
+            // about a wrong or fabricated answer becomes checkable.
+            appendLine("--- agent ---")
+            try {
+                val conn = llmConnectionResolver.primary()
+                appendLine("connection: ${conn?.id ?: "(not configured)"} model=${conn?.model ?: "-"}")
+                val entries = voiceJournal.entries.value.take(AGENT_DUMP_ENTRIES)
+                if (entries.isEmpty()) {
+                    appendLine("(no voice sessions this run)")
+                } else {
+                    entries.forEach { e ->
+                        val stamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(e.timestampMs))
+                        appendLine("$stamp ${e.route} ${e.outcome} \"${e.transcript}\"" +
+                            (e.reason?.let { " reason=$it" } ?: ""))
+                        if (e.tools.isNotEmpty()) {
+                            appendLine("  tools: " + e.tools.joinToString(", ") {
+                                "${it.name}:${if (it.ok) "ok" else "err"}"
+                            })
+                        }
+                        e.answer?.let { appendLine("  answer: " + com.bydmate.app.agent.AgentTrace.clip(it, AGENT_DUMP_ANSWER_CHARS)) }
+                    }
+                }
+            } catch (e: Exception) {
+                appendLine("(failed to gather agent journal: ${e.message})")
             }
 
             appendLine("--- vehicle data sources ---")
@@ -1726,6 +1850,15 @@ class SettingsViewModel @Inject constructor(
                     "freeform_reboot_pending=${clusterPrefs.getBoolean(cpm.KEY_FREEFORM_REBOOT_PENDING, false)}")
                 appendLine("projected_pkg: ${diag.projectedPackage ?: "(none)"} " +
                     "target=${clusterPrefs.getString(cpm.KEY_TARGET_PACKAGE, "(default)")}")
+                // #121: the density override carries the scale in direct mode, and apps latched by
+                // the death watch as dying on a non-native density are sent at the panel's own
+                // density instead — their scale slider is inert.
+                val densityUnsafe = cpm.densityUnsafePackages(appContext)
+                appendLine("density: " + when (diag.directDensityDpi) {
+                    -1 -> "(not set this session)"
+                    0 -> "native"
+                    else -> "${diag.directDensityDpi} dpi"
+                } + " unsafe=" + if (densityUnsafe.isEmpty()) "(none)" else densityUnsafe.joinToString())
                 appendLine("vd: id=${diag.vdDisplayId} overlay_attached=${diag.overlayAttached} " +
                     "direct_display=${diag.directDisplayId} " +
                     "direct_marker=${clusterPrefs.getInt(cpm.KEY_DIRECT_DISPLAY_ID, -1)}")
@@ -1775,6 +1908,29 @@ class SettingsViewModel @Inject constructor(
                             "[${it.flags.joinToString(",")}]"
                     }
                 })
+                // Density question (#194, direct mode): `dumpsys display` prints the display
+                // DEVICE density, so it cannot say whether WindowManager took a `wm density`
+                // override or whether the projected app received it. These two blocks can.
+                // Skipped entirely when the daemon did not answer the inventory call above.
+                val wmDiagPkg = diag.projectedPackage
+                    ?: clusterPrefs.getString(cpm.KEY_TARGET_PACKAGE, com.bydmate.app.cluster.NAVI_PACKAGE)
+                    ?: com.bydmate.app.cluster.NAVI_PACKAGE
+                val wmDiag = if (daemonDisplays == null) null
+                    else runCatching { helperClient.clusterWmDiag(wmDiagPkg) }.getOrNull()
+                if (wmDiag == null) {
+                    appendLine("wm displays: (daemon unavailable)")
+                } else {
+                    if (wmDiag.displays.isEmpty()) appendLine("wm displays: (none)")
+                    else {
+                        appendLine("wm displays:")
+                        wmDiag.displays.forEach { appendLine("  $it") }
+                    }
+                    if (wmDiag.taskConfig.isEmpty()) appendLine("nav task config: (none)")
+                    else {
+                        appendLine("nav task config:")
+                        wmDiag.taskConfig.forEach { appendLine("  $it") }
+                    }
+                }
                 val daemonPick = daemonDisplays?.let {
                     com.bydmate.app.cluster.pickClusterFromDaemon(it, preferFullDisplay)
                 }
@@ -1866,6 +2022,14 @@ class SettingsViewModel @Inject constructor(
                     else com.bydmate.app.helper.HelperBinderHolder.transport)
                 appendLine("broadcast_last_reject: " +
                     (com.bydmate.app.helper.HelperBinderHolder.lastReject ?: "(none)"))
+                // Whether a recreated process can still authenticate the daemon's re-announce,
+                // and whether this car delivers the daemon by broadcast at all (#64/#148).
+                val helperPrefs = appContext.getSharedPreferences(
+                    com.bydmate.app.helper.HelperBinderHolder.PREFS_NAME, Context.MODE_PRIVATE)
+                appendLine("token_persisted: " + if (helperPrefs.contains(
+                        com.bydmate.app.helper.HelperBinderHolder.KEY_SPAWN_TOKEN)) "yes" else "no")
+                appendLine("last_transport: " + (helperPrefs.getString(
+                    com.bydmate.app.helper.HelperBinderHolder.KEY_LAST_TRANSPORT, null) ?: "absent"))
                 val failure = helperBootstrap.lastSpawnFailure()
                 if (failure == null) {
                     appendLine("last_spawn_failure: (none)")
@@ -1938,6 +2102,18 @@ class SettingsViewModel @Inject constructor(
 
             appendLine("--- seat command journal ---")
             SeatsDiagnostics.journalLines(appContext).forEach { appendLine(it) }
+
+            appendLine("--- fid resolve ---")
+            try {
+                com.bydmate.app.data.nativestack.FidResolveDiagnostics.format(
+                    com.bydmate.app.data.nativestack.FidAddresses.table,
+                    fidCatalogManager.catalog,
+                    writeAllowlist.allEntries().map {
+                        com.bydmate.app.data.nativestack.WriteFidRow(it.actionName, it.dev, it.writeFid)
+                    },
+                    fidCatalogManager.resolveStatus,
+                ).forEach { appendLine(it) }
+            } catch (e: Exception) { appendLine("error: ${e.message}") }
 
             appendLine("--- fid subscriptions ---")
             try {

@@ -56,6 +56,21 @@ data class SplitTaskState(
 )
 
 /**
+ * Outcome of a TX_SET_DISPLAY_DENSITY call. [ok] is the daemon's status for the `wm density`
+ * write; [readback] is what `wm density -d <id>` printed right after it (empty against a daemon
+ * that predates the readback, or when the command printed nothing). Diagnostic only — no caller
+ * branches on the readback, it goes into the cluster journal.
+ */
+data class DensityResult(val ok: Boolean, val readback: String = "")
+
+/**
+ * WindowManager-side readback of the cluster displays (TX_CLUSTER_WM_DIAG), for the dump only.
+ * [displays] is one `init=…` line per display, [taskConfig] the projected activity's last
+ * reported configuration (or a single "(no ActivityRecord for …)" line).
+ */
+data class ClusterWmDiag(val displays: List<String>, val taskConfig: List<String>)
+
+/**
  * One root task of the vehicle's native 3:7 split, as reported by TX_SPLIT37_AREA_INFO.
  * [rootTaskId] is the reparent target for [HelperClient.split37MoveTask]; the bounds are the
  * pane geometry the firmware itself gave that root (the narrow pane keeps its width across a swap).
@@ -263,8 +278,17 @@ interface HelperClient {
     ): FreeformLaunchResult
 
     /** `wm density` override on a NON-default display via the daemon; [density] 0 = reset.
-     *  Maps the projection scale regulator onto the real cluster display in direct mode. */
-    suspend fun setDisplayDensity(displayId: Int, density: Int): Boolean
+     *  Maps the projection scale regulator onto the real cluster display in direct mode.
+     *  The result carries the daemon's `wm density -d <id>` readback for the cluster journal. */
+    suspend fun setDisplayDensity(displayId: Int, density: Int): DensityResult
+
+    /**
+     * WindowManager's own view of the displays plus the projected activity's last reported
+     * configuration, read by the daemon under shell uid for the diagnostic dump ([projectedPkg]
+     * decides which ActivityRecord is looked up). Null when the daemon is unreachable or too old
+     * to know the transaction. Diagnostic only: nothing is written on the car.
+     */
+    suspend fun clusterWmDiag(projectedPkg: String): ClusterWmDiag?
 
     /**
      * Reads the windowing state (taskId, windowingMode, bounds) for [packageName]'s running task.
@@ -296,6 +320,13 @@ interface HelperClient {
      * HelperBootstrap to detect stale daemons after an APK update.
      */
     suspend fun daemonVersion(): Long?
+
+    /**
+     * Tells the daemon this process now holds its Binder, so it stops re-announcing it by
+     * broadcast (#64/#148). Returns the daemon's status (0 = registered), or null against a
+     * daemon too old for TX_REGISTER_CLIENT — non-fatal, that daemon just keeps re-announcing.
+     */
+    suspend fun registerClient(): Int?
 
     /**
      * Returns the package name of the currently foreground (top-of-stack) task, or null when the
@@ -629,9 +660,31 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
             }
         }
 
-    override suspend fun setDisplayDensity(displayId: Int, density: Int): Boolean =
-        statusOk(HelperBinderProtocol.TX_SET_DISPLAY_DENSITY) {
+    override suspend fun setDisplayDensity(displayId: Int, density: Int): DensityResult =
+        transactParsed(HelperBinderProtocol.TX_SET_DISPLAY_DENSITY, {
             it.writeInt(displayId); it.writeInt(density)
+        }) { reply ->
+            if (reply.dataAvail() < 4) return@transactParsed DensityResult(false)
+            val status = reply.readInt()
+            if (reply.dataAvail() >= 4) reply.readInt()   // reserved second int
+            // 3rd field (additive): an old daemon sends nothing here, and readString on an empty
+            // parcel is what we must never call — hence the explicit dataAvail guard.
+            val readback = if (reply.dataAvail() > 0) reply.readString().orEmpty() else ""
+            DensityResult(readAccepted(status), readback)
+        } ?: DensityResult(false)
+
+    // WM_DIAG_TIMEOUT_MS: the daemon runs two bounded dumpsys calls (4 s each) back to back.
+    override suspend fun clusterWmDiag(projectedPkg: String): ClusterWmDiag? =
+        transactParsed(HelperBinderProtocol.TX_CLUSTER_WM_DIAG, { it.writeString(projectedPkg) },
+            timeoutMs = WM_DIAG_TIMEOUT_MS) { reply ->
+            if (reply.dataAvail() < 4) return@transactParsed null
+            if (reply.readInt() != 0) return@transactParsed null
+            val displays = reply.readString().orEmpty()
+            val taskConfig = reply.readString().orEmpty()
+            ClusterWmDiag(
+                displays.lines().filter { it.isNotBlank() },
+                taskConfig.lines().filter { it.isNotBlank() },
+            )
         }
 
     override suspend fun getTaskState(packageName: String): SplitTaskState? =
@@ -669,6 +722,16 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
     override suspend fun daemonVersion(): Long? =
         transact(HelperBinderProtocol.TX_GET_VERSION) { }
             ?.let { (status, value) -> if (readAccepted(status)) value.toLong() else null }
+
+    override suspend fun registerClient(): Int? {
+        val rc = transactParsed(HelperBinderProtocol.TX_REGISTER_CLIENT,
+            { it.writeStrongBinder(clientToken) }) { reply ->
+            if (reply.dataAvail() < 4) return@transactParsed null
+            reply.readInt()
+        }
+        Log.i(TAG, "registerClient rc=$rc")
+        return rc
+    }
 
     override suspend fun getTopTaskPackage(): String? =
         withContext(Dispatchers.IO) {
@@ -1006,6 +1069,11 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
          * as a failure). A read is accepted only on status == 0.
          * See HelperClientStatusTest.
          */
+        /** Our end of TX_REGISTER_CLIENT: the daemon links to this Binder's death to learn that
+         *  our process is gone. Process-wide and lazy — it must outlive every client instance,
+         *  and constructing it eagerly would drag android.os.Binder into plain JVM tests. */
+        private val clientToken: android.os.Binder by lazy { android.os.Binder() }
+
         internal fun writeAccepted(status: Int): Boolean = status >= 0
         internal fun readAccepted(status: Int): Boolean = status == 0
 
@@ -1038,6 +1106,10 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
          *  plus marshalling. Runs inside a projection attempt, so it must not sit on the
          *  default 2 s and report "no cluster display" on a merely slow head unit. */
         private const val LIST_DISPLAYS_TIMEOUT_MS = 5_000L
+
+        /** TX_CLUSTER_WM_DIAG budget: two `dumpsys` calls under the daemon's own 4 s bound each,
+         *  plus marshalling. Dump-only, so a generous budget costs nothing at runtime. */
+        private const val WM_DIAG_TIMEOUT_MS = 10_000L
 
         /** Safety cap on the number of TX_DUMP_FIDS loop iterations (chunks). 64 × 64 KiB = 4 MiB,
          *  far above any realistic SDK catalog size; guards against a misbehaving daemon. */
