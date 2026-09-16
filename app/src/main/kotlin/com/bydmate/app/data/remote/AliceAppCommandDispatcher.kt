@@ -9,6 +9,7 @@ import android.view.KeyEvent
 import com.bydmate.app.cluster.ClusterVoiceControl
 import com.bydmate.app.navdata.NavPackages
 import dagger.hilt.android.qualifiers.ApplicationContext
+import org.json.JSONObject
 import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -32,8 +33,8 @@ class AliceAppCommandDispatcher @Inject constructor(
         val labelKeywords: List<String> = emptyList(),
     )
 
-    fun dispatch(rawAction: String): Result<Unit>? {
-        val action = rawAction.trim().lowercase(Locale.ROOT)
+    fun dispatch(json: JSONObject): Result<Unit>? {
+        val action = json.optString("action").trim().lowercase(Locale.ROOT)
 
         APP_TARGETS[action]?.let { target ->
             return runCatching { launchTarget(action, target) }
@@ -62,6 +63,9 @@ class AliceAppCommandDispatcher @Inject constructor(
             ACTION_MEDIA_VOLUME_DOWN -> adjustVolume(AudioManager.ADJUST_LOWER)
             ACTION_MEDIA_MUTE -> adjustVolume(AudioManager.ADJUST_MUTE)
             ACTION_MEDIA_UNMUTE -> adjustVolume(AudioManager.ADJUST_UNMUTE)
+            ACTION_MEDIA_VOLUME -> setVolumePercent(json.intValueOrNull() ?: return Result.failure(
+                IllegalArgumentException("invalid_media_volume")
+            ))
 
             else -> null
         }
@@ -111,8 +115,6 @@ class AliceAppCommandDispatcher @Inject constructor(
     }
 
     private fun launchBrowser() {
-        // Prefer the same Chrome package used by current BYDMate aliases. If a
-        // particular car ships another browser, ACTION_VIEW lets Android select it.
         val chrome = context.packageManager.getLaunchIntentForPackage("com.android.chrome")
         if (chrome != null) {
             chrome.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -141,6 +143,23 @@ class AliceAppCommandDispatcher @Inject constructor(
     private fun adjustVolume(direction: Int): Result<Unit> = runCatching {
         val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, AudioManager.FLAG_SHOW_UI)
+    }
+
+    private fun setVolumePercent(percent: Int): Result<Unit> = runCatching {
+        if (percent !in 0..100) error("invalid_media_volume")
+        val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        val target = ((percent / 100.0) * max).toInt().coerceIn(0, max)
+        audio.setStreamVolume(AudioManager.STREAM_MUSIC, target, AudioManager.FLAG_SHOW_UI)
+    }
+
+    private fun JSONObject.intValueOrNull(): Int? {
+        if (!has("value") || isNull("value")) return null
+        return when (val raw = opt("value")) {
+            is Number -> raw.toInt()
+            is String -> raw.toIntOrNull()
+            else -> null
+        }
     }
 
     companion object {
@@ -175,6 +194,7 @@ class AliceAppCommandDispatcher @Inject constructor(
         const val ACTION_MEDIA_VOLUME_DOWN = "media.volume_down"
         const val ACTION_MEDIA_MUTE = "media.mute"
         const val ACTION_MEDIA_UNMUTE = "media.unmute"
+        const val ACTION_MEDIA_VOLUME = "media.volume"
 
         private val APP_TARGETS: Map<String, AppTarget> = mapOf(
             ACTION_WAZE_OPEN to AppTarget(
@@ -254,6 +274,7 @@ class AliceAppCommandDispatcher @Inject constructor(
             ACTION_MEDIA_VOLUME_DOWN,
             ACTION_MEDIA_MUTE,
             ACTION_MEDIA_UNMUTE,
+            ACTION_MEDIA_VOLUME,
         )
     }
 }
