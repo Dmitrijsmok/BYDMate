@@ -1,4 +1,4 @@
-name: Alice Build 5.4 Sunroof Percent
+name: Alice Build 5.4 Aperture Percent
 
 on:
   push:
@@ -64,6 +64,8 @@ jobs:
         run: python3 .github/alice-build5-3-runner.py
       - name: Apply Build 5.4 sunroof percentage positioning
         run: python3 .github/alice-build5-4-sunroof-percent.py
+      - name: Apply Build 5.4 window percentage positioning
+        run: python3 .github/alice-build5-4-window-percent.py
 
       - name: Verify upstream 3.16.0 + Alice 5.4 bridge
         run: |
@@ -79,6 +81,9 @@ jobs:
           grep -R 'BRIDGE_SUNROOF_POSITION' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
           grep -R 'requested == "sunroof.position"' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
           grep -R 'vehicleApi.dispatch("天窗停止")' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
+          grep -R 'BRIDGE_WINDOW_POSITION' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
+          grep -R '"window.driver.position"' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
+          grep -R '"主驾停止".*window_driver_ctrl.*3' app/src/main/kotlin/com/bydmate/app/data/vehicle/CommandTranslator.kt
 
           # Upstream command surface retained from v3.15.5 and expanded in v3.16.0.
           grep -R 'FAN_REGEX' app/src/main/kotlin/com/bydmate/app/data/vehicle/CommandTranslator.kt
@@ -154,6 +159,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
-          name: BYDMate-Alice-Build5-4-Sunroof-Percent-Stable-Signed-Debug
-          path: out/BYDMate-v3.16.0-alice5.4-upstream-rebase-stable-signed-debug.apk
+          name: BYDMate-Alice-Build5-4-Aperture-Percent-Stable-Signed-Debug
+          path: out/BYDMate-v3.16.0-alice5.4-sunroof-percent-stable-signed-debug.apk
           retention-days: 30
