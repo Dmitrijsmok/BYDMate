@@ -1,0 +1,98 @@
+name: Alice Build 5.1 App Bridge
+
+on:
+  push:
+    branches: [alice-build5-1-app-bridge]
+  workflow_dispatch:
+
+concurrency:
+  group: alice-build5-1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Apply Build 1
+        run: python3 .github/alice-build1-patch.py
+      - name: Apply side-by-side identity
+        run: python3 .github/alice-sideby-identity.py
+      - name: Apply helper identity
+        run: python3 .github/alice-sideby-helper.py
+      - name: Apply Build 2 identity
+        run: python3 .github/alice-build2-identity.py
+      - name: Apply Browser base
+        run: python3 .github/alice-build2-browser.py
+      - name: Apply Build 3 identity
+        run: python3 .github/alice-build3-identity.py
+      - name: Apply DiLink3 route
+        run: python3 .github/alice-build3-decision.py
+      - name: Apply setting bridge
+        run: python3 .github/alice-build3-toggle-mirror.py
+      - name: Apply Browser correction
+        run: python3 .github/alice-build3-browserfix.py
+      - name: Apply Build 4
+        run: python3 .github/alice-build4-runner.py
+      - name: Apply Build 5.1
+        run: python3 .github/alice-build5-1-runner.py
+
+      - name: Verify stable Alice baseline and 5.1 broad bridge
+        run: |
+          grep -R 'applicationId = "com.bydmate.app.alice4"' app/build.gradle.kts
+          grep -R 'versionCode = 64012' app/build.gradle.kts
+          grep -R '3.15.2-alice5.1-app-bridge' app/build.gradle.kts
+          grep -R 'BUILD8_MANUAL_DUCK_ENABLED target=4' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -R 'BUILD8_LISTENING_READY desc=true' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -R 'BUILD7_STOCK_ASSISTANT_BACK' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -R 'BRIDGE_ENABLE_CHANGED enabled=' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
+          grep -R 'BRIDGE_POLL_START longPollMs=' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
+          grep -R 'AliceBridgeCommandTranslator.resolve' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
+          grep -R 'AliceAppCommandDispatcher' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
+          grep -R 'BRIDGE_APP_COMMAND_RECEIVED' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
+          grep -R 'rear_trunk_speed_unknown' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
+          grep -R 'put("fanLevel"' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
+
+          grep -R 'app.waze.open' app/src/main/kotlin/com/bydmate/app/data/remote/AliceAppCommandDispatcher.kt
+          grep -R 'app.car_settings.open' app/src/main/kotlin/com/bydmate/app/data/remote/AliceAppCommandDispatcher.kt
+          grep -R 'app.camera.open' app/src/main/kotlin/com/bydmate/app/data/remote/AliceAppCommandDispatcher.kt
+          grep -R 'media.volume' app/src/main/kotlin/com/bydmate/app/data/remote/AliceAppCommandDispatcher.kt
+          grep -R 'com.byd.carsettings' app/src/main/kotlin/com/bydmate/app/data/remote/AliceAppCommandDispatcher.kt
+
+          grep -R '"climate.fan_level"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          grep -R '"climate.front_defrost_on"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          grep -R '"doors.unlock"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          grep -R '"trunk.rear.open"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          grep -R '"sunroof.vent"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          grep -R '"window.all.open"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceBridgeCommandTranslator.kt
+          grep -R 'FAN_LEVEL_REGEX' app/src/main/kotlin/com/bydmate/app/data/vehicle/CommandTranslator.kt
+          grep -R 'alice5.1-field-test' app/src/main/kotlin/com/bydmate/app/data/vehicle/WriteAllowlist.kt
+
+          # Raw cloud writes are still impossible: only semantic bridge actions exist.
+          ! grep -R 'featureId.*opt\|deviceType.*opt\|writeFid.*opt' app/src/main/kotlin/com/bydmate/app/data/remote
+
+      - name: Unit test command bridge
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Stage APK
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/debug/*.apk out/BYDMate-v3.15.2-alice5.1-app-bridge-debug.apk
+          sha256sum out/BYDMate-v3.15.2-alice5.1-app-bridge-debug.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: BYDMate-Alice-Build5-1-App-Bridge-Debug
+          path: out/BYDMate-v3.15.2-alice5.1-app-bridge-debug.apk
+          retention-days: 30

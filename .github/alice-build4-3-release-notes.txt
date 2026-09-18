@@ -1,0 +1,8 @@
+Alice 4.3 stable
+- preserves Alice 4.2 working Yandex/Alice handoff
+- preserves 304/327 native-assistant blocking
+- preserves Smart Home visibility and scrollable Settings rail
+- removes the duplicate custom autostart modal added in Alice 4.2
+- voice wake activation is intentionally deferred
+- package remains com.bydmate.app.alice4
+- versionCode 64004
