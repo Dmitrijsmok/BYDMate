@@ -66,6 +66,8 @@ jobs:
         run: python3 .github/alice-build5-4-sunroof-percent.py
       - name: Apply Build 5.4 window percentage positioning
         run: python3 .github/alice-build5-4-window-percent.py
+      - name: Apply Build 5.4 TikTok launcher
+        run: python3 .github/alice-build5-4-tiktok.py
 
       - name: Verify upstream 3.16.0 + Alice 5.4 bridge
         run: |
@@ -84,6 +86,8 @@ jobs:
           grep -R 'BRIDGE_WINDOW_POSITION' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
           grep -R '"window.driver.position"' app/src/main/kotlin/com/bydmate/app/data/remote/AlicePollingManager.kt
           grep -R '"主驾停止".*window_driver_ctrl.*3' app/src/main/kotlin/com/bydmate/app/data/vehicle/CommandTranslator.kt
+          grep -R 'ACTION_TIKTOK_OPEN = "app.tiktok.open"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceAppCommandDispatcher.kt
+          grep -R '"com.zhiliaoapp.musically"' app/src/main/kotlin/com/bydmate/app/data/remote/AliceAppCommandDispatcher.kt
 
           # Upstream command surface retained from v3.15.5 and expanded in v3.16.0.
           grep -R 'FAN_REGEX' app/src/main/kotlin/com/bydmate/app/data/vehicle/CommandTranslator.kt
