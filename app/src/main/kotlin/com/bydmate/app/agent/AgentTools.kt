@@ -10,6 +10,7 @@ import com.bydmate.app.data.automation.ActionValidationError
 import com.bydmate.app.data.automation.AutomationEngine
 import com.bydmate.app.data.automation.ConfirmOverlayManager
 import com.bydmate.app.data.automation.DispatchResult
+import com.bydmate.app.data.automation.RouteNavigatorUris
 import com.bydmate.app.data.automation.PlaceGeometry
 import com.bydmate.app.data.automation.RuleDraftValidator
 import com.bydmate.app.data.automation.TriggerValidationError
@@ -200,6 +201,14 @@ class AgentTools @Inject constructor(
         foregroundPackagesSince(sinceMs).any { it in NavPackages.YANDEX_MAPS }
     }
 
+    internal var wazeForegroundCheck: (Long) -> Boolean = { sinceMs ->
+        RouteNavigatorUris.WAZE_PACKAGE in foregroundPackagesSince(sinceMs)
+    }
+
+    internal var googleMapsForegroundCheck: (Long) -> Boolean = { sinceMs ->
+        RouteNavigatorUris.GOOGLE_MAPS_PACKAGE in foregroundPackagesSince(sinceMs)
+    }
+
     /** Test seam - poll interval for the navigate foreground verification. */
     internal var naviVerifyIntervalMs = 500L
 
@@ -215,8 +224,20 @@ class AgentTools @Inject constructor(
         // to (#200), so that is the app whose arrival proves it: waiting for the Navigator on
         // a Maps route (explicit app="maps" or Maps chosen in settings) fails a working route.
         val maps = actionDispatcher.willOpenMaps(payload)
-        val surfaced = if (maps) mapsForegroundCheck else naviForegroundCheck
-        val appName = if (maps) "Яндекс Карты" else "Навигатор"
+        val waze = actionDispatcher.willOpenWaze(payload)
+        val googleMaps = actionDispatcher.willOpenGoogleMaps(payload)
+        val surfaced = when {
+            maps -> mapsForegroundCheck
+            waze -> wazeForegroundCheck
+            googleMaps -> googleMapsForegroundCheck
+            else -> naviForegroundCheck
+        }
+        val appName = when {
+            maps -> "Яндекс Карты"
+            waze -> "Waze"
+            googleMaps -> "Google Maps"
+            else -> "Навигатор"
+        }
         val result = actionDispatcher.dispatch(
             ActionDef(command = "", displayName = displayName, kind = "navigate",
                 payload = payload.toString()), data = null)
@@ -474,7 +495,7 @@ class AgentTools @Inject constructor(
                         "построить, водитель нажмёт Поехали сам"))
                 .put("app", JSONObject().put("type", "string")
                     .put("enum", JSONArray().put("navigator").put("maps"))
-                    .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты, по умолчанию), " +
+                    .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты/Waze/Google Maps, по умолчанию), " +
                         "maps = явно Яндекс Карты; maps передавай только когда пользователь явно просит Яндекс Карты")),
             emptyList(),
         ))
@@ -489,7 +510,7 @@ class AgentTools @Inject constructor(
                 .put("description", "Что искать: название места или категория"))
                 .put("app", JSONObject().put("type", "string")
                     .put("enum", JSONArray().put("navigator").put("maps"))
-                    .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты, по умолчанию), " +
+                    .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты/Waze/Google Maps, по умолчанию), " +
                         "maps = явно Яндекс Карты; maps передавай только когда пользователь явно просит Яндекс Карты")),
             listOf("query"),
         ))
@@ -506,7 +527,7 @@ class AgentTools @Inject constructor(
                 .put("lon", JSONObject().put("type", "number").put("description", "Долгота"))
                 .put("app", JSONObject().put("type", "string")
                     .put("enum", JSONArray().put("navigator").put("maps"))
-                    .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты, по умолчанию), " +
+                    .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты/Waze/Google Maps, по умолчанию), " +
                         "maps = явно Яндекс Карты; maps передавай только когда пользователь явно просит Яндекс Карты")),
             emptyList(),
         ))
@@ -1464,7 +1485,44 @@ class AgentTools @Inject constructor(
     private fun JSONObject.putApp(app: String): JSONObject = if (app.isEmpty()) this else put("app", app)
 
     private fun navApp(args: JSONObject): String =
-        if (args.optString("app").trim().equals("maps", ignoreCase = true)) "maps" else ""
+        when (args.optString("app").trim().lowercase()) {
+            RouteNavigatorUris.YANDEX -> RouteNavigatorUris.YANDEX
+            RouteNavigatorUris.MAPS -> RouteNavigatorUris.MAPS
+            RouteNavigatorUris.DGIS -> RouteNavigatorUris.DGIS
+            RouteNavigatorUris.WAZE -> RouteNavigatorUris.WAZE
+            RouteNavigatorUris.GOOGLE_MAPS -> RouteNavigatorUris.GOOGLE_MAPS
+            else -> ""
+        }
+
+    /**
+     * Deterministic entry points for Alice/external bridges. They reuse the exact same BYDMate
+     * navigation engine as AgentTools, but do not involve an LLM.
+     */
+    internal suspend fun navigateDirect(
+        destination: String,
+        go: Boolean = false,
+        app: String = "",
+    ): String = navigateTo(JSONObject().apply {
+        put("destination", destination)
+        put("go", go)
+        if (app.isNotBlank()) put("app", app)
+    })
+
+    internal suspend fun searchMapDirect(
+        query: String,
+        app: String = "",
+    ): String = searchOnMap(JSONObject().apply {
+        put("query", query)
+        if (app.isNotBlank()) put("app", app)
+    })
+
+    internal suspend fun showPointDirect(
+        destination: String,
+        app: String = "",
+    ): String = showPointOnMap(JSONObject().apply {
+        put("destination", destination)
+        if (app.isNotBlank()) put("app", app)
+    })
 
     /** Per-command options of a route: «поехали» vs «построй маршрут», and which map app. */
     private data class NavOptions(val go: Boolean = false, val app: String = "")
@@ -1800,8 +1858,19 @@ class AgentTools @Inject constructor(
             apps.firstOrNull { it.second == pkg }
         }
         if (aliasMatch != null) return Built.Value(aliasMatch)
-        val exact = apps.filter { it.first.lowercase() == needle }
-        val matches = exact.ifEmpty { apps.filter { it.first.lowercase().contains(needle) } }
+
+        // If a known Russian alias did not match one of the stock packages, fall back to
+        // launcher labels. This keeps alternative builds (for example ReVanced / RVX YouTube)
+        // launchable without hard-coding every package variant.
+        val labelNeedle = APP_ALIAS_LABELS[needle] ?: needle
+        val exact = apps.filter { it.first.lowercase() == labelNeedle }
+        val matches = exact.ifEmpty {
+            apps.filter {
+                val label = it.first.lowercase()
+                label.contains(labelNeedle) ||
+                    (labelNeedle == "youtube" && it.second.lowercase().contains("youtube"))
+            }
+        }
         return when {
             matches.isEmpty() -> Built.Error("приложение не найдено: $name")
             matches.size > 1 -> Built.Error(
@@ -2522,6 +2591,21 @@ class AgentTools @Inject constructor(
         // unreachable by label match. Values are candidate packages in priority order; an alias
         // fires only when one of them is actually installed on this car (fleet cars differ).
         // App store and fridge app are excluded deliberately (user decision, 2026-07-05).
+        private val APP_ALIAS_LABELS: Map<String, String> = mapOf(
+            "ютуб" to "youtube",
+            "youtube" to "youtube",
+            "браузер" to "chrome",
+            "хром" to "chrome",
+            "яндекс музыка" to "яндекс музыка",
+            "музыка" to "яндекс музыка",
+            "яндекс карты" to "яндекс карты",
+            "карты" to "яндекс карты",
+            "яндекс навигатор" to "яндекс навигатор",
+            "навигатор" to "навигатор",
+            "регистратор" to "регистратор",
+            "видеорегистратор" to "регистратор",
+        )
+
         internal val APP_ALIASES: Map<String, List<String>> = mapOf(
             "навигатор" to listOf("ru.yandex.yandexnavi"),
             "яндекс навигатор" to listOf("ru.yandex.yandexnavi"),

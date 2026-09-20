@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import android.util.Log
+import com.bydmate.app.BuildConfig
 import com.bydmate.app.data.autoservice.AdbOnDeviceClient
 import com.bydmate.app.helper.HelperBinderHolder
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -67,28 +68,27 @@ class HelperBootstrap @Inject constructor(
      */
     private suspend fun ensureRunningLocked(): Boolean {
         val want = installedVersionCode()
-        // If our own versionCode cannot be read (should never happen), degrade gracefully:
-        // trust the binder ping rather than hammering the daemon with kill+spawn on every call.
+        val wantBuild = BuildConfig.BUILD_ID
+        // If our own versionCode cannot be read (should never happen), degrade gracefully.
         if (want == VERSION_READ_FAILED) return helper.isAlive()
-        // Live query is authoritative: daemon's CLASSPATH is frozen at spawn time, so
-        // VERSION_CODE in the running JVM reflects which APK it was spawned from.
+        // The daemon can survive an APK replacement. versionCode alone is insufficient because
+        // upstream and fork-test APKs may both be 3.17.3/476 while containing different code.
         val version = helper.daemonVersion()
-        if (version == want) return true
-        // Daemon is stale (wrong version, too old for TX_GET_VERSION) or dead.
+        val daemonBuild = helper.daemonBuildId()
+        if (version == want && daemonBuild == wantBuild) return true
         val alive = helper.isAlive()
         val heartbeat = adb.helperHeartbeat()
         val lastTransport = prefs.getString(HelperBinderHolder.KEY_LAST_TRANSPORT, null)
-        // The one line that says WHY the kill path was entered — its absence hid the trigger in
-        // the field log of build 459 (crazyhack, Song Plus).
         Log.i(TAG, "daemon stale or unreachable: version=${version ?: "null"} want=$want " +
-            "alive=$alive heartbeat=$heartbeat lastTransport=${lastTransport ?: "absent"}")
+            "build=${daemonBuild ?: "null"} wantBuild=$wantBuild alive=$alive heartbeat=$heartbeat " +
+            "lastTransport=${lastTransport ?: "absent"}")
         // On broadcast-only firmwares (#64/#148) a recreated app process has no binder and no way
         // to ask for one — but the daemon re-announces. Give it one interval before killing a
         // daemon that is perfectly healthy. Right after an app update the old daemon does not
         // re-announce at all: that costs this wait once, then the kill path runs as before.
         if (lastTransport == HelperBinderHolder.TRANSPORT_BROADCAST && heartbeat) {
             HelperBinderHolder.spawnInFlight = false
-            if (awaitReannounce(want)) return true
+            if (awaitReannounce(want, wantBuild)) return true
         }
         // Kill when either the binder ping responds (isAlive) OR the process is visible in ps
         // (helperHeartbeat): a process holding the file lock must be killed before we spawn even
@@ -163,7 +163,7 @@ class HelperBootstrap @Inject constructor(
             delay(POLL_INTERVAL_MS)
             // daemonVersion() == want confirms both liveness and that the fresh daemon carries
             // the right handlers. A spawn that answers a wrong version is treated as failure.
-            if (helper.daemonVersion() == want) {
+            if (helper.daemonVersion() == want && helper.daemonBuildId() == wantBuild) {
                 // A successful spawn clears the last failure, or the diagnostic dump keeps
                 // showing a stale `last_spawn_failure` next to a healthy daemon.
                 prefs.edit()
@@ -206,7 +206,7 @@ class HelperBootstrap @Inject constructor(
      * behind it carries the version we want; a daemon of another version is genuinely stale and
      * must go through the kill path.
      */
-    private suspend fun awaitReannounce(want: Long): Boolean {
+    private suspend fun awaitReannounce(want: Long, wantBuild: String): Boolean {
         // Attempt 0 carries no delay: the binder can land while the checks above were suspended
         // (daemonVersion, isAlive, helperHeartbeat are all round trips), and a holder that is
         // already full must be examined instead of ignored — the old gate killed that daemon.
@@ -214,12 +214,14 @@ class HelperBootstrap @Inject constructor(
             if (attempt > 0) delay(REANNOUNCE_POLL_INTERVAL_MS)
             if (HelperBinderHolder.binder == null) return@repeat
             val version = helper.daemonVersion()
-            if (version == want) {
+            val build = helper.daemonBuildId()
+            if (version == want && build == wantBuild) {
                 Log.i(TAG, if (attempt == 0) "adopted live daemon (arrived during checks)"
                     else "adopted live daemon via re-announce")
                 return true
             }
-            Log.i(TAG, "re-announced daemon carries version=${version ?: "null"} want=$want; stale")
+            Log.i(TAG, "re-announced daemon carries version=${version ?: "null"} build=${build ?: "null"} " +
+                "want=$want/$wantBuild; stale")
             return false
         }
         Log.i(TAG, "no re-announce within ${REANNOUNCE_WAIT_MS / 1000} s")

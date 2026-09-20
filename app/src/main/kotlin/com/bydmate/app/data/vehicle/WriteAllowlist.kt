@@ -108,7 +108,10 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
             // Both values physically validated in-car 2026-07-07.
             WriteEntry("ac_auto_on",     1000, 501219352, null, 0, 0,   "climate",  true, "live-leopard3-2026-07-07"),
             WriteEntry("ac_auto_off",    1000, 501219352, null, 1, 1,   "climate",  true, "live-leopard3-2026-07-07"),
-            WriteEntry("ac_temp_main",   1000, 501219368, null, 16, 30, "climate",  true, "live-leopard3-2026-05-28"),
+            // BYD ATTO 3 UI uses 17 as LO, 18..32 as numeric setpoints and 33 as HI.
+            // 18..30 was already live-validated on Leopard 3; the extended endpoints are now
+            // staged for this ATTO 3 field test, so keep the entry non-validated as a whole.
+            WriteEntry("ac_temp_main",   1000, 501219368, null, 17, 33, "climate",  false, "atto3-field-2026-09-20; live-leopard3-2026-05-28"),
             WriteEntry("ac_cycle_inner", 1000, 501219355, null, 1, 1,   "climate",  true, "live-leopard3-2026-05-28"),
             WriteEntry("ac_cycle_outer", 1000, 501219355, null, 0, 0,   "climate",  true, "live-leopard3-2026-06-28"),
 
@@ -252,6 +255,7 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
             // Same value-less competitor entry problem and same per-model readback fid
             // divergence as ac_wind_level above, so no readbackFid here either (#201).
             WriteEntry("ac_wind_mode", 1000, 501219336, null, 1, 5, "climate", false, "competitor-actions ac_wind_mode; AirConditioningService decompiled; #201"),
+            WriteEntry("ac_wind_mode_ext", 1000, 501219336, null, 6, 7, "climate", false, "BYD e2 live log; #201"),
             WriteEntry("driver_seat_heat_fallback",    1001, 1125122068, null, 1, 6, "seats", false, "competitor-v80"),
             WriteEntry("driver_seat_vent_fallback",    1001, 1125122064, null, 1, 6, "seats", false, "competitor-v80"),
             WriteEntry("passenger_seat_heat_fallback", 1001, 1125122076, null, 1, 6, "seats", false, "competitor-v80"),

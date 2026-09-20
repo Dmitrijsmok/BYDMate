@@ -221,8 +221,10 @@ data class SettingsUiState(
     val agentName: String = "",
     val agentPersona: String = AgentPersona.NAVIGATOR.id,
     val agentGender: String = "m",
-    /** #190: which map app the navigate action opens — "yandex" (default) or "dgis". */
+    /** Navigator selected for voice/route actions. */
     val routeNavigator: String = com.bydmate.app.data.automation.RouteNavigatorUris.YANDEX,
+    /** Only navigator apps that currently expose a launcher activity on this head unit. */
+    val routeNavigatorOptions: List<String> = emptyList(),
     /** Long-term facts the agent remembered about the driver (DriverMemory). */
     val agentMemoryFacts: List<String> = emptyList(),
     // Wave J: multi-provider LLM connections (OpenRouter / z.ai / custom)
@@ -445,6 +447,8 @@ class SettingsViewModel @Inject constructor(
             val aliceEndpoint = settingsRepository.getString(SettingsRepository.KEY_ALICE_ENDPOINT, "")
             val aliceApiKey = settingsRepository.getString(SettingsRepository.KEY_ALICE_API_KEY, "")
             val aliceEnabled = settingsRepository.getString(SettingsRepository.KEY_ALICE_ENABLED, "false") == "true"
+            appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                .edit().putBoolean(SettingsRepository.KEY_ALICE_ENABLED, aliceEnabled).apply()
 
             val abrpEnabled = settingsRepository.getString(SettingsRepository.KEY_ABRP_ENABLED, "false") == "true"
             val abrpApiKey = settingsRepository.getString(SettingsRepository.KEY_ABRP_API_KEY, "")
@@ -500,10 +504,21 @@ class SettingsViewModel @Inject constructor(
                 .getString("agent_persona", null) ?: AgentPersona.NAVIGATOR.id
             val agentGender = appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
                 .getString("agent_gender", "m") ?: "m"
-            val routeNavigator = com.bydmate.app.data.automation.RouteNavigatorUris.normalize(
-                appContext.getSharedPreferences(
-                    com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
-                ).getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null))
+            val routePrefs = appContext.getSharedPreferences(
+                com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
+            )
+            val savedRouteNavigator = com.bydmate.app.data.automation.RouteNavigatorUris.normalize(
+                routePrefs.getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null)
+            )
+            val routeNavigatorOptions = installedRouteNavigatorIds()
+            val routeNavigator = if (
+                routeNavigatorOptions.isEmpty() || savedRouteNavigator in routeNavigatorOptions
+            ) savedRouteNavigator else routeNavigatorOptions.first()
+            if (routeNavigator != savedRouteNavigator) {
+                routePrefs.edit()
+                    .putString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, routeNavigator)
+                    .apply()
+            }
 
             // Wave J: multi-provider LLM connections
             val zaiApiKey = settingsRepository.getString(SettingsRepository.KEY_ZAI_API_KEY, "")
@@ -564,6 +579,7 @@ class SettingsViewModel @Inject constructor(
                     agentPersona = agentPersona,
                     agentGender = agentGender,
                     routeNavigator = routeNavigator,
+                    routeNavigatorOptions = routeNavigatorOptions,
                     agentMemoryFacts = driverMemory.facts(),
                     zaiApiKey = zaiApiKey,
                     customName = customName,
@@ -587,6 +603,12 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, disabled.toString())
             helperClient.setAppHidden("com.byd.autovoice", disabled)
+            // On DiLink 3 / Android 10 disabling the native assistant can leave the steering
+            // voice-key accessibility binding stale. Re-assert our service immediately so the
+            // user does not need to reboot the whole head unit.
+            if (disabled && _uiState.value.voiceEnabled) {
+                ensureVoiceKeyService("native-assistant-disabled")
+            }
         }
     }
 
@@ -1147,29 +1169,25 @@ class SettingsViewModel @Inject constructor(
 
     fun updateAliceEndpoint(value: String) {
         _uiState.update { it.copy(aliceEndpoint = value) }
+        viewModelScope.launch {
+            settingsRepository.setString(SettingsRepository.KEY_ALICE_ENDPOINT, value.trim())
+        }
     }
 
     fun updateAliceApiKey(value: String) {
         _uiState.update { it.copy(aliceApiKey = value) }
-    }
-
-    fun saveAliceSettings() {
-        val state = _uiState.value
         viewModelScope.launch {
-            settingsRepository.setString(SettingsRepository.KEY_ALICE_ENDPOINT, state.aliceEndpoint)
-            settingsRepository.setString(SettingsRepository.KEY_ALICE_API_KEY, state.aliceApiKey)
-            val enabled = state.aliceEndpoint.isNotBlank() && state.aliceApiKey.isNotBlank()
-            settingsRepository.setString(SettingsRepository.KEY_ALICE_ENABLED, enabled.toString())
-            _uiState.update { it.copy(aliceEnabled = enabled, aliceSaveStatus = appContext.getString(R.string.settings_saved)) }
-            delay(2000)
-            _uiState.update { it.copy(aliceSaveStatus = null) }
+            settingsRepository.setString(SettingsRepository.KEY_ALICE_API_KEY, value)
         }
     }
 
     fun toggleAlice(enabled: Boolean) {
         _uiState.update { it.copy(aliceEnabled = enabled) }
+        appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+            .edit().putBoolean(SettingsRepository.KEY_ALICE_ENABLED, enabled).apply()
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_ALICE_ENABLED, enabled.toString())
+            if (enabled && _uiState.value.voiceEnabled) ensureVoiceKeyService("alice-provider")
         }
     }
 
@@ -1307,24 +1325,31 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(voiceEnabled = enabled) }
         viewModelScope.launch {
             settingsRepository.setVoiceEnabled(enabled)
-            // Mirror into "voice" SharedPreferences for SteeringWheelKeyService
             appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
                 .edit().putBoolean(SettingsRepository.KEY_VOICE_ENABLED, enabled).apply()
-            // Best-effort re-bind of the a11y key service (PTT is dead without it), same
-            // pattern as ClusterProjectionManager.enableStarControl: bootstrap the daemon
-            // FIRST — HelperClient only resolves an existing binder, so without ensureRunning()
-            // the call silently no-ops when the daemon is not up. Only needed on enable.
             if (enabled) {
-                if (helperBootstrap.ensureRunning()) {
-                    helperClient.enableAccessibilityService()
-                } else {
-                    Log.e(TAG, "helper daemon not running; cannot self-enable a11y for voice PTT")
-                }
-                // Pre-warm the recognizer so the first PTT after enabling voice doesn't pay the
-                // cold model-load cost (Task 5). No-op if the model isn't downloaded yet.
+                ensureVoiceKeyService("voice-enabled")
                 viewModelScope.launch(Dispatchers.IO) { runCatching { continuousAsr.warmUp() } }
             }
         }
+    }
+
+    private suspend fun ensureVoiceKeyService(reason: String) {
+        if (!helperBootstrap.ensureRunning()) {
+            Log.e(TAG, "$reason: helper daemon not running; cannot self-enable a11y for voice PTT")
+            return
+        }
+        if (!helperClient.enableAccessibilityService()) {
+            Log.e(TAG, "$reason: accessibility re-assert failed")
+            return
+        }
+        if (Build.VERSION.SDK_INT > 29) return
+        repeat(10) {
+            if (com.bydmate.app.cluster.SteeringWheelKeyService.isConnected) return
+            delay(250L)
+        }
+        Log.w(TAG, "$reason: a11y still unbound; invoking Android 10 self-recovery")
+        helperClient.recoverAccessibilityService()
     }
 
     fun setVoiceLanguage(lang: String) {
@@ -1599,6 +1624,9 @@ class SettingsViewModel @Inject constructor(
      * Persisted in the same SharedPreferences("voice") file as the other agent settings, which
      * is where [com.bydmate.app.data.automation.ActionDispatcher] reads it on every route.
      */
+    private fun installedRouteNavigatorIds(): List<String> =
+        com.bydmate.app.data.automation.RouteNavigatorDiscovery.installedIds(appContext.packageManager)
+
     fun setRouteNavigator(value: String) {
         val normalized = com.bydmate.app.data.automation.RouteNavigatorUris.normalize(value)
         _uiState.update { it.copy(routeNavigator = normalized) }

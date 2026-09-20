@@ -56,6 +56,11 @@ object CommandTranslator {
         "后右打开100" to Resolved("window_rear_right_open",  1),
         "后右打开0"   to Resolved("window_rear_right_close", 2),
 
+        "主驾停止" to Resolved("window_driver_ctrl", 3),
+        "副驾停止" to Resolved("window_passenger_ctrl", 3),
+        "后左停止" to Resolved("window_rear_left_ctrl", 3),
+        "后右停止" to Resolved("window_rear_right_ctrl", 3),
+
         // ── Windows (vent, individual) ── crack one window to VENT_PCT via the
         // validated % path. The all-window vent (车窗通风) is a composite fan-out
         // below (the competitor windows_vent fid 1125122104 val=5 only moved the
@@ -98,6 +103,8 @@ object CommandTranslator {
         "吹脚"     to Resolved("ac_wind_mode", 3),
         "吹脚除霜" to Resolved("ac_wind_mode", 4),
         "除霜"     to Resolved("ac_wind_mode", 5),
+        "吹面吹脚除霜" to Resolved("ac_wind_mode_ext", 6),
+        "吹面除霜" to Resolved("ac_wind_mode_ext", 7),
 
         // ── Locks ── LIVE_VALIDATED ───────────────────────────────────────────
         "车门上锁"  to Resolved("doors_lock",   2),
@@ -210,8 +217,8 @@ object CommandTranslator {
         val stripped = commandString.removePrefix("迪加")
         composite[stripped]?.let { return it }
         table[stripped]?.let { return listOf(it) }
-        // Dynamic temperature: 设置温度<N> → ac_temp_main, clamped to the validated
-        // 16..30 window (allowlist range-gates it anyway; clamping is friendlier).
+        // Dynamic temperature: 18..32 are numeric setpoints. 17 is BYD LO and 33 is BYD HI.
+        // Requests below/above the numeric range collapse to those two sentinel setpoints.
         TEMP_REGEX.matchEntire(stripped)?.let { m ->
             val celsius = m.groupValues[1].toInt().coerceIn(TEMP_MIN, TEMP_MAX)
             return listOf(Resolved("ac_temp_main", celsius))
@@ -238,8 +245,8 @@ object CommandTranslator {
 
     // Dynamic temperature command: 设置温度<N> (e.g. 设置温度24). Range-clamped in resolve().
     private val TEMP_REGEX = Regex("""设置温度(\d+)""")
-    private const val TEMP_MIN = 16
-    private const val TEMP_MAX = 30
+    private const val TEMP_MIN = 17
+    private const val TEMP_MAX = 33
 
     // Dynamic fan speed command: 风量<N> (e.g. 风量3). Range-clamped in resolve().
     private val FAN_REGEX = Regex("""风量(\d+)""")

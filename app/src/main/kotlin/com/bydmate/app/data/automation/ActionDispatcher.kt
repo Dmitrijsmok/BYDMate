@@ -42,6 +42,7 @@ import javax.inject.Singleton
 data class DispatchResult(val success: Boolean, val reason: String? = null)
 
 @Singleton
+@Suppress("LargeClass")
 class ActionDispatcher @Inject constructor(
     private val vehicleApi: VehicleApi,
     private val helper: HelperClient,
@@ -845,14 +846,19 @@ class ActionDispatcher @Inject constructor(
         if (context.packageManager.getLaunchIntentForPackage(pkg) == null) {
             return DispatchResult(false, "Приложение не установлено: $pkg")
         }
-        // Authoritative launch via the shell-uid daemon (am start): a startActivity from
-        // this @ApplicationContext can lose the foreground race when BYDMate is on top
-        // (e.g. a voice session started from the Settings screen), so the launched app
-        // would snap back behind us. Fall back to startActivity only when the daemon is
-        // unreachable.
+        // Try the shell-uid daemon first, but do not trust "am start" exit status alone.
+        // On DiLink 3 it may report success while the current Alice/browser task stays in front.
+        // Verify that the requested package actually becomes the top task; otherwise retry via
+        // the application's real launcher Intent.
         if (helper.launchApp(pkg)) {
-            maybeMinimize(payload)
-            return DispatchResult(true)
+            repeat(8) {
+                if (helper.getTopTaskPackage() == pkg) {
+                    maybeMinimize(payload)
+                    return DispatchResult(true)
+                }
+                delay(250L)
+            }
+            Log.w(TAG, "app_launch daemon reported success but $pkg did not reach foreground; using launcher fallback")
         }
         val intent = context.packageManager.getLaunchIntentForPackage(pkg)!!
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -902,8 +908,9 @@ class ActionDispatcher @Inject constructor(
         // Home/Work shortcut, which now can land on Maps as well.
         val routeMode = !payload.optBoolean("show", false) &&
             payload.optString("query").isBlank()
-        val autoGoSupported = routeMode && !willOpenMaps(payload) &&
-            (shortcut != null || resolveNavigator().first == RouteNavigatorUris.YANDEX)
+        val autoGoSupported = routeMode && !willOpenMaps(payload) && !willOpenWaze(payload) &&
+            !willOpenGoogleMaps(payload) &&
+            (shortcut != null || resolveNavigator(payload).first == RouteNavigatorUris.YANDEX)
         val go = autoGoRequested(payload)
         val flow = NavigateSplitFlow(object : NavigateSplitFlow.Env {
             override fun activeSplitPair(): SplitPair? =
@@ -960,40 +967,42 @@ class ActionDispatcher @Inject constructor(
         }
     }
 
+    private fun resolveNavigator(): Pair<String, String?> =
+        RouteNavigatorResolver.resolve(context, ::isPackageInstalled) { Log.i(TAG, it) }
+
     /**
-     * Which map app routes go to, plus the reason text when 2GIS or Maps was replaced by
-     * Yandex Navigator because it is not installed (#190, #200).
+     * Optional per-command navigator override used by external deterministic bridges (Alice).
+     * It never changes the user's saved BYDMate navigator preference.
      */
-    private fun resolveNavigator(): Pair<String, String?> {
-        val chosen = RouteNavigatorUris.normalize(
-            context.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
-                .getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null))
-        Log.i(TAG, "navigate: navigator=$chosen")
-        val dgisFellBack = chosen == RouteNavigatorUris.DGIS &&
-            !isPackageInstalled(RouteNavigatorUris.DGIS_PACKAGE)
-        if (dgisFellBack) {
-            Log.i(TAG, "navigate: 2gis not installed, falling back to yandex")
-            return RouteNavigatorUris.YANDEX to "2ГИС не установлен, открыт Яндекс Навигатор"
+    private fun requestedNavigator(payload: JSONObject): String? =
+        when (payload.optString("app").trim().lowercase()) {
+            RouteNavigatorUris.YANDEX -> RouteNavigatorUris.YANDEX
+            RouteNavigatorUris.MAPS -> RouteNavigatorUris.MAPS
+            RouteNavigatorUris.DGIS -> RouteNavigatorUris.DGIS
+            RouteNavigatorUris.WAZE -> RouteNavigatorUris.WAZE
+            RouteNavigatorUris.GOOGLE_MAPS -> RouteNavigatorUris.GOOGLE_MAPS
+            else -> null
         }
-        val mapsFellBack = chosen == RouteNavigatorUris.MAPS &&
-            NavPackages.YANDEX_MAPS.none { isPackageInstalled(it) }
-        if (mapsFellBack) {
-            Log.i(TAG, "navigate: yandex maps not installed, falling back to yandex")
-            return RouteNavigatorUris.YANDEX to "Яндекс Карты не установлены, открыт Яндекс Навигатор"
-        }
-        return chosen to null
-    }
+
+    private fun resolveNavigator(payload: JSONObject): Pair<String, String?> =
+        requestedNavigator(payload)?.let { it to null } ?: resolveNavigator()
 
     private fun sendNavigateIntent(payload: JSONObject, shortcut: String?): DispatchResult {
         // #190/#200: which map app the user picked for routes and map search. 2GIS or Maps that
         // is not installed falls back to Yandex Navigator for this action, and says so in the
         // result reason.
-        val (navigator, fallbackReason) = resolveNavigator()
+        val (navigator, fallbackReason) = resolveNavigator(payload)
         // app="maps" (voice: «…в Яндекс Картах») or Maps as the settings default mirror the
         // whole command set, Home/Work shortcut included, into Yandex Maps.
         if (isMapsRequest(payload) || navigator == RouteNavigatorUris.MAPS) {
             return navigateMaps(payload, shortcut)
         }
+        specialNavigatorShortcut(
+            navigator,
+            shortcut,
+            fallbackReason,
+            ::startNavigate,
+        )?.let { return it }
         // Navigator's own saved Home/Work: exported shortcut actions on its MapActivity
         // resolve the address internally, so no coordinates are needed. Undocumented
         // (launcher-shortcut contract); tryStartActivity degrades to a clear error if
@@ -1040,7 +1049,7 @@ class ActionDispatcher @Inject constructor(
 
     /** Per-command target of a navigate payload: Maps only when the driver named it. */
     private fun isMapsRequest(payload: JSONObject): Boolean =
-        payload.optString("app").trim().equals(RouteNavigatorUris.MAPS, ignoreCase = true)
+        requestedNavigator(payload) == RouteNavigatorUris.MAPS
 
     /**
      * Whether [navigate]/[sendNavigateIntent] will land on Yandex Maps for this payload, either
@@ -1049,7 +1058,13 @@ class ActionDispatcher @Inject constructor(
      * foreground-verification app. Mirrors [sendNavigateIntent]'s own routing exactly.
      */
     fun willOpenMaps(payload: JSONObject): Boolean =
-        isMapsRequest(payload) || resolveNavigator().first == RouteNavigatorUris.MAPS
+        resolveNavigator(payload).first == RouteNavigatorUris.MAPS
+
+    fun willOpenWaze(payload: JSONObject): Boolean =
+        resolveNavigator(payload).first == RouteNavigatorUris.WAZE
+
+    fun willOpenGoogleMaps(payload: JSONObject): Boolean =
+        resolveNavigator(payload).first == RouteNavigatorUris.GOOGLE_MAPS
 
     /**
      * The app="maps" mirror of [sendNavigateIntent] on Yandex Maps' own yandexmaps:// dialect
@@ -1101,6 +1116,9 @@ class ActionDispatcher @Inject constructor(
         Log.i(TAG, "navigate app=maps kind=$mode uri=$uri")
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        RouteNavigatorDiscovery.packagesFor(RouteNavigatorUris.MAPS, context.packageManager)
+            .firstOrNull()
+            ?.let(intent::setPackage)
         val result = tryStartActivity(intent, label)
         Log.i(TAG, "navigate app=maps intent sent label=$label ok=${result.success}" +
             (result.reason?.let { " reason=$it" } ?: ""))
@@ -1119,9 +1137,9 @@ class ActionDispatcher @Inject constructor(
         Log.i(TAG, "navigate: app=$navigator mode=$mode uri=$uri")
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (navigator == RouteNavigatorUris.DGIS) {
-            intent.setPackage(RouteNavigatorUris.DGIS_PACKAGE)
-        }
+        RouteNavigatorDiscovery.packagesFor(navigator, context.packageManager)
+            .firstOrNull()
+            ?.let(intent::setPackage)
         val result = tryStartActivity(intent, label)
         Log.i(TAG, "navigate: intent sent label=$label ok=${result.success}")
         return if (result.success && fallbackReason != null) result.copy(reason = fallbackReason)
@@ -1258,4 +1276,30 @@ class ActionDispatcher @Inject constructor(
 
     private fun nm(): NotificationManager =
         context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+}
+
+
+private fun specialNavigatorShortcut(
+    navigator: String,
+    shortcut: String?,
+    fallbackReason: String?,
+    startNavigate: (String, String, String, String, String?) -> DispatchResult,
+): DispatchResult? {
+    shortcut ?: return null
+    if (navigator == RouteNavigatorUris.WAZE) {
+        if (shortcut !in setOf("home", "work")) {
+            return DispatchResult(false, "неизвестный shortcut: $shortcut")
+        }
+        return startNavigate(
+            navigator,
+            RouteNavigatorUris.MODE_ROUTE,
+            "https://waze.com/ul?favorite=$shortcut&navigate=yes",
+            "navigate_waze_shortcut:$shortcut",
+            fallbackReason,
+        )
+    }
+    if (navigator == RouteNavigatorUris.GOOGLE_MAPS) {
+        return DispatchResult(false, "Google Maps: shortcut home/work пока не поддерживается")
+    }
+    return null
 }

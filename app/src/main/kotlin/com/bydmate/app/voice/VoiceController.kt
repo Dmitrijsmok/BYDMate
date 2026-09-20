@@ -81,6 +81,15 @@ class VoiceController @Inject constructor(
      */
     fun sessionActive(): Boolean = listening.value || busy.get()
 
+    /**
+     * External assistants such as Alice speak through STREAM_MUSIC on DiLink.
+     * Do not lower STREAM_MUSIC here: doing so also lowers Alice herself, which made every
+     * invocation start at volume index 4. Yandex manages its own audio focus/ducking.
+     */
+    fun beginExternalAssistantAudio() = Unit
+
+    fun endExternalAssistantAudio() = Unit
+
     /** Test seams, same rationale as [lastSpeakingSeenMs]: deterministic await conditions
      *  instead of fixed sleeps, no public API surface added. */
     internal fun routingJobForTest(): Job? = routingJob
@@ -678,6 +687,10 @@ class VoiceController @Inject constructor(
             announce("Голос", "Не понял", "Не понял")
             return
         }
+        // Regression guard from the fast Build 84/85 path: warm the local TTS engine while
+        // the external LLM is thinking. warmUp() is non-blocking and queues engine creation on
+        // Sherpa's worker, so the first streamed sentence no longer pays model-load latency.
+        if (gate.ttsEnabled()) runCatching { ttsEngine.warmUp() }
         val queue = if (gate.ttsEnabled()) runCatching { ttsEngine.startQueue() }.getOrNull() else null
         val streamed = StringBuilder()
         var queuedAny = false
