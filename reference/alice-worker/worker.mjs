@@ -866,7 +866,7 @@ function baseDevice(
     device_info: {
       manufacturer: "BYDMate",
       model: name,
-      sw_version: "5.7",
+      sw_version: "5.8",
     },
   };
 }
