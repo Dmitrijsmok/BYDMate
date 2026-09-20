@@ -8,6 +8,7 @@ jobs:
   export:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -22,6 +23,7 @@ jobs:
           cp "$TOOLS_DIR/zipalign" out/zipalign
           cp "$TOOLS_DIR/lib/apksigner.jar" out/lib/apksigner.jar
           cp -a "$TOOLS_DIR/lib64" out/lib64
+          cp reference/alice-worker/BYDMate-Alice-worker.txt out/BYDMate-Alice-worker-5.8.txt
           chmod +x out/apksigner out/zipalign
           "$TOOLS_DIR/apksigner" version
           "$TOOLS_DIR/zipalign" -h >/dev/null || true
