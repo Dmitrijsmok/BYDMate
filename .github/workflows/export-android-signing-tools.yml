@@ -21,6 +21,7 @@ jobs:
           cp "$TOOLS_DIR/apksigner" out/apksigner
           cp "$TOOLS_DIR/zipalign" out/zipalign
           cp "$TOOLS_DIR/lib/apksigner.jar" out/lib/apksigner.jar
+          cp -a "$TOOLS_DIR/lib64" out/lib64
           chmod +x out/apksigner out/zipalign
           "$TOOLS_DIR/apksigner" version
           "$TOOLS_DIR/zipalign" -h >/dev/null || true
