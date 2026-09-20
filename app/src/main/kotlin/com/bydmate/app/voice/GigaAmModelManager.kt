@@ -142,12 +142,15 @@ class GigaAmModelManager(
                             // (baseDir points at v3), so sweep it with the same lock held.
                             legacyDir().deleteRecursively()
                             legacyStagingDir().deleteRecursively()
+                        } catch (t: CancellationException) {
+                            staging.deleteRecursively()
+                            throw t
                         } catch (t: Throwable) {
                             staging.deleteRecursively()
                             // A graceful unpack failure should force a fresh archive next time;
                             // a hard power loss never reaches this catch, so the complete archive
                             // remains available and is reused on the next boot.
-                            if (t !is CancellationException) tmpArchive.delete()
+                            tmpArchive.delete()
                             throw t
                         }
                     }
