@@ -92,26 +92,7 @@ class GigaAmModelManager(
     suspend fun download(onProgress: (Phase, Int) -> Unit): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val tmpArchive = modelDownloadFile()
-                val tmpVad = vadDownloadFile()
-
-                // Keep a partial model archive so an interrupted 226 MiB download can resume.
-                // v3.17.4 still cleans stale staging/VAD leftovers before the storage precheck;
-                // only the resumable archive is retained.
-                tmpVad.delete()
-                diskMutex.withLock { stagingDir().deleteRecursively() }
-
-                // The existing partial archive already occupies part of the peak requirement,
-                // so only require the remaining free space. This preserves the v3.17.4
-                // preflight without rejecting a valid resumable download.
-                val existingArchiveBytes = tmpArchive
-                    .takeIf(File::isFile)
-                    ?.length()
-                    ?.coerceIn(0L, MODEL_ARCHIVE_BYTES)
-                    ?: 0L
-                val requiredFree = additionalRequiredFreeBytes(existingArchiveBytes)
-                val free = usableSpace()
-                if (free < requiredFree) throw InsufficientStorageException(requiredFree, free)
+                val (tmpArchive, tmpVad) = prepareDownloadFiles()
                 try {
                     // Model archive: 0..DOWNLOAD_WEIGHT of the combined progress.
                     downloadToFile(MODEL_URL, tmpArchive) { pct ->
@@ -182,6 +163,27 @@ class GigaAmModelManager(
                 }
             }.onFailure { if (it is CancellationException) throw it }
         }
+
+    private suspend fun prepareDownloadFiles(): Pair<File, File> {
+        val tmpArchive = modelDownloadFile()
+        val tmpVad = vadDownloadFile()
+
+        // Keep a partial model archive so an interrupted 226 MiB download can resume.
+        // Stale VAD/staging leftovers are still discarded before the v3.17.4 precheck.
+        tmpVad.delete()
+        diskMutex.withLock { stagingDir().deleteRecursively() }
+
+        val existingArchiveBytes = tmpArchive
+            .takeIf(File::isFile)
+            ?.length()
+            ?.coerceIn(0L, MODEL_ARCHIVE_BYTES)
+            ?: 0L
+        val requiredFree = additionalRequiredFreeBytes(existingArchiveBytes)
+        val free = usableSpace()
+        if (free < requiredFree) throw InsufficientStorageException(requiredFree, free)
+
+        return tmpArchive to tmpVad
+    }
 
     private suspend fun downloadToFile(url: String, dest: File, onProgress: (Int) -> Unit) {
         var offset = dest.takeIf(File::isFile)?.length() ?: 0L
