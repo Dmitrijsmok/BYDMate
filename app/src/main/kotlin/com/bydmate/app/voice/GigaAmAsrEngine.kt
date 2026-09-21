@@ -136,8 +136,11 @@ internal class GigaAmAsrEngine(
     @Synchronized
     override fun warmUp() {
         if (!isReady()) return
-        runCatching { obtainRecognizer() }
-        runCatching { ensureCachedVad() }
+        // Do not continue into a second native model load after the recognizer failed. Besides
+        // wasting work, that would overwrite the crash-loop guard's most recent artifact and
+        // make the next process start quarantine the wrong file.
+        val recognizerReady = runCatching { obtainRecognizer() }.isSuccess
+        if (recognizerReady) runCatching { ensureCachedVad() }
     }
 
     /** Single synchronized build point for the shared recognizer: warmUp() and transcribe()
