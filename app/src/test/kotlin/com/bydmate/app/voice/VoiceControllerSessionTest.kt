@@ -1612,12 +1612,9 @@ class VoiceControllerSessionTest {
             answers.none { "поздний ответ" in it })
     }
 
-    // --- Wave P Task 8: orb auto-closes after successful play_music ---
-
-    // Wave P: a successful play_music tool call auto-closes the continuous session once the
-    // reply has been spoken, so the orb stops ducking the music it just started. The session
-    // must stay open for the whole spoken reply and close only when playback ends.
-    @Test fun `successful play_music closes the continuous session after the answer`() {
+    // Local BYDMate stays continuously armed after tool calls, including play_music.
+    // Only an explicit second PTT press stops the local session; Alice lifecycle is separate.
+    @Test fun `successful play_music keeps local session listening until ptt stop`() {
         val fakeAsr = FakeContinuousAsr(ready = true)
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         val agent = mockk<AgentOrchestrator>()
@@ -1626,36 +1623,7 @@ class VoiceControllerSessionTest {
         coEvery { agent.noteAction(any()) } returns Unit
         coEvery { agent.expectsFollowUp() } returns false
         val tts = mockk<TtsEngine>(relaxed = true)
-        val speaking = MutableStateFlow(true)   // the reply is already streaming out loud
-        every { tts.speaking } returns speaking
-        val controller = makeController(fakeAsr, dispatcher, agentOrchestrator = agent, ttsEngine = tts)
-
-        controller.onPttPressed()
-        awaitTrue { controller.listening.value }
-        awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
-
-        // While the reply is still being spoken the session must stay open...
-        Thread.sleep(500)
-        assertTrue(controller.listening.value)
-        // ...and closes once playback ends.
-        speaking.value = false
-        awaitTrue { !controller.listening.value }   // the session closed itself
-    }
-
-    // Pin for the enqueue-vs-playback race: speak() returns before the TTS worker flips
-    // speaking=true, so a close that waits only for !speaking fires immediately and cuts the
-    // reply before it starts. The close must wait for playback to begin, then to end.
-    @Test fun `play_music close waits for a reply whose playback has not started yet`() {
-        val fakeAsr = FakeContinuousAsr(ready = true)
-        val dispatcher = mockk<ActionDispatcher>(relaxed = true)
-        val agent = mockk<AgentOrchestrator>()
-        coEvery { agent.ask(any(), any()) } returns AgentResult.Answer(
-            "Включаю", listOf(AgentToolOutcome("play_music", true)))
-        coEvery { agent.noteAction(any()) } returns Unit
-        coEvery { agent.expectsFollowUp() } returns false
-        val tts = mockk<TtsEngine>(relaxed = true)
-        val speaking = MutableStateFlow(false)  // enqueue() returned, worker not playing yet
+        val speaking = MutableStateFlow(true)
         every { tts.speaking } returns speaking
         val controller = makeController(fakeAsr, dispatcher, agentOrchestrator = agent, ttsEngine = tts)
 
@@ -1664,13 +1632,14 @@ class VoiceControllerSessionTest {
         awaitSubscribed(fakeAsr.events)
         fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("включи музыку"))
 
-        // The answer landed but playback has not begun: the session must NOT close.
-        Thread.sleep(500)
-        assertTrue(controller.listening.value)
-        speaking.value = true    // playback finally starts
+        // Playback ending must not close the local continuous session.
         Thread.sleep(300)
-        assertTrue(controller.listening.value)   // still open while the reply plays
-        speaking.value = false   // playback ends
+        assertTrue(controller.listening.value)
+        speaking.value = false
+        Thread.sleep(700)
+        assertTrue(controller.listening.value)
+
+        controller.onPttPressed()
         awaitTrue { !controller.listening.value }
     }
 
@@ -1690,43 +1659,7 @@ class VoiceControllerSessionTest {
         fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
 
         Thread.sleep(700)
-        assertTrue(controller.listening.value)   // still listening
-    }
-
-    // Guard against the stale deferred close: PTT for a NEW session stops TTS, which is the very
-    // signal the parked close-coroutine waits for -- without the job-identity check it would set
-    // stopRequested and kill the session the user just started.
-    @Test fun `play_music auto-close never kills a newer session started while tts still spoke`() {
-        val fakeAsr = FakeContinuousAsr(ready = true)
-        val dispatcher = mockk<ActionDispatcher>(relaxed = true)
-        val agent = mockk<AgentOrchestrator>()
-        coEvery { agent.ask(any(), any()) } returns AgentResult.Answer(
-            "Включаю", listOf(AgentToolOutcome("play_music", true)))
-        coEvery { agent.noteAction(any()) } returns Unit
-        coEvery { agent.expectsFollowUp() } returns false
-        val tts = mockk<TtsEngine>(relaxed = true)
-        val speaking = MutableStateFlow(true)   // the reply keeps playing until flipped below
-        every { tts.speaking } returns speaking
-        val controller = makeController(fakeAsr, dispatcher, agentOrchestrator = agent, ttsEngine = tts)
-
-        controller.onPttPressed()
-        awaitTrue { controller.listening.value }
-        awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("включи музыку"))
-        // The deferred close is now parked on speaking.first { !it }. End the first session via
-        // silence auto-stop; ticks arriving while the utterance is still routing are dropped by
-        // the busy guard, so keep re-emitting until the session actually stops.
-        awaitTrue {
-            fakeAsr.events.tryEmit(ContinuousAsrEvent.SilenceTick(30_000L))
-            !controller.listening.value
-        }
-
-        controller.onPttPressed()               // user starts a fresh session...
-        awaitTrue { controller.listening.value }
-        speaking.value = false                  // ...and the old reply finally ends
-
-        Thread.sleep(700)
-        assertTrue(controller.listening.value)  // the new session must survive the stale close
+        assertTrue(controller.listening.value)
     }
 
     // --- I-1 fix: the else-branch (model not ready / non-RU) must also reset stopRequested ---
