@@ -182,23 +182,21 @@ class ListeningOverlayTest {
         assertEquals(null, ListeningOverlay.answerText)
     }
 
-    // (c) hide() must tear down every window -- production wraps the draggable pill, dialog and
-    // upper-right mic indicator in one CompositeOverlayHandle.
+    // (c) hide() must tear down both production windows: the fixed upper-left mic icon and
+    // the transcript/answer dialog below it.
     @Test fun `hide destroys every window the composite handle wraps`() = runBlocking {
-        val pill = FakeHandle()
-        val dialog = FakeHandle()
         val mic = FakeHandle()
+        val dialog = FakeHandle()
         ListeningOverlay.attachWindow = { _, _ ->
-            ListeningOverlay.CompositeOverlayHandle(listOf(pill, dialog, mic))
+            ListeningOverlay.CompositeOverlayHandle(listOf(mic, dialog))
         }
         ListeningOverlay.poster = { it.run() }
 
         ListeningOverlay.show(context, "Слушаю")
         ListeningOverlay.hide()
 
-        assertTrue(pill.destroyed)
-        assertTrue(dialog.destroyed)
         assertTrue(mic.destroyed)
+        assertTrue(dialog.destroyed)
     }
 
     // --- Task 4 regression: teardown order (removeView-before-onDestroy discipline) ---
