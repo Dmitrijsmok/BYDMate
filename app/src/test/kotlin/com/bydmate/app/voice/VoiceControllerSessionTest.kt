@@ -503,9 +503,9 @@ class VoiceControllerSessionTest {
         coVerify(exactly = 0) { dispatcher.dispatch(any(), any()) }
     }
 
-    // (c) SilenceTick reaching the 30s auto-stop threshold ends the session on its own. The tick
-    // is exactly 30_000 so this test pins the Wave P threshold: it fails if anyone reverts to 60s.
-    @Test fun `silence tick at 30s auto-stops the session`() {
+    // Silence is not an OFF gesture for the local assistant. The continuous session stays armed
+    // until the driver presses PTT again (or capture/ASR actually fails).
+    @Test fun `silence does not auto-stop the session`() {
         val fakeAsr = FakeContinuousAsr(ready = true)
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         val controller = makeController(fakeAsr, dispatcher)
@@ -514,8 +514,13 @@ class VoiceControllerSessionTest {
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
 
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.SilenceTick(30_000L))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.SilenceTick(120_000L))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("закрой окна"))
 
+        awaitVerify { coVerify(exactly = 1) { dispatcher.dispatch(any(), any()) } }
+        assertTrue(controller.listening.value)
+
+        controller.onPttPressed()
         awaitTrue { !controller.listening.value }
     }
 
