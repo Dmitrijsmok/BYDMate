@@ -10,6 +10,7 @@ import com.bydmate.app.data.automation.VoiceFireResult
 import com.bydmate.app.R
 import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.data.local.entity.ActionDef
+import com.bydmate.app.data.remote.AliceApertureController
 import com.bydmate.app.ui.overlay.ListeningOverlay
 import com.bydmate.app.util.appLocalizedContext
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -62,6 +63,15 @@ class VoiceController @Inject constructor(
     // [state], which flashes each utterance's terminal outcome and resets independently.
     private val _listening = MutableStateFlow(false)
     val listening: StateFlow<Boolean> = _listening.asStateFlow()
+
+    // Method injection keeps the constructor stable for the large JVM voice test suite while
+    // production can reuse Alice's proven closed-loop window positioning on DiLink 3.
+    private var apertureController: AliceApertureController? = null
+
+    @Inject
+    internal fun injectApertureController(controller: AliceApertureController) {
+        apertureController = controller
+    }
 
     private val busy = AtomicBoolean(false)
     @Volatile private var sessionJob: Job? = null
@@ -554,10 +564,11 @@ class VoiceController @Inject constructor(
         // failure so the announce never claims success for a half-done utterance (#98).
         var failReason: String? = null
         for (command in commands) {
-            val result = actionDispatcher.dispatch(
-                ActionDef(command = command, displayName = command, kind = "param"),
-                data = snapshot
-            )
+            val result = dispatchWindowPosition(command, snapshot?.speed)
+                ?: actionDispatcher.dispatch(
+                    ActionDef(command = command, displayName = command, kind = "param"),
+                    data = snapshot
+                )
             if (!result.success) {
                 failReason = result.reason ?: transcript
                 break
@@ -579,6 +590,24 @@ class VoiceController @Inject constructor(
                 "NLU blocked: cmd=$cmdLog transcript=\"$transcript\" reason=$failReason")
             announce("Голос", "Услышал: «$transcript». Отказ: $failReason", "Не получилось")
         }
+    }
+
+    private suspend fun dispatchWindowPosition(
+        command: String,
+        speed: Int?,
+    ): com.bydmate.app.data.automation.DispatchResult? {
+        val requests = VoiceWindowPositionRouter.resolve(command) ?: return null
+        val controller = apertureController ?: return null
+        for (request in requests) {
+            val result = controller.positionWindow(request.action, request.target, speed)
+            if (result.isFailure) {
+                return com.bydmate.app.data.automation.DispatchResult(
+                    false,
+                    result.exceptionOrNull()?.message ?: "window_position_failed",
+                )
+            }
+        }
+        return com.bydmate.app.data.automation.DispatchResult(true)
     }
 
     /** Relative temperature: read the live AC setpoint, step +-1, clamp 16..30,
