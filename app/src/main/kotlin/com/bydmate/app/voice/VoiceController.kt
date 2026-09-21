@@ -286,12 +286,13 @@ class VoiceController @Inject constructor(
         }
     }
 
-    private fun canStartAfterWarmup(): Boolean =
-        currentCoroutineContext().isActive &&
-            gate.isEnabled() &&
-            currentLang() == VoiceLang.RU &&
-            continuousAsr.isWarm() &&
-            !_listening.value
+    private suspend fun canStartAfterWarmup(): Boolean {
+        if (!currentCoroutineContext().isActive) return false
+        if (!gate.isEnabled()) return false
+        if (currentLang() != VoiceLang.RU) return false
+        if (!continuousAsr.isWarm()) return false
+        return !_listening.value
+    }
 
     private fun reportVoiceUnavailable() {
         // GigaAM model missing (or non-RU language, which GigaAM does not support):
