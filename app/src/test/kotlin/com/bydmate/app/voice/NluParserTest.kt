@@ -105,7 +105,9 @@ class NluParserTest {
 
     @Test fun driver_window_explicit_percentage() {
         assertEquals("主驾打开37", cmd("открой окно водителя на 37 процентов"))
+        assertEquals("主驾打开37", cmd("открой окно водителя на тридцать семь процентов"))
         assertEquals("主驾打开50", cmd("открой окно водителя на пятьдесят процентов"))
+        assertEquals("主驾打开99", cmd("открой окно водителя на девяносто девять процентов"))
     }
 
     @Test fun all_windows_explicit_percentage_fans_out() {
