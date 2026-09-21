@@ -64,6 +64,10 @@ object AliceBridgeCommandTranslator {
         "seat.passenger.heat" -> seat("副驾座椅加热", json)
         "seat.driver.vent" -> seat("主驾座椅通风", json)
         "seat.passenger.vent" -> seat("副驾座椅通风", json)
+        "window.driver.position" -> windowPosition("主驾", json)
+        "window.passenger.position" -> windowPosition("副驾", json)
+        "window.rear_left.position" -> windowPosition("后左", json)
+        "window.rear_right.position" -> windowPosition("后右", json)
         else -> null
     }
 
@@ -85,6 +89,11 @@ object AliceBridgeCommandTranslator {
     private fun seat(prefix: String, json: JSONObject): String? {
         val level = json.intValue()?.takeIf { it in 0..2 } ?: return null
         return if (level == 0) prefix + "关闭" else prefix + level + "档"
+    }
+
+    private fun windowPosition(prefix: String, json: JSONObject): String? {
+        val percent = json.intValue()?.takeIf { it in 0..100 } ?: return null
+        return prefix + "打开" + percent
     }
 
     private fun JSONObject.intValue(): Int? = when (val value = opt("value")) {
