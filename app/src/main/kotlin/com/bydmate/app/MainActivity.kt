@@ -129,6 +129,14 @@ class MainActivity : AppCompatActivity() {
         ) {
             permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
         }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            // Local BYDMate voice mode uses AudioRecord directly. Request this with the normal
+            // first-run permission batch so a restored install cannot silently keep Voice enabled
+            // while the OS microphone permission is still missing.
+            permissions.add(Manifest.permission.RECORD_AUDIO)
+        }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
             != PackageManager.PERMISSION_GRANTED
         ) {
