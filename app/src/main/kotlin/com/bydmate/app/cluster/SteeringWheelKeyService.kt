@@ -29,6 +29,23 @@ import kotlinx.coroutines.flow.MutableStateFlow
  * no Accessibility UI on DiLink) AND the settings switch is on, so it does nothing for users who
  * never opt in.
  */
+private enum class VoicePressRoute { NONE, LOCAL, ALICE }
+
+private fun voicePressRoute(
+    repeatCount: Int,
+    aliceEnabled: Boolean,
+    keyCode: Int,
+    lastLocalKeyCode: Int,
+    lastLocalDownMs: Long,
+    nowMs: Long,
+): VoicePressRoute = when {
+    repeatCount != 0 -> VoicePressRoute.NONE
+    aliceEnabled -> VoicePressRoute.ALICE
+    keyCode == lastLocalKeyCode && isVoiceDoublePress(lastLocalDownMs, nowMs) ->
+        VoicePressRoute.ALICE
+    else -> VoicePressRoute.LOCAL
+}
+
 class SteeringWheelKeyService : AccessibilityService() {
 
     private var cachedEntryPoint: ClusterEntryPoint? = null
@@ -149,26 +166,29 @@ class SteeringWheelKeyService : AccessibilityService() {
         aliceEnabled: Boolean,
     ): Boolean? = when (decision) {
         VoiceKeyDecision.TRIGGER -> {
-            if (event.repeatCount == 0) {
-                if (aliceEnabled) {
+            val now = SystemClock.elapsedRealtime()
+            when (
+                voicePressRoute(
+                    repeatCount = event.repeatCount,
+                    aliceEnabled = aliceEnabled,
+                    keyCode = event.keyCode,
+                    lastLocalKeyCode = lastLocalVoiceKeyCode,
+                    lastLocalDownMs = lastLocalVoiceDownMs,
+                    nowMs = now,
+                )
+            ) {
+                VoicePressRoute.ALICE -> {
                     lastLocalVoiceDownMs = 0L
                     lastLocalVoiceKeyCode = -1
+                    // The launcher tears Local AudioRecord/TTS down before Alice takes the mic.
                     aliceLauncher.trigger()
-                } else {
-                    val now = SystemClock.elapsedRealtime()
-                    val isDouble = event.keyCode == lastLocalVoiceKeyCode &&
-                        isVoiceDoublePress(lastLocalVoiceDownMs, now)
-                    if (isDouble) {
-                        lastLocalVoiceDownMs = 0L
-                        lastLocalVoiceKeyCode = -1
-                        // The launcher tears Local AudioRecord/TTS down before Alice takes the mic.
-                        aliceLauncher.trigger()
-                    } else {
-                        lastLocalVoiceDownMs = now
-                        lastLocalVoiceKeyCode = event.keyCode
-                        entryPoint().voiceController().onPttPressed()
-                    }
                 }
+                VoicePressRoute.LOCAL -> {
+                    lastLocalVoiceDownMs = now
+                    lastLocalVoiceKeyCode = event.keyCode
+                    entryPoint().voiceController().onPttPressed()
+                }
+                VoicePressRoute.NONE -> Unit
             }
             true
         }
