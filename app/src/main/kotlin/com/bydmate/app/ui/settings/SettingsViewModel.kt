@@ -1187,7 +1187,12 @@ class SettingsViewModel @Inject constructor(
             .edit().putBoolean(SettingsRepository.KEY_ALICE_ENABLED, enabled).apply()
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_ALICE_ENABLED, enabled.toString())
-            if (enabled && _uiState.value.voiceEnabled) ensureVoiceKeyService("alice-provider")
+            if (_uiState.value.voiceEnabled) {
+                ensureVoiceKeyService(if (enabled) "alice-provider" else "local-provider")
+                if (!enabled) {
+                    viewModelScope.launch(Dispatchers.IO) { runCatching { continuousAsr.warmUp() } }
+                }
+            }
         }
     }
 
