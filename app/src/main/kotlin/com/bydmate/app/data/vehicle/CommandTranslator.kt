@@ -220,18 +220,7 @@ object CommandTranslator {
         // Dynamic window positions: 1..99 use the validated per-door percentage fids.
         // Exact 0/100 are already caught by [table] above and intentionally use the dedicated
         // close/open fids because DiLink 3 accepts the percentage endpoints but does not move.
-        WINDOW_POSITION_REGEX.matchEntire(stripped)?.let { m ->
-            val action = when (m.groupValues[1]) {
-                "主驾" -> "window_driver_pos"
-                "副驾" -> "window_passenger_pos"
-                "后左" -> "window_rear_left_pos"
-                "后右" -> "window_rear_right_pos"
-                else -> return emptyList()
-            }
-            val percent = m.groupValues[2].toIntOrNull() ?: return emptyList()
-            if (percent !in 1..99) return emptyList()
-            return listOf(Resolved(action, percent))
-        }
+        resolveWindowPosition(stripped)?.let { return it }
         // Dynamic temperature: 18..32 are numeric setpoints. 17 is BYD LO and 33 is BYD HI.
         // Requests below/above the numeric range collapse to those two sentinel setpoints.
         TEMP_REGEX.matchEntire(stripped)?.let { m ->
@@ -258,8 +247,22 @@ object CommandTranslator {
         return emptyList()
     }
 
+    private fun resolveWindowPosition(command: String): List<Resolved>? {
+        val match = WINDOW_POSITION_REGEX.matchEntire(command) ?: return null
+        val action = WINDOW_POSITION_ACTIONS[match.groupValues[1]] ?: return emptyList()
+        val percent = match.groupValues[2].toIntOrNull() ?: return emptyList()
+        if (percent !in 1..99) return emptyList()
+        return listOf(Resolved(action, percent))
+    }
+
     // Dynamic per-window aperture command emitted by local NLU and the Alice bridge.
     private val WINDOW_POSITION_REGEX = Regex("""(主驾|副驾|后左|后右)打开(\d{1,3})""")
+    private val WINDOW_POSITION_ACTIONS = mapOf(
+        "主驾" to "window_driver_pos",
+        "副驾" to "window_passenger_pos",
+        "后左" to "window_rear_left_pos",
+        "后右" to "window_rear_right_pos",
+    )
 
     // Dynamic temperature command: 设置温度<N> (e.g. 设置温度24). Range-clamped in resolve().
     private val TEMP_REGEX = Regex("""设置温度(\d+)""")
