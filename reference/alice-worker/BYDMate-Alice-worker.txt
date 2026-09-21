@@ -1444,15 +1444,15 @@ function yandexDevices() {
 
 
 function exposedYandexDevices(env) {
-  const mode = String(env.ALICE_SMART_HOME_CARDS || "compact").trim().toLowerCase();
+  const mode = String(env.ALICE_SMART_HOME_CARDS || "full").trim().toLowerCase();
   const all = yandexDevices();
 
   if (mode === "legacy" || mode === "full") return all;
   if (mode === "none" || mode === "off" || mode === "dialogs") return [];
 
-  // Compact mode intentionally keeps Alice nearly card-free. BYDMate owns the rich
-  // vehicle controls; Alice is the voice surface. Keep one useful status card so the
-  // Smart Home integration is still visible and easy to diagnose.
+  // Compact mode intentionally publishes only battery diagnostics. Important: Yandex
+  // Smart Home voice commands are derived from discovered devices, so compact mode also
+  // disables direct commands such as "Алиса, включи климат". Full is therefore the default.
   return all.filter((device) => device.id === DEVICE.battery);
 }
 
