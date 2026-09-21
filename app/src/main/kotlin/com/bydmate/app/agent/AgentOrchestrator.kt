@@ -197,8 +197,7 @@ class AgentOrchestrator @Inject constructor(
     ): AgentResult {
         val outcomes = mutableListOf<AgentToolOutcome>()
         val callCounts = mutableMapOf<String, Int>()
-        var lastToolName: String? = null
-        var lastToolResult: String? = null
+        var lastTool: Pair<String, String>? = null
         var loopStrikes = 0
         repeat(MAX_ITERATIONS) {
             // Fresh chunker per LLM turn: a tool round's unterminated tail is discarded when
@@ -219,12 +218,7 @@ class AgentOrchestrator @Inject constructor(
                 }
             tracer.reply(reply)
             if (reply.toolCalls.isEmpty()) {
-                val answer = terminalAgentAnswer(
-                    finalAnswer(reply),
-                    lastToolName,
-                    lastToolResult,
-                    outcomes,
-                )
+                val answer = terminalAgentAnswer(finalAnswer(reply), lastTool, outcomes)
                 if (answer.isEmpty()) return AgentResult.Error("Пустой ответ модели")
                 if (onSentence != null) chunker?.flush()?.let(onSentence)
                 messages += AgentMessage.Assistant(answer)
@@ -263,8 +257,7 @@ class AgentOrchestrator @Inject constructor(
                 val ok = runCatching { !JSONObject(res).has("error") }.getOrDefault(true)
                 tracer.tool(call, if (ok) "ok" else "error", nowMs() - toolStart, res)
                 outcomes += AgentToolOutcome(call.name, ok)
-                lastToolName = call.name
-                lastToolResult = res
+                lastTool = call.name to res
                 messages += AgentMessage.Tool(call.id, res)
             }
         }
@@ -397,14 +390,14 @@ private val MUTATING_AGENT_TOOLS = setOf(
  * battery/range fallback for the same reason. */
 private fun terminalAgentAnswer(
     modelAnswer: String,
-    toolName: String?,
-    toolResult: String?,
+    lastTool: Pair<String, String>?,
     outcomes: List<AgentToolOutcome>,
 ): String {
     if (modelAnswer.isNotEmpty()) return modelAnswer
-    if (toolName == null || outcomes.isEmpty() || outcomes.any { !it.ok }) return ""
+    if (lastTool == null || outcomes.isEmpty() || outcomes.any { !it.ok }) return ""
+    val (toolName, toolResult) = lastTool
     if (toolName == "get_vehicle_state") {
-        val json = runCatching { JSONObject(toolResult.orEmpty()) }.getOrNull() ?: return ""
+        val json = runCatching { JSONObject(toolResult) }.getOrNull() ?: return ""
         val soc = json.optInt("soc_percent", -1).takeIf { it in 0..100 }
         val range = json.optInt("range_km", -1).takeIf { it >= 0 }
         return when {
