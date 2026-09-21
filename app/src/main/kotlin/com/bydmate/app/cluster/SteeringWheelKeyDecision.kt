@@ -81,6 +81,22 @@ fun voiceDecision(keyCode: Int, isDown: Boolean, voiceEnabled: Boolean, voiceKey
 }
 
 /**
+ * DiLink 3 / Android 10 microphone key path observed in the field. The firmware emits 304 for
+ * the actual press and also surfaces 327 on the same hardware path. Alice previously had an
+ * inline special case for these codes, which meant the physical mic button only worked when
+ * Alice was selected. Keep the firmware quirk provider-agnostic: 304 triggers whichever voice
+ * provider BYDMate selected; 327 is swallowed so the stock BYD assistant does not also react.
+ */
+fun diLink3VoiceDecision(keyCode: Int, isDown: Boolean, voiceEnabled: Boolean): VoiceKeyDecision {
+    if (!voiceEnabled) return VoiceKeyDecision.IGNORE
+    return when (keyCode) {
+        304 -> if (isDown) VoiceKeyDecision.TRIGGER else VoiceKeyDecision.CONSUME
+        327 -> VoiceKeyDecision.CONSUME
+        else -> VoiceKeyDecision.IGNORE
+    }
+}
+
+/**
  * Volume-knob PRESS on the steering wheel (KEYCODE_AUTO_MEDIA_PLAY_PAUSE). On firmware V1.6
  * (2026-05) PhoneWindowManager routes this code to the stock MediaKeyHandler, which hands
  * play/pause only to the current audio-focus owner; for anyone else com.byd.mediacenter takes it
