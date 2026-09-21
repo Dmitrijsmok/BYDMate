@@ -35,18 +35,6 @@ jobs:
           name: BYDMate-fork-debug-${{ github.sha }}
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 14
-      - name: Collect Android APK signing tools
-        run: |
-          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
-          mkdir -p apk-sign-tools/lib
-          cp "$BT/apksigner" "$BT/zipalign" apk-sign-tools/
-          cp "$BT/lib/apksigner.jar" apk-sign-tools/lib/
-      - name: Upload Android APK signing tools
-        uses: actions/upload-artifact@v7
-        with:
-          name: android-apk-signing-tools-${{ github.sha }}
-          path: apk-sign-tools/
-          retention-days: 1
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest --stacktrace
       - name: Android Lint
