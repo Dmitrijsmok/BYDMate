@@ -774,26 +774,9 @@ class VoiceController @Inject constructor(
                 // Orb dialog: this branch does not go through announce(), so feed the orb here.
                 showAnswerHook(result.text)
                 scheduleClear(result.text, didSpeak)
-                // Wave P: a successful play_music closes the whole session after the reply -- the orb's
-                // presence ducks the very music the agent just started. Music only; every other tool
-                // keeps the dialogue open. Gated on sessionJob so the legacy single-shot path (which has
-                // no session to close) is untouched.
-                val closingJob = sessionJob
-                if (closingJob != null && result.tools.any { it.name == "play_music" && it.ok }) {
-                    scope.launch {
-                        // speak()/enqueue() returns before the TTS worker flips speaking=true, so
-                        // waiting for !speaking alone completes immediately and would cut the reply
-                        // before it starts. Wait (bounded) for playback to begin, then for it to
-                        // end; if it never begins (TTS off, synth failed), the grace elapses and
-                        // the session still closes.
-                        withTimeoutOrNull(SPEAK_START_GRACE_MS) { ttsEngine.speaking.first { it } }
-                        ttsEngine.speaking.first { !it }   // let the agent finish its own reply first
-                        // PTT restarting a session stops TTS -- the very signal this coroutine
-                        // waits for -- so only close the session this reply belongs to, never a
-                        // newer one the user has already started.
-                        if (sessionJob === closingJob) stopContinuousSession()
-                    }
-                }
+                // Local BYDMate remains a continuous assistant until the driver explicitly
+                // presses PTT again. Tool calls, including play_music, never auto-close the session.
+                // Alice has its own lifecycle and is intentionally unaffected by this contract.
             }
             AgentResult.Disabled -> {
                 earcon.fail(); _state.value = VoiceUiState.NotUnderstood(transcript)
@@ -834,11 +817,6 @@ class VoiceController @Inject constructor(
         // characters per minute, with a hard cap so the block never squats on the screen.
         private const val DIALOG_READ_MS_PER_CHAR = 60L
         private const val DIALOG_READ_MAX_MS = 30_000L
-
-        // Wave P play_music auto-close: how long to wait for the reply's playback to actually
-        // begin (speaking=false -> true) before giving up and closing anyway. Covers offline
-        // synth latency and the online 2 s per-sentence timeout with margin.
-        private const val SPEAK_START_GRACE_MS = 5_000L
 
         // Anti-self-trigger TTS mute window grace period, applied after ttsEngine.speaking
         // transitions to false (see the speakingWatcher in startContinuousSession()).
