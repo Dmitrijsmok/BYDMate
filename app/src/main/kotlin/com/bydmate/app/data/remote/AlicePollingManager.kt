@@ -146,11 +146,11 @@ class AlicePollingManager @Inject constructor(
                 data = latestData,
             )
             action == "window.all.vent" -> {
-                for (windowAction in windowPositionActions) {
-                    val result = apertureController.positionWindow(windowAction, 10, latestData?.speed)
-                    if (result.isFailure) return result
-                }
-                return Result.success(Unit)
+                return executeSemanticVehicleCommand(
+                    JSONObject().put("action", "window.all.vent"),
+                    latestData,
+                    vehicleApi,
+                )
             }
             action in windowPositionActions -> {
                 val target = json.valueInt()
@@ -158,8 +158,8 @@ class AlicePollingManager @Inject constructor(
                 return apertureController.positionWindow(action, target, latestData?.speed)
             }
             action == "sunroof.position" -> {
-                val target = json.valueInt()
-                    ?: return Result.failure(IllegalArgumentException("invalid_sunroof_position"))
+                val target = json.valueInt()?.takeIf { it in setOf(0, 50, 100) }
+                    ?: return Result.failure(IllegalArgumentException("sunroof_percent_not_supported"))
                 return apertureController.positionSunroof(target, latestData)
             }
         }
