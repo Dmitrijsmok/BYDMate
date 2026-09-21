@@ -182,13 +182,14 @@ class ListeningOverlayTest {
         assertEquals(null, ListeningOverlay.answerText)
     }
 
-    // (c) hide() must tear down BOTH windows -- realAttach wraps the pill and dialog handles in a
-    // CompositeOverlayHandle, whose destroy() forwards to every child.
+    // (c) hide() must tear down every window -- production wraps the draggable pill, dialog and
+    // upper-right mic indicator in one CompositeOverlayHandle.
     @Test fun `hide destroys every window the composite handle wraps`() = runBlocking {
         val pill = FakeHandle()
         val dialog = FakeHandle()
+        val mic = FakeHandle()
         ListeningOverlay.attachWindow = { _, _ ->
-            ListeningOverlay.CompositeOverlayHandle(listOf(pill, dialog))
+            ListeningOverlay.CompositeOverlayHandle(listOf(pill, dialog, mic))
         }
         ListeningOverlay.poster = { it.run() }
 
@@ -197,6 +198,7 @@ class ListeningOverlayTest {
 
         assertTrue(pill.destroyed)
         assertTrue(dialog.destroyed)
+        assertTrue(mic.destroyed)
     }
 
     // --- Task 4 regression: teardown order (removeView-before-onDestroy discipline) ---
@@ -227,5 +229,6 @@ class ListeningOverlayTest {
     @Test fun `layout constants are the agreed defaults`() {
         assertEquals(56, ListeningOverlay.TOP_MARGIN_DP)
         assertEquals(48, ListeningOverlay.PILL_OFFSET_DP)
+        assertEquals(16, ListeningOverlay.MIC_INDICATOR_MARGIN_DP)
     }
 }
