@@ -132,6 +132,23 @@ class CommandTranslatorTest {
         assertEquals(10, r?.value)
     }
 
+    @Test fun `arbitrary driver percentage maps to window_driver_pos`() {
+        val r = one("主驾打开37")
+        assertEquals("window_driver_pos", r?.actionName)
+        assertEquals(37, r?.value)
+    }
+
+    @Test fun `arbitrary rear-right percentage maps to window_rear_right_pos`() {
+        val r = one("后右打开65")
+        assertEquals("window_rear_right_pos", r?.actionName)
+        assertEquals(65, r?.value)
+    }
+
+    @Test fun `percentage endpoints keep dedicated open close commands`() {
+        assertEquals("window_driver_open", one("主驾打开100")?.actionName)
+        assertEquals("window_driver_close", one("主驾打开0")?.actionName)
+    }
+
     // ── Rear windows (aggregate) — fan-out to both open/close fids ────────────
     @Test fun `rear windows open fans out to both rear open fids`() {
         assertEquals(
