@@ -76,6 +76,24 @@ class SherpaTtsEngineTest {
         assertEquals(17, SherpaTtsEngine.BYD_STREAM_BTTS)
     }
 
+    @Test
+    fun `DiLink3 skips BYD stream 17`() {
+        assertFalse(
+            SherpaTtsEngine.shouldUseBydVoiceStream(
+                "BYD-AUTO/DiLink3.0/DiLink3.0:10/QKQ1.210910.001/eng.build:user/release-keys"
+            )
+        )
+    }
+
+    @Test
+    fun `non DiLink3 firmware keeps BYD stream 17`() {
+        assertTrue(
+            SherpaTtsEngine.shouldUseBydVoiceStream(
+                "BYD-AUTO/Leopard3/Leopard3:13/release-keys"
+            )
+        )
+    }
+
     // --- Fix wave 2, finding 1: barge-in must free the drain loop promptly, not spin the timeout ---
 
     @Test
