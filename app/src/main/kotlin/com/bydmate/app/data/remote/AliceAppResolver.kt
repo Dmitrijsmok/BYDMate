@@ -12,6 +12,13 @@ import javax.inject.Singleton
  * Resolves Alice app actions/text to an installed launcher package. Alternative builds are found
  * by launcher label/package token, so ReVanced/RVX and vendor-specific packages remain supported.
  */
+data class VoiceAppMatch(
+    val name: String,
+    val action: String,
+    val appLabel: String?,
+    val packageName: String?,
+)
+
 @Singleton
 class AliceAppResolver @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -33,6 +40,21 @@ class AliceAppResolver @Inject constructor(
                 ?: emptySet(),
         )
         return resolveTarget(target)
+    }
+
+    /** User-visible diagnostic mapping for Settings: shows what a voice app action will actually
+     *  launch on this head unit. Null package/label means the supported target is not installed. */
+    fun diagnosticMatches(): List<VoiceAppMatch> {
+        val pm = context.packageManager
+        return diagnosticActions.map { (name, action) ->
+            val pkg = resolveAction(action)?.getOrNull()
+            val label = pkg?.let {
+                runCatching {
+                    pm.getApplicationLabel(pm.getApplicationInfo(it, 0)).toString()
+                }.getOrNull()
+            }
+            VoiceAppMatch(name, action, label, pkg)
+        }
     }
 
     private fun targetForAction(action: String): AppTarget? =
@@ -63,6 +85,22 @@ class AliceAppResolver @Inject constructor(
             ),
             labels = setOf("яндекс карты", "yandex maps"),
             packageTokens = setOf("yandexmaps"),
+        )
+        "app.google_maps.open" -> AppTarget(
+            packages = RouteNavigatorDiscovery.packagesFor(
+                RouteNavigatorUris.GOOGLE_MAPS,
+                context.packageManager,
+            ),
+            labels = setOf("google maps", "карты google", "гугл карты"),
+            packageTokens = setOf("google.android.apps.maps"),
+        )
+        "app.dgis.open" -> AppTarget(
+            packages = RouteNavigatorDiscovery.packagesFor(
+                RouteNavigatorUris.DGIS,
+                context.packageManager,
+            ),
+            labels = setOf("2gis", "2гис"),
+            packageTokens = setOf("dublgis", "2gis"),
         )
         "app.bydmate.open" -> AppTarget(
             packages = listOf(context.packageName),
@@ -130,6 +168,25 @@ class AliceAppResolver @Inject constructor(
     )
 
     companion object {
+        private val diagnosticActions = listOf(
+            "YouTube" to "app.youtube.open",
+            "Яндекс Музыка" to "app.music.open",
+            "Waze" to "app.waze.open",
+            "Яндекс Навигатор" to "app.yandex_navi.open",
+            "Яндекс Карты" to "app.yandex_maps.open",
+            "Google Maps" to "app.google_maps.open",
+            "2GIS" to "app.dgis.open",
+            "Браузер" to "app.browser.open",
+            "ABRP" to "app.abrp.open",
+            "TikTok" to "app.tiktok.open",
+            "Камера" to "app.camera.open",
+            "Видеорегистратор" to "app.dashcam.open",
+            "Файлы" to "app.files.open",
+            "Медиацентр" to "app.media_center.open",
+            "Телефон" to "app.phone.open",
+            "BYDMate" to "app.bydmate.open",
+        )
+
         private val staticTargets = mapOf(
             "app.music.open" to AppTarget(
                 packages = listOf("ru.yandex.music"),
@@ -233,6 +290,11 @@ class AliceAppResolver @Inject constructor(
             "waze" to "app.waze.open",
             "вейз" to "app.waze.open",
             "вэйз" to "app.waze.open",
+            "google maps" to "app.google_maps.open",
+            "карты google" to "app.google_maps.open",
+            "гугл карты" to "app.google_maps.open",
+            "2gis" to "app.dgis.open",
+            "2гис" to "app.dgis.open",
             "браузер" to "app.browser.open",
             "browser" to "app.browser.open",
             "chrome" to "app.browser.open",
