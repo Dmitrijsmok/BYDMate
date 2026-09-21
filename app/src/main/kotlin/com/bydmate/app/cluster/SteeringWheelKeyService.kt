@@ -146,16 +146,13 @@ class SteeringWheelKeyService : AccessibilityService() {
         aliceEnabled: Boolean,
     ): Boolean? = when (decision) {
         VoiceKeyDecision.TRIGGER -> {
-            if (event.repeatCount == 0) triggerSelectedVoiceProvider(aliceEnabled)
+            if (event.repeatCount == 0) {
+                if (aliceEnabled) aliceLauncher.trigger() else entryPoint().voiceController().onPttPressed()
+            }
             true
         }
         VoiceKeyDecision.CONSUME -> true
         VoiceKeyDecision.IGNORE -> null
-    }
-
-    private fun triggerSelectedVoiceProvider(aliceEnabled: Boolean) {
-        if (aliceEnabled) aliceLauncher.trigger()
-        else entryPoint().voiceController().onPttPressed()
     }
 
     private fun entryPoint(): ClusterEntryPoint =
