@@ -8,16 +8,13 @@ import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
-import android.view.View
 import android.view.WindowManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -35,7 +32,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.ViewCompositionStrategy
@@ -67,9 +63,9 @@ import kotlinx.coroutines.withContext
  * v3 (Wave F): both windows are anchored at TOP|START instead of TOP|CENTER_HORIZONTAL, so x is an
  * absolute left-edge offset that does not shift when the pill's content width changes.
  *
- * v4: a third, non-touchable microphone indicator is pinned at the upper-right while the local
- * BYDMate continuous session is alive. It disappears with the same [hide] teardown as the pill,
- * so Alice's lifecycle and UI are completely independent.
+ * v4.1: the status surface is intentionally minimal: one non-touchable microphone icon fixed in
+ * the upper-left, matching the stock BYD assistant placement. The "Слушаю/Думаю" pill text is not
+ * rendered anymore; the transcript/answer dialog stays below the icon. Alice remains independent.
  */
 object ListeningOverlay {
 
@@ -78,21 +74,11 @@ object ListeningOverlay {
     internal const val TOP_MARGIN_DP = 56
     // Gap between the pill window and the dialog window below it.
     internal const val PILL_OFFSET_DP = 48
-    // Right-edge inset for the always-visible listening mic indicator.
+    // Left-edge inset for the fixed listening mic indicator.
     internal const val MIC_INDICATOR_MARGIN_DP = 16
     // The dialog block grows with the answer up to this share of the screen height; beyond that
     // it would cover the road view behind the overlay.
     private const val DIALOG_MAX_HEIGHT_FRACTION = 0.5f
-    // SharedPreferences the persisted orb position lives in (shared with the voice feature).
-    private const val PREFS_NAME = "voice"
-    private const val KEY_ORB_X_ABS = "orb_x_abs"
-    private const val KEY_ORB_Y = "orb_y"
-    // Sentinel for "no saved y yet": fall back to TOP_MARGIN_DP. 0 is a legitimate saved value, so
-    // it cannot be the default.
-    private const val ORB_Y_UNSET = -1
-    // Sentinel for "no saved x yet". Int.MIN_VALUE can never be a legitimate saved left-edge offset.
-    private const val ORB_X_UNSET = Int.MIN_VALUE
-
     private val textState = MutableStateFlow("")
     private val heardState = MutableStateFlow<String?>(null)   // "Ты: …" row text (no label)
     private val answerState = MutableStateFlow<String?>(null)  // "Агент: …" row text (no label)
@@ -226,40 +212,33 @@ object ListeningOverlay {
             @Suppress("DEPRECATION")
             WindowManager.LayoutParams.TYPE_PHONE
 
-    private fun realAttach(context: Context, initial: String): OverlayHandle {
+    private fun realAttach(context: Context, @Suppress("UNUSED_PARAMETER") initial: String): OverlayHandle {
         val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val density = context.resources.displayMetrics.density
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val left = (MIC_INDICATOR_MARGIN_DP * density).toInt()
+        val top = (TOP_MARGIN_DP * density).toInt()
         val pillOffsetPx = (PILL_OFFSET_DP * density).toInt()
-
-        val screenW = context.resources.displayMetrics.widthPixels
-        val savedX = prefs.getInt(KEY_ORB_X_ABS, ORB_X_UNSET)
-        // Rough centered estimate until the first layout pass reports the real pill width below.
-        val startX = if (savedX == ORB_X_UNSET) screenW / 2 - (90 * density).toInt() else savedX
-        val savedY = prefs.getInt(KEY_ORB_Y, ORB_Y_UNSET)
-        val startY = if (savedY == ORB_Y_UNSET) (TOP_MARGIN_DP * density).toInt() else savedY
 
         val youLabel = context.getString(R.string.orb_you)
         val agentLabel = context.getString(R.string.orb_agent)
 
-        // Pill window: touchable so it can be dragged; NOT_TOUCH_MODAL lets touches outside the pill
-        // still reach whatever is behind the overlay.
-        val pillParams = WindowManager.LayoutParams(
+        // One fixed, click-through status icon in the upper-left. Keeping it non-touchable means
+        // it never steals taps from the car UI underneath.
+        val micParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = startX
-            y = startY
+            x = left
+            y = top
         }
 
-        // Dialog window: NOT_TOUCHABLE so touches pass straight through the text; it just follows the
-        // pill's x and sits a fixed gap below it.
+        // The running transcript/answer stays below the icon. It is also click-through.
         val dialogParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -270,86 +249,20 @@ object ListeningOverlay {
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = startX
-            y = startY + pillOffsetPx
+            x = left
+            y = top + pillOffsetPx
         }
 
-        // Independent status indicator: always pinned at the upper-right for the whole local
-        // continuous session, even when the draggable pill has been moved elsewhere. It is purely
-        // visual and never intercepts touches.
-        val micParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            overlayType(),
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT,
-        ).apply {
-            gravity = Gravity.TOP or Gravity.END
-            x = (MIC_INDICATOR_MARGIN_DP * density).toInt()
-            y = (TOP_MARGIN_DP * density).toInt()
-        }
-
-        val pillOwner = OverlayLifecycleOwner().also { it.onCreate() }
-        val dialogOwner = OverlayLifecycleOwner().also { it.onCreate() }
         val micOwner = OverlayLifecycleOwner().also { it.onCreate() }
-        val pillView = ComposeView(context)
-        val dialogView = ComposeView(context)
+        val dialogOwner = OverlayLifecycleOwner().also { it.onCreate() }
         val micView = ComposeView(context)
+        val dialogView = ComposeView(context)
 
-        // Default centering after the first layout pass (only when there is no saved position).
-        if (savedX == ORB_X_UNSET) {
-            pillView.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
-                override fun onLayoutChange(
-                    v: View, l: Int, t: Int, r: Int, b: Int,
-                    ol: Int, ot: Int, orr: Int, ob: Int,
-                ) {
-                    if (v.width == 0) return
-                    v.removeOnLayoutChangeListener(this)
-                    pillParams.x = (screenW - v.width) / 2
-                    dialogParams.x = pillParams.x
-                    runCatching {
-                        wm.updateViewLayout(pillView, pillParams)
-                        wm.updateViewLayout(dialogView, dialogParams)
-                    }
-                }
-            })
-        }
-
-        // Gravity is TOP|START, so x is an absolute offset from the left edge. With the old
-        // TOP|CENTER_HORIZONTAL anchor a WRAP_CONTENT window re-centered itself whenever its
-        // content width changed, so the pill/dialog visibly jumped when the "Ты:/Агент:" text
-        // appeared (field defect APK 336). A start anchor keeps the left edge fixed instead.
-        val onDrag: (Int, Int) -> Unit = { dx, dy ->
-            pillParams.x += dx
-            pillParams.y += dy
-            dialogParams.x = pillParams.x
-            dialogParams.y = pillParams.y + pillOffsetPx
-            try {
-                wm.updateViewLayout(pillView, pillParams)
-                wm.updateViewLayout(dialogView, dialogParams)
-            } catch (e: Exception) {
-                Log.w(TAG, "drag updateViewLayout failed: ${e.message}")
-            }
-        }
-        // Persist only on drag end (not per frame) to avoid a SharedPreferences write every gesture tick.
-        val onDragEnd: () -> Unit = {
-            prefs.edit()
-                .putInt(KEY_ORB_X_ABS, pillParams.x)
-                .putInt(KEY_ORB_Y, pillParams.y)
-                .apply()
-        }
-
-        pillView.apply {
-            // Dispose tied to view detach, not the external OverlayLifecycleOwner.
-            // Prevents attach-vs-onDestroy race: DisposeOnViewTreeLifecycleDestroyed registers
-            // on the owner asynchronously (next traversal), so a rapid show→hide could destroy
-            // the lifecycle before attach observes it → IllegalStateException at DESTROYED.
+        micView.apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindowOrReleasedFromPool)
-            setViewTreeLifecycleOwner(pillOwner)
-            setViewTreeSavedStateRegistryOwner(pillOwner)
-            setContent { PillContent(onDrag, onDragEnd) }
+            setViewTreeLifecycleOwner(micOwner)
+            setViewTreeSavedStateRegistryOwner(micOwner)
+            setContent { ListeningMicIndicator() }
         }
         dialogView.apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindowOrReleasedFromPool)
@@ -357,22 +270,14 @@ object ListeningOverlay {
             setViewTreeSavedStateRegistryOwner(dialogOwner)
             setContent { DialogContent(youLabel, agentLabel) }
         }
-        micView.apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindowOrReleasedFromPool)
-            setViewTreeLifecycleOwner(micOwner)
-            setViewTreeSavedStateRegistryOwner(micOwner)
-            setContent { ListeningMicIndicator() }
-        }
 
-        wm.addView(pillView, pillParams)
-        wm.addView(dialogView, dialogParams)
         wm.addView(micView, micParams)
+        wm.addView(dialogView, dialogParams)
 
         return CompositeOverlayHandle(
             listOf(
-                RealOverlayHandle(wm, pillView, pillOwner),
-                RealOverlayHandle(wm, dialogView, dialogOwner),
                 RealOverlayHandle(wm, micView, micOwner),
+                RealOverlayHandle(wm, dialogView, dialogOwner),
             ),
         )
     }
@@ -393,27 +298,6 @@ object ListeningOverlay {
                 tint = AccentGreen,
                 modifier = Modifier.size(24.dp),
             )
-        }
-    }
-
-    @Composable
-    private fun PillContent(onDrag: (Int, Int) -> Unit, onDragEnd: () -> Unit) {
-        val text by textState.collectAsState()
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .background(CardSurface, RoundedCornerShape(20.dp))
-                .border(1.dp, CardBorder, RoundedCornerShape(20.dp))
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragEnd = { onDragEnd() },
-                    ) { _, drag -> onDrag(drag.x.toInt(), drag.y.toInt()) }
-                },
-        ) {
-            Icon(imageVector = Icons.Outlined.Mic, contentDescription = null, tint = AccentGreen)
-            Spacer(Modifier.width(8.dp))
-            Text(text = text, fontSize = 14.sp, color = TextPrimary)
         }
     }
 
