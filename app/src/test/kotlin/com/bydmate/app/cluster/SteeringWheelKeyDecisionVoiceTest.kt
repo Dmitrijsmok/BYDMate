@@ -24,4 +24,22 @@ class SteeringWheelKeyDecisionVoiceTest {
     @Test fun ignores_other_keys_key_up() {
         assertEquals(VoiceKeyDecision.IGNORE, voiceDecision(351, isDown = false, voiceEnabled = true, voiceKeyCode = 320))
     }
+
+    @Test fun dilink3_304_triggers_selected_voice_provider_on_down() {
+        assertEquals(VoiceKeyDecision.TRIGGER, diLink3VoiceDecision(304, isDown = true, voiceEnabled = true))
+    }
+
+    @Test fun dilink3_304_consumes_up_edge() {
+        assertEquals(VoiceKeyDecision.CONSUME, diLink3VoiceDecision(304, isDown = false, voiceEnabled = true))
+    }
+
+    @Test fun dilink3_327_is_consumed_while_voice_enabled() {
+        assertEquals(VoiceKeyDecision.CONSUME, diLink3VoiceDecision(327, isDown = true, voiceEnabled = true))
+        assertEquals(VoiceKeyDecision.CONSUME, diLink3VoiceDecision(327, isDown = false, voiceEnabled = true))
+    }
+
+    @Test fun dilink3_special_codes_pass_through_when_voice_disabled() {
+        assertEquals(VoiceKeyDecision.IGNORE, diLink3VoiceDecision(304, isDown = true, voiceEnabled = false))
+        assertEquals(VoiceKeyDecision.IGNORE, diLink3VoiceDecision(327, isDown = true, voiceEnabled = false))
+    }
 }
