@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -127,6 +128,14 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
      *  was changed (so restoreMusic is a no-op and never bumps volume up unexpectedly). */
     // internal for direct unit tests
     internal fun duckMusic(): Int? = synchronized(duckLock) {
+        // DiLink 3 / ATTO 3 aliases the fallback assistant route closely enough to MUSIC that
+        // forcing MUSIC to index 1 also makes the local assistant's next spoken answer extremely
+        // quiet. Keep the user's volume untouched there and rely on transient audio focus while
+        // capture is active. Other BYD generations keep the author's explicit duck unchanged.
+        if (!SherpaTtsEngine.shouldUseBydVoiceStream(Build.FINGERPRINT.orEmpty())) {
+            Log.i(TAG, "duckMusic: DiLink3, leaving STREAM_MUSIC unchanged")
+            return null
+        }
         if (!audioManager.isMusicActive) return null
         val saved = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
         // Near-zero, not 15%: DiLink's MUSIC scale is 0..39, so 15% (~index 5) is still clearly

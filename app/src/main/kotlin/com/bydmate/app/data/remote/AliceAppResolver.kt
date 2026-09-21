@@ -276,6 +276,11 @@ class AliceAppResolver @Inject constructor(
         private val textActionAliases = mapOf(
             "youtube" to "app.youtube.open",
             "ютуб" to "app.youtube.open",
+            "youtube premium" to "app.youtube.open",
+            "ютуб premium" to "app.youtube.open",
+            "ютуб премиум" to "app.youtube.open",
+            "youtube byd" to "app.youtube.open",
+            "ютуб byd" to "app.youtube.open",
             "youtube revanced" to "app.youtube.open",
             "revanced" to "app.youtube.open",
             "rvx" to "app.youtube.open",

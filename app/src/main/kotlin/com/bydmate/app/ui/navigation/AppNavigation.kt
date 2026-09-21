@@ -112,7 +112,10 @@ fun AppNavigation(
     val currentAppVersion = currentPackageInfo?.versionName ?: "?"
     val currentInstallId = remember(currentPackageInfo) {
         val code = currentPackageInfo?.longVersionCode ?: -1L
-        "$currentAppVersion#$code"
+        val updatedAt = currentPackageInfo?.lastUpdateTime ?: -1L
+        // Field APKs can deliberately keep the same semantic version and even the same code.
+        // Android still updates lastUpdateTime, so every actual install gets one autostart reminder.
+        "$currentAppVersion#$code#$updatedAt"
     }
     // Donation prompt: from the second entry of a new version onward (the first entry is taken
     // by the post-install reminder), at most once per version, never after opt-out. Shown

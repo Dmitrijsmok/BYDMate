@@ -403,6 +403,24 @@ function dialogCommandFor(utterance) {
   const aperture = aperturePositionCommand(normalized);
   if (aperture) return aperture;
 
+  // On-car phrases that Yandex may hand to the Dialog webhook instead of a Smart Home
+  // capability. Keep them deterministic: no LLM and no ambiguity with cabin HVAC.
+  if (
+    normalized.includes("проветр") &&
+    containsAny(normalized, ["машин", "окн"])
+  ) {
+    return { action: "window.all.vent" };
+  }
+
+  if (
+    containsAny(normalized, ["подогрев", "обогрев"]) &&
+    normalized.includes("сид") &&
+    normalized.includes("водител") &&
+    containsAny(normalized, [" 2", "2 ", "втор", "максим"])
+  ) {
+    return { action: "seat.driver.heat", value: 2 };
+  }
+
   const nav = extractNavigationApp(normalized);
   const routeVerb =
     containsAny(nav.text, ["маршрут", "дорог"]) ||
