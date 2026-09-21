@@ -269,8 +269,9 @@ class VoiceController @Inject constructor(
 
     /** Continuous PTT-toggled session (Wave B): one long-lived mic capture feeds VAD-segmented
      *  utterances into the shared NLU/agent router (routeUtterance), so a follow-up question from
-     *  the agent keeps listening for free — the loop just collects again. Auto-stops after
-     *  SILENCE_AUTOSTOP_MS of continuous silence (Wave P: no session cap). */
+     *  the agent keeps listening for free — the loop just collects again. The local BYDMate
+     *  assistant stays armed until the driver presses the PTT button again; silence never
+     *  auto-stops the session. Alice keeps its own lifecycle unchanged. */
     private fun startContinuousSession() {
         if (!busy.compareAndSet(false, true)) return
         ensureSupertonicStressDict()
@@ -326,8 +327,10 @@ class VoiceController @Inject constructor(
                             if (!processingUtterance) _state.value = VoiceUiState.Listening
                         }
                         is ContinuousAsrEvent.SilenceTick -> {
+                            // Keep the author's continuous-listening contract: silence only marks
+                            // the current timing point. The session is stopped explicitly by the
+                            // driver (second PTT press) or by a genuine capture/ASR failure.
                             lastEventMs = System.currentTimeMillis()
-                            if (ev.silentMs >= SILENCE_AUTOSTOP_MS && !processingUtterance) throw StopSession
                         }
                         is ContinuousAsrEvent.Utterance -> {
                             val decodeMs = System.currentTimeMillis() - lastEventMs
@@ -834,10 +837,6 @@ class VoiceController @Inject constructor(
         // characters per minute, with a hard cap so the block never squats on the screen.
         private const val DIALOG_READ_MS_PER_CHAR = 60L
         private const val DIALOG_READ_MAX_MS = 30_000L
-
-        // Continuous session (Wave B): silence auto-stop. Wave P removed the hard session cap --
-        // long conversations must never be cut off; silence is the only automatic exit.
-        private const val SILENCE_AUTOSTOP_MS = 30_000L
 
         // Wave P play_music auto-close: how long to wait for the reply's playback to actually
         // begin (speaking=false -> true) before giving up and closing anyway. Covers offline
