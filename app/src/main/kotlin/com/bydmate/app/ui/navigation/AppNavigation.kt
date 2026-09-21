@@ -104,10 +104,15 @@ fun AppNavigation(
     var autoUpdateState by remember { mutableStateOf<UpdateState?>(null) }
     var autoUpdateDownloadJob by remember { mutableStateOf<Job?>(null) }
 
-    val currentAppVersion = remember {
+    val currentPackageInfo = remember {
         runCatching {
-            autoCheckContext.packageManager.getPackageInfo(autoCheckContext.packageName, 0).versionName ?: "?"
-        }.getOrDefault("?")
+            autoCheckContext.packageManager.getPackageInfo(autoCheckContext.packageName, 0)
+        }.getOrNull()
+    }
+    val currentAppVersion = currentPackageInfo?.versionName ?: "?"
+    val currentInstallId = remember(currentPackageInfo) {
+        val code = currentPackageInfo?.longVersionCode ?: -1L
+        "$currentAppVersion#$code"
     }
     // Donation prompt: from the second entry of a new version onward (the first entry is taken
     // by the post-install reminder), at most once per version, never after opt-out. Shown
@@ -169,12 +174,14 @@ fun AppNavigation(
 
     // Post-install reminder: первый запуск новой версии → напомнить про Disable background Apps.
     var showPostInstallReminder by remember {
-        mutableStateOf(UpdateChecker.getLastSeenVersion(autoCheckContext) != currentAppVersion)
+        mutableStateOf(UpdateChecker.getLastSeenInstallId(autoCheckContext) != currentInstallId)
     }
     if (showPostInstallReminder) {
         PostInstallReminderDialog(
             version = currentAppVersion,
             onDismiss = {
+                UpdateChecker.setLastSeenInstallId(autoCheckContext, currentInstallId)
+                // Keep the existing donation "second entry of this version" contract intact.
                 UpdateChecker.setLastSeenVersion(autoCheckContext, currentAppVersion)
                 showPostInstallReminder = false
             }
