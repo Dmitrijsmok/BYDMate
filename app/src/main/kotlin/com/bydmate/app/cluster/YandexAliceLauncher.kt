@@ -71,19 +71,9 @@ internal class YandexAliceLauncher(
         }
 
         if (pending && packageName == YANDEX_PACKAGE) advance()
-        if (leftYandexWhileListening(event, packageName)) {
+        if (leftYandexWhileListening(listening, event, packageName)) {
             scheduleFinishIfStillOutside()
         }
-    }
-
-    private fun leftYandexWhileListening(
-        event: AccessibilityEvent,
-        packageName: String,
-    ): Boolean {
-        if (!listening) return false
-        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return false
-        if (packageName.isBlank()) return false
-        return packageName != YANDEX_PACKAGE
     }
 
     fun destroy() {
@@ -305,6 +295,18 @@ private val COLD_DESCRIPTIONS = setOf(
 )
 private const val WARMUP_MS = 150L
 private const val LOCAL_RELEASE_MS = 220L
+private fun leftYandexWhileListening(
+    listening: Boolean,
+    event: AccessibilityEvent,
+    packageName: String,
+): Boolean {
+    if (!listening) return false
+    if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return false
+    if (packageName.isBlank()) return false
+    return packageName != YANDEX_PACKAGE
+}
+
+
 private const val RETRY_MS = 180L
 private const val COLD_RETRY_MS = 900L
 private const val UI_DEBOUNCE_MS = 800L
