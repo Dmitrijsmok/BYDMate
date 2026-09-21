@@ -330,6 +330,15 @@ object NluParser {
         }
     }
 
+    private fun composeDecade(tens: Int?, units: Int?): Int? {
+        if (tens == null) return null
+        if (units == null) return null
+        if (tens !in 20..90) return null
+        if (tens % 10 != 0) return null
+        if (units !in 1..9) return null
+        return tens + units
+    }
+
     private fun detectNumber(rawTokens: List<String>, lang: VoiceLang): Int? {
         rawTokens.firstNotNullOfOrNull { it.toIntOrNull() }?.let { return it }
         val numbers = VoiceLexicon.numberWords(lang)
@@ -339,11 +348,7 @@ object NluParser {
         // while covering every percentage from 20..99 instead of only hand-listed values.
         val singles = numbers.filterKeys { ' ' !in it }
         rawTokens.windowed(2).firstNotNullOfOrNull { pair ->
-            val tens = singles[pair[0]]
-            val units = singles[pair[1]]
-            if (tens != null && units != null &&
-                tens in 20..90 && tens % 10 == 0 && units in 1..9
-            ) tens + units else null
+            composeDecade(singles[pair[0]], singles[pair[1]])
         }?.let { return it }
 
         // Match complete contiguous token sequences only. The old substring search could read
