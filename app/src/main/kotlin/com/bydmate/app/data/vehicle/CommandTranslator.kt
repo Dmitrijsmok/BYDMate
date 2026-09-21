@@ -247,12 +247,19 @@ object CommandTranslator {
         return emptyList()
     }
 
-    private fun resolveWindowPosition(command: String): List<Resolved>? {
-        val match = WINDOW_POSITION_REGEX.matchEntire(command) ?: return null
-        val action = WINDOW_POSITION_ACTIONS[match.groupValues[1]] ?: return emptyList()
-        val percent = match.groupValues[2].toIntOrNull() ?: return emptyList()
-        if (percent !in 1..99) return emptyList()
-        return listOf(Resolved(action, percent))
+    private val resolveWindowPosition: (String) -> List<Resolved>? = { command ->
+        val match = WINDOW_POSITION_REGEX.matchEntire(command)
+        if (match == null) {
+            null
+        } else {
+            val action = WINDOW_POSITION_ACTIONS[match.groupValues[1]]
+            val percent = match.groupValues[2].toIntOrNull()
+            if (action == null || percent == null || percent !in 1..99) {
+                emptyList()
+            } else {
+                listOf(Resolved(action, percent))
+            }
+        }
     }
 
     // Dynamic per-window aperture command emitted by local NLU and the Alice bridge.
