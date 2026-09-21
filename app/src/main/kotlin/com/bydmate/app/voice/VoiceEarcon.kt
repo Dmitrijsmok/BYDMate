@@ -5,7 +5,7 @@ import android.media.ToneGenerator
 import android.os.Build
 
 /** Short non-spoken confirmation/failure beeps. TTS responses are Spec 2. */
-class VoiceEarcon(private val volume: Int = 70) {
+class VoiceEarcon(private val volume: Int = 100) {
     fun ok() = beep(ToneGenerator.TONE_PROP_ACK, 150)
     fun fail() = beep(ToneGenerator.TONE_PROP_NACK, 250)
     /** Session-stop cue: distinct from ok() so switching the agent on and off are
