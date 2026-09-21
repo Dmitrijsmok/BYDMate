@@ -155,30 +155,25 @@ class SteeringWheelKeyService : AccessibilityService() {
                     lastLocalVoiceKeyCode = -1
                     aliceLauncher.trigger()
                 } else {
-                    triggerLocalOrAliceOnDoublePress(event)
+                    val now = SystemClock.elapsedRealtime()
+                    val isDouble = event.keyCode == lastLocalVoiceKeyCode &&
+                        isVoiceDoublePress(lastLocalVoiceDownMs, now)
+                    if (isDouble) {
+                        lastLocalVoiceDownMs = 0L
+                        lastLocalVoiceKeyCode = -1
+                        // The launcher tears Local AudioRecord/TTS down before Alice takes the mic.
+                        aliceLauncher.trigger()
+                    } else {
+                        lastLocalVoiceDownMs = now
+                        lastLocalVoiceKeyCode = event.keyCode
+                        entryPoint().voiceController().onPttPressed()
+                    }
                 }
             }
             true
         }
         VoiceKeyDecision.CONSUME -> true
         VoiceKeyDecision.IGNORE -> null
-    }
-
-    private fun triggerLocalOrAliceOnDoublePress(event: KeyEvent) {
-        val now = SystemClock.elapsedRealtime()
-        val isDouble = event.keyCode == lastLocalVoiceKeyCode &&
-            isVoiceDoublePress(lastLocalVoiceDownMs, now)
-        if (isDouble) {
-            lastLocalVoiceDownMs = 0L
-            lastLocalVoiceKeyCode = -1
-            // YandexAliceLauncher.trigger() calls stopForExternalAssistant() first, so the Local
-            // AudioRecord/TTS ownership is released before Alice starts listening.
-            aliceLauncher.trigger()
-            return
-        }
-        lastLocalVoiceDownMs = now
-        lastLocalVoiceKeyCode = event.keyCode
-        entryPoint().voiceController().onPttPressed()
     }
 
     private fun entryPoint(): ClusterEntryPoint =
