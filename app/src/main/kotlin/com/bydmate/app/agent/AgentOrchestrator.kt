@@ -219,11 +219,13 @@ class AgentOrchestrator @Inject constructor(
                 }
             tracer.reply(reply)
             if (reply.toolCalls.isEmpty()) {
-                var answer = finalAnswer(reply)
-                if (answer.isEmpty()) {
-                    answer = successfulToolFallback(lastToolName, lastToolResult, outcomes)
-                        ?: return AgentResult.Error("Пустой ответ модели")
-                }
+                val answer = terminalAgentAnswer(
+                    finalAnswer(reply),
+                    lastToolName,
+                    lastToolResult,
+                    outcomes,
+                )
+                if (answer.isEmpty()) return AgentResult.Error("Пустой ответ модели")
                 if (onSentence != null) chunker?.flush()?.let(onSentence)
                 messages += AgentMessage.Assistant(answer)
                 onTerminal()
@@ -270,28 +272,6 @@ class AgentOrchestrator @Inject constructor(
         return AgentResult.Error("Слишком длинная цепочка инструментов")
     }
 
-    /** Provider occasionally returns an empty terminal message after a tool already succeeded.
-     *  Never turn a real side effect (settings opened, vehicle command executed) into a false
-     *  failure signal. Read-only vehicle state gets a small deterministic fallback too. */
-    private fun successfulToolFallback(
-        toolName: String?,
-        toolResult: String?,
-        outcomes: List<AgentToolOutcome>,
-    ): String? {
-        if (toolName == null || outcomes.isEmpty() || outcomes.any { !it.ok }) return null
-        if (toolName == "get_vehicle_state") {
-            val json = runCatching { JSONObject(toolResult.orEmpty()) }.getOrNull() ?: return null
-            val soc = json.optInt("soc_percent", -1).takeIf { it in 0..100 }
-            val range = json.optInt("range_km", -1).takeIf { it >= 0 }
-            return when {
-                soc != null && range != null -> "Заряд $soc%, запас примерно $range км."
-                soc != null -> "Заряд $soc%."
-                else -> null
-            }
-        }
-        return if (toolName in MUTATING_TOOLS) "Готово." else null
-    }
-
     /** Shared by [ask] and [noteAction] (both run under [mutex]) so they can't drift: a history
      *  older than [SESSION_TTL_MS] is stale and must be dropped before either appends to it —
      *  otherwise a fast-path note after the TTL expired would both resurrect the old conversation
@@ -329,12 +309,6 @@ class AgentOrchestrator @Inject constructor(
         private const val MAX_HISTORY = 20
         private const val MAX_IDENTICAL_CALLS = 2
         private const val MAX_LOOP_STRIKES = 2
-        private val MUTATING_TOOLS = setOf(
-            "vehicle_control", "media_volume", "run_automation", "add_charge",
-            "create_place", "navigate_to", "go_home", "play_music", "youtube",
-            "launch_app", "open_settings", "set_cluster_projection", "set_sentry",
-            "set_hotspot", "split_screen", "set_automation_enabled", "create_automation",
-        )
 
         /** Provider stop reason meaning the answer hit max_tokens, plus the mark that makes
          *  such a cut visible in the pill and in the journal. */
@@ -409,3 +383,36 @@ class AgentOrchestrator @Inject constructor(
         """.trimIndent()
     }
 }
+
+private val MUTATING_AGENT_TOOLS = setOf(
+    "vehicle_control", "media_volume", "run_automation", "add_charge",
+    "create_place", "navigate_to", "go_home", "play_music", "youtube",
+    "launch_app", "open_settings", "set_cluster_projection", "set_sentry",
+    "set_hotspot", "split_screen", "set_automation_enabled", "create_automation",
+)
+
+/** Provider occasionally returns an empty terminal message after a tool already succeeded.
+ * Keep that transport quirk outside AgentOrchestrator's control-flow complexity: a real side
+ * effect must never be reported as a failure. Read-only vehicle state gets a deterministic
+ * battery/range fallback for the same reason. */
+private fun terminalAgentAnswer(
+    modelAnswer: String,
+    toolName: String?,
+    toolResult: String?,
+    outcomes: List<AgentToolOutcome>,
+): String {
+    if (modelAnswer.isNotEmpty()) return modelAnswer
+    if (toolName == null || outcomes.isEmpty() || outcomes.any { !it.ok }) return ""
+    if (toolName == "get_vehicle_state") {
+        val json = runCatching { JSONObject(toolResult.orEmpty()) }.getOrNull() ?: return ""
+        val soc = json.optInt("soc_percent", -1).takeIf { it in 0..100 }
+        val range = json.optInt("range_km", -1).takeIf { it >= 0 }
+        return when {
+            soc != null && range != null -> "Заряд $soc%, запас примерно $range км."
+            soc != null -> "Заряд $soc%."
+            else -> ""
+        }
+    }
+    return if (toolName in MUTATING_AGENT_TOOLS) "Готово." else ""
+}
+
