@@ -125,7 +125,14 @@ class NluParserTest {
 
     @Test fun vent_logic_is_unchanged_when_no_percentage_is_spoken() {
         assertEquals("车窗通风", cmd("проветри окна"))
+        assertEquals("车窗通风", cmd("проветри машину"))
+        assertEquals("车窗通风", cmd("включи проветривание"))
         assertEquals("副驾通风", cmd("проветри окно пассажира"))
+    }
+
+    @Test fun half_window_field_phrases_resolve_locally() {
+        assertEquals("车窗半开", cmd("открой окно наполовину"))
+        assertEquals("车窗半开", cmd("открой окна наполовину"))
     }
 
     @Test fun sunroof_tilt() {
