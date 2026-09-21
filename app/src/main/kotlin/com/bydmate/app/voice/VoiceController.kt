@@ -380,9 +380,6 @@ class VoiceController @Inject constructor(
                         }
                     }
                 }
-            } catch (e: StopSession) {
-                // Expected silence auto-stop. Deferred PTT-stop after an in-flight utterance uses
-                // session cancellation from the routing child so the session finally still runs.
             } catch (t: Throwable) {
                 // A real coroutine cancellation (e.g. stopContinuousSession() cancelling sessionJob
                 // while idle) must propagate. Anything else is a genuine capture/ASR failure (e.g.
@@ -855,6 +852,3 @@ class VoiceController @Inject constructor(
     }
 }
 
-/** Control-flow signal to auto-stop the continuous session on prolonged silence. A
- *  CancellationException so it tears down the collect chain (mic, VAD, recognizer) cleanly. */
-private object StopSession : CancellationException("voice-session-silence-timeout")
