@@ -31,6 +31,15 @@ internal class YandexAliceLauncher(
         lastTrigger = now
         suppressNativeUntil = now + NATIVE_SUPPRESS_MS
 
+        val localWasActive = voiceController().stopForExternalAssistant()
+        if (localWasActive) {
+            handler.postDelayed({ startAliceUi() }, LOCAL_RELEASE_MS)
+        } else {
+            startAliceUi()
+        }
+    }
+
+    private fun startAliceUi() {
         resetAttempt()
         voiceController().beginExternalAssistantAudio()
 
@@ -129,15 +138,12 @@ private class YandexAliceUiDriver(
 ) {
     private var coldClicks = 0
     private var lastColdClick = 0L
-    private var exactClicks = 0
-    private var lastExactClick = 0L
     private var lastUiClick = 0L
 
     fun resetAttempt() {
         coldClicks = 0
         lastColdClick = 0L
-        exactClicks = 0
-        lastExactClick = 0L
+
     }
 
     fun advance(): AliceUiStep {
@@ -158,23 +164,14 @@ private class YandexAliceUiDriver(
     }
 
     private fun stepExact(roots: List<AccessibilityNodeInfo>): AliceUiStep {
-        val now = SystemClock.elapsedRealtime()
-        val coldChain = coldClicks > 0
-        if (coldChain && exactClicks > 0 && now - lastExactClick < UI_DEBOUNCE_MS) {
-            return AliceUiStep.NONE
-        }
-
         val node = roots.asSequence().flatMap { root ->
             runCatching { root.findAccessibilityNodeInfosByViewId(EXACT_VIEW_ID) }
                 .getOrNull().orEmpty().asSequence()
         }.firstOrNull() ?: return AliceUiStep.NONE
 
-        if (!click(node)) return AliceUiStep.NONE
-        if (!coldChain) return AliceUiStep.DONE
-
-        exactClicks++
-        lastExactClick = now
-        return if (exactClicks > 1) AliceUiStep.DONE else AliceUiStep.PROGRESS
+        // One confirmed Alice control click is enough on current Yandex Browser. The old cold-chain
+        // logic deliberately clicked it twice; on DiLink 3 that toggled listening ON -> OFF -> ON.
+        return if (click(node)) AliceUiStep.DONE else AliceUiStep.NONE
     }
 
     private fun stepDescription(roots: List<AccessibilityNodeInfo>): AliceUiStep {
@@ -301,6 +298,7 @@ private val COLD_DESCRIPTIONS = setOf(
     "voice search",
 )
 private const val WARMUP_MS = 150L
+private const val LOCAL_RELEASE_MS = 220L
 private const val RETRY_MS = 180L
 private const val COLD_RETRY_MS = 900L
 private const val UI_DEBOUNCE_MS = 800L

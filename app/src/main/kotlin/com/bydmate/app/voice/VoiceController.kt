@@ -17,6 +17,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
@@ -75,6 +77,7 @@ class VoiceController @Inject constructor(
 
     private val busy = AtomicBoolean(false)
     @Volatile private var sessionJob: Job? = null
+    @Volatile private var warmupJob: Job? = null
     @Volatile private var routingJob: Job? = null
     @Volatile private var cancellableAskJob: Job? = null
     // Busy drops are Log.i-only by contract (no journal/earcon/state change), so tests have no
@@ -98,6 +101,22 @@ class VoiceController @Inject constructor(
     fun beginExternalAssistantAudio() = Unit
 
     fun endExternalAssistantAudio() = Unit
+
+    /** Provider hand-off: Alice must never start while Local still owns AudioRecord/TTS.
+     *  Returns true when there was local work to tear down, so launchers may allow a short
+     *  hardware-release grace before opening the external assistant. */
+    fun stopForExternalAssistant(): Boolean {
+        val wasActive = _listening.value || sessionJob?.isActive == true ||
+            warmupJob?.isActive == true || ttsEngine.speaking.value
+        warmupJob?.cancel()
+        warmupJob = null
+        if (_listening.value || sessionJob?.isActive == true) {
+            stopContinuousSession()
+        } else {
+            runCatching { ttsEngine.stop() }
+        }
+        return wasActive
+    }
 
     /** Test seams, same rationale as [lastSpeakingSeenMs]: deterministic await conditions
      *  instead of fixed sleeps, no public API surface added. */
@@ -245,7 +264,26 @@ class VoiceController @Inject constructor(
             return
         }
         if (continuousAsr.isReady() && currentLang() == VoiceLang.RU) {
-            startContinuousSession()
+            if (continuousAsr.isWarm()) {
+                startContinuousSession()
+            } else {
+                // Never show the listening cue before the native recognizer+VAD can actually
+                // consume microphone frames. The service normally pre-warms this path; this is
+                // the cold-start safety net after process restart/provider switching.
+                if (warmupJob?.isActive == true) return
+                warmupJob = scope.launch(Dispatchers.IO) {
+                    continuousAsr.warmUp()
+                    if (currentCoroutineContext().isActive &&
+                        gate.isEnabled() &&
+                        currentLang() == VoiceLang.RU &&
+                        continuousAsr.isWarm() &&
+                        !_listening.value
+                    ) {
+                        startContinuousSession()
+                    }
+                    warmupJob = null
+                }
+            }
         } else {
             // GigaAM model missing (or non-RU language, which GigaAM does not support):
             // preserve the degraded UX the legacy path produced — overlay + journal ERROR.
@@ -362,6 +400,10 @@ class VoiceController @Inject constructor(
                                 return@collect
                             }
                             processingUtterance = true
+                            // Paint the recognized phrase NOW, before any vehicle dispatch, network
+                            // call or LLM work. The driver can immediately see what GigaAM heard.
+                            runCatching { showHeardHook(ev.text) }
+                            cancelScheduledClear()
                             val job = launch(start = CoroutineStart.LAZY) {
                                 runCatching { updateListeningOverlay(context.getString(R.string.voice_thinking)) }
                                 try {
@@ -377,6 +419,10 @@ class VoiceController @Inject constructor(
                                         "Continuous session utterance failed: decodeMs=$decodeMs ${t.message}")
                                     announce("Голос", "Отказ: ${t.message ?: "внутренняя ошибка"}", "Ошибка")
                                 } finally {
+                                    // Do not let a following utterance supersede the previous
+                                    // answer before its queued TTS drains. Continuous listening
+                                    // stays ON; this only serializes conversational turns.
+                                    if (!stopRequested.get()) awaitTurnSpeechDrain()
                                     routingJob = null
                                     processingUtterance = false
                                     runCatching { updateListeningOverlay(context.getString(R.string.voice_listening)) }
@@ -443,11 +489,9 @@ class VoiceController @Inject constructor(
      *  noteAction, announce — all unchanged). decodeMs is also logged for RTF measurement on
      *  the car, and threaded into the VoiceJournal detail for each utterance. */
     private suspend fun routeUtterance(transcript: String, decodeMs: Long) {
-        // Orb dialog: show "Ты: <phrase>" (clearing any prior answer) and cancel a pending clear so a
-        // fresh turn keeps the block visible. The pill has already flipped to "Думаю" at the call site.
-        showHeardHook(transcript)
+        // The transcript row is painted synchronously at the Utterance event before this routing
+        // coroutine starts; routing must never be what delays visible recognition feedback.
         val command = AgentNameMatcher.stripLeadingName(transcript, agentIdentity().name)
-        cancelScheduledClear()
         Log.i(TAG, "Continuous session utterance: decodeMs=$decodeMs")
 
         // Echo filter: only check if the transcript had no agent name prefix (if it did have the name,
@@ -467,6 +511,31 @@ class VoiceController @Inject constructor(
         val res = if (followUp) null else resolve(command, currentLang())
         _state.value = VoiceUiState.Thinking
         if (res != null) apply(res, command, decodeMs) else agentFallback(command, decodeMs)
+    }
+
+    /** Wait for the answer belonging to the current turn to actually start and drain.
+     *  speak()/SpeechQueue are fire-and-forget, so route completion alone is not playback completion. */
+    private suspend fun awaitTurnSpeechDrain() {
+        if (!gate.ttsEnabled()) return
+        val stamp = lastSpeakingSeenMs
+        if (stamp <= 0L) return
+
+        if (!ttsEngine.speaking.value) {
+            val age = System.currentTimeMillis() - stamp
+            if (age < TURN_TTS_START_GRACE_MS) {
+                val started = withTimeoutOrNull(TURN_TTS_START_GRACE_MS - age) {
+                    ttsEngine.speaking.first { it }
+                    true
+                } ?: false
+                if (!started) return
+            } else {
+                return
+            }
+        }
+
+        withTimeoutOrNull(TURN_TTS_DRAIN_TIMEOUT_MS) {
+            ttsEngine.speaking.first { !it }
+        }
     }
 
     /** Appends the continuous-session decode latency to a journal detail string; a no-op
@@ -849,6 +918,8 @@ class VoiceController @Inject constructor(
         // Anti-self-trigger TTS mute window grace period, applied after ttsEngine.speaking
         // transitions to false (see the speakingWatcher in startContinuousSession()).
         private const val TTS_MUTE_GRACE_MS = 500L
+        private const val TURN_TTS_START_GRACE_MS = 1_500L
+        private const val TURN_TTS_DRAIN_TIMEOUT_MS = 60_000L
 
         /** Pure so it is unit-testable without a real clock/session: whether capture should
          *  currently be muted -- either TTS is actively speaking right now, or we're still

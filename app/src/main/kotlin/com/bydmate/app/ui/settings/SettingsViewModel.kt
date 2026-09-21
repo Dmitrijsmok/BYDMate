@@ -1188,16 +1188,19 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun toggleAlice(enabled: Boolean) {
+        if (enabled) voiceController.stopForExternalAssistant()
         _uiState.update { it.copy(aliceEnabled = enabled) }
         appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
             .edit().putBoolean(SettingsRepository.KEY_ALICE_ENABLED, enabled).apply()
+        if (!enabled && _uiState.value.voiceEnabled) {
+            viewModelScope.launch(Dispatchers.IO) { runCatching { continuousAsr.warmUp() } }
+            runCatching { ttsEngine.warmUp() }
+        }
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_ALICE_ENABLED, enabled.toString())
             if (_uiState.value.voiceEnabled) {
                 ensureVoiceKeyService(if (enabled) "alice-provider" else "local-provider")
-                if (!enabled) {
-                    viewModelScope.launch(Dispatchers.IO) { runCatching { continuousAsr.warmUp() } }
-                }
+                // Warm-up already starts immediately above so a fast PTT press cannot outrun it.
             }
         }
     }

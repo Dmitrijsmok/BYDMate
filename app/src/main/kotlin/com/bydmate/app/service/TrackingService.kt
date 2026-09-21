@@ -720,7 +720,7 @@ class TrackingService : Service(), LocationListener {
                     asrLoadGuard.reset()
                     return@runCatching
                 }
-                if (!aliceEnabled && voiceGate.isEnabled()) continuousAsr.warmUp()
+                if (voiceGate.isEnabled()) continuousAsr.warmUp()
             }
             // TTS guard: symmetric check in its own runCatching so ASR path is unaffected.
             runCatching {
@@ -732,7 +732,7 @@ class TrackingService : Service(), LocationListener {
                     val modelDirId = com.bydmate.app.voice.TtsVoiceCatalog.byId(voiceId).modelDirId
                     ttsModelManager.delete(modelDirId)
                     ttsLoadGuard.reset()
-                } else if (!aliceEnabled && voiceGate.isEnabled() && voiceGate.ttsEnabled()) {
+                } else if (voiceGate.isEnabled() && voiceGate.ttsEnabled()) {
                     // Same pre-warm reasoning as the recognizer above: creating the synthesis
                     // engine now, off the main thread, keeps the first reply from waiting on the
                     // model load. Gated on both toggles so a driver who never speaks (or muted
