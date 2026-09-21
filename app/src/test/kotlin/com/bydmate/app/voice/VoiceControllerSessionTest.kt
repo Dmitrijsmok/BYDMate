@@ -656,9 +656,12 @@ class VoiceControllerSessionTest {
         Thread.sleep(150)
         assertTrue(fakeAsr.recordedFrames.isEmpty())
 
-        // TTS finishes; past the 300ms post-speech grace window a frame reaches the recognizer.
+        // TTS finishes; past the current 500ms post-speech grace window a frame reaches the recognizer.
+        // First wait until the speaking frame has actually stamped the mute boundary, otherwise a
+        // slow CI worker can flip speaking=false before the filter samples the frame.
+        awaitTrue { controller.lastSpeakingSeenMs > 0L }
         speaking.value = false
-        Thread.sleep(350)
+        Thread.sleep(550)
         rawFrames.tryEmit(shortArrayOf(4, 5, 6))
         awaitTrue { fakeAsr.recordedFrames.isNotEmpty() }
         assertEquals(1, fakeAsr.recordedFrames.size)
