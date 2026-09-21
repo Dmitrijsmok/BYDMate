@@ -2,7 +2,9 @@ name: Alice integration audit
 
 on:
   push:
-    branches: [alice-public-integration-v3.17.3]
+    branches: [alice-public-integration-v3.17.4]
+  pull_request:
+    branches: [alice-public-integration-v3.17.4]
   workflow_dispatch:
 
 concurrency:
