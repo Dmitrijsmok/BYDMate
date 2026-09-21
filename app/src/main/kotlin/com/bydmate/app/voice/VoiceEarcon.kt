@@ -2,6 +2,7 @@ package com.bydmate.app.voice
 
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.os.Build
 
 /** Short non-spoken confirmation/failure beeps. TTS responses are Spec 2. */
 class VoiceEarcon(private val volume: Int = 70) {
@@ -18,11 +19,22 @@ class VoiceEarcon(private val volume: Int = 70) {
         }
     }
 
-    // BYD "Voice" stream (17), same route as agent TTS: beeps stay audible while a session
-    // ducks STREAM_MUSIC to near-zero -- on the music stream every earcon was swallowed by
-    // the session's own duck (field report APK 340). Fall back to the music stream if the
-    // firmware rejects the custom stream type.
-    private fun toneGenerator(): ToneGenerator =
-        runCatching { ToneGenerator(SherpaTtsEngine.BYD_STREAM_BTTS, volume) }
-            .getOrElse { ToneGenerator(AudioManager.STREAM_MUSIC, volume) }
+    // Prefer BYD's custom Voice stream where the firmware exposes it. DiLink 3 / ATTO 3
+    // diagnostics show stream 17 is absent, so never probe it there: STREAM_ACCESSIBILITY stays
+    // independent from the music stream that AudioCapture ducks during listening.
+    private fun toneGenerator(): ToneGenerator {
+        if (!SherpaTtsEngine.shouldUseBydVoiceStream(Build.FINGERPRINT)) {
+            val fallbackStream =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) AudioManager.STREAM_ACCESSIBILITY
+                else AudioManager.STREAM_MUSIC
+            return ToneGenerator(fallbackStream, volume)
+        }
+        return runCatching { ToneGenerator(SherpaTtsEngine.BYD_STREAM_BTTS, volume) }
+            .getOrElse {
+                val fallbackStream =
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) AudioManager.STREAM_ACCESSIBILITY
+                    else AudioManager.STREAM_MUSIC
+                ToneGenerator(fallbackStream, volume)
+            }
+    }
 }
