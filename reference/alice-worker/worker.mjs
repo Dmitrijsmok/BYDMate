@@ -866,7 +866,7 @@ function baseDevice(
     device_info: {
       manufacturer: "BYDMate",
       model: name,
-      sw_version: "5.8",
+      sw_version: "5.9",
     },
   };
 }
@@ -3342,7 +3342,7 @@ function dashboard() {
   name="viewport"
   content="width=device-width,initial-scale=1"
 >
-<title>BYDmate Alice Bridge 5.8</title>
+<title>BYDmate Alice Bridge 5.9</title>
 <style>
 body{
   font-family:sans-serif;
@@ -3389,7 +3389,7 @@ small{
 </head>
 <body>
 
-<h2>BYDmate Alice Bridge 5.8</h2>
+<h2>BYDmate Alice Bridge 5.9</h2>
 
 <input
   id="key"
@@ -3710,7 +3710,7 @@ export default {
         service:
           "bydmate-alice",
         bridge:
-          "5.8",
+          "5.9",
         devices:
           exposedYandexDevices(env).length,
         actions:
@@ -4488,7 +4488,7 @@ export default {
 
       return json({
         bridge:
-          "5.8",
+          "5.9",
 
         allowed_actions:
           Array.from(
