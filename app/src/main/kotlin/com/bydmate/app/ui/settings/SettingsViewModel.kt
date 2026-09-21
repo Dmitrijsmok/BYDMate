@@ -34,6 +34,8 @@ import com.bydmate.app.data.remote.InsightsManager
 import com.bydmate.app.data.remote.LlmHttpException
 import com.bydmate.app.data.remote.OpenRouterClient
 import com.bydmate.app.data.remote.OpenRouterModel
+import com.bydmate.app.data.remote.AliceAppResolver
+import com.bydmate.app.data.remote.VoiceAppMatch
 import com.bydmate.app.data.local.dao.TariffPeriodDao
 import com.bydmate.app.data.local.entity.PlaceEntity
 import com.bydmate.app.data.local.entity.TariffPeriodEntity
@@ -225,6 +227,8 @@ data class SettingsUiState(
     val routeNavigator: String = com.bydmate.app.data.automation.RouteNavigatorUris.YANDEX,
     /** Only navigator apps that currently expose a launcher activity on this head unit. */
     val routeNavigatorOptions: List<String> = emptyList(),
+    /** Resolved voice-action -> installed launcher package diagnostics for the Settings UI. */
+    val voiceAppMatches: List<VoiceAppMatch> = emptyList(),
     /** Long-term facts the agent remembered about the driver (DriverMemory). */
     val agentMemoryFacts: List<String> = emptyList(),
     // Wave J: multi-provider LLM connections (OpenRouter / z.ai / custom)
@@ -511,6 +515,7 @@ class SettingsViewModel @Inject constructor(
                 routePrefs.getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null)
             )
             val routeNavigatorOptions = installedRouteNavigatorIds()
+            val voiceAppMatches = AliceAppResolver(appContext).diagnosticMatches()
             val routeNavigator = if (
                 routeNavigatorOptions.isEmpty() || savedRouteNavigator in routeNavigatorOptions
             ) savedRouteNavigator else routeNavigatorOptions.first()
@@ -580,6 +585,7 @@ class SettingsViewModel @Inject constructor(
                     agentGender = agentGender,
                     routeNavigator = routeNavigator,
                     routeNavigatorOptions = routeNavigatorOptions,
+                    voiceAppMatches = voiceAppMatches,
                     agentMemoryFacts = driverMemory.facts(),
                     zaiApiKey = zaiApiKey,
                     customName = customName,
