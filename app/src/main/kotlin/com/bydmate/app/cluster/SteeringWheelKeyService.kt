@@ -5,6 +5,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
@@ -31,6 +32,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 class SteeringWheelKeyService : AccessibilityService() {
 
     private var cachedEntryPoint: ClusterEntryPoint? = null
+    private var lastLocalVoiceDownMs = 0L
+    private var lastLocalVoiceKeyCode = -1
     private val aliceLauncher by lazy { YandexAliceLauncher(this) { entryPoint().voiceController() } }
     private val prefs: SharedPreferences by lazy {
         applicationContext.getSharedPreferences(ClusterProjectionManager.PREFS_NAME, Context.MODE_PRIVATE)
@@ -147,12 +150,38 @@ class SteeringWheelKeyService : AccessibilityService() {
     ): Boolean? = when (decision) {
         VoiceKeyDecision.TRIGGER -> {
             if (event.repeatCount == 0) {
-                if (aliceEnabled) aliceLauncher.trigger() else entryPoint().voiceController().onPttPressed()
+                if (aliceEnabled) {
+                    resetLocalVoiceDoublePress()
+                    aliceLauncher.trigger()
+                } else {
+                    triggerLocalOrAliceOnDoublePress(event)
+                }
             }
             true
         }
         VoiceKeyDecision.CONSUME -> true
         VoiceKeyDecision.IGNORE -> null
+    }
+
+    private fun triggerLocalOrAliceOnDoublePress(event: KeyEvent) {
+        val now = SystemClock.elapsedRealtime()
+        val isDouble = event.keyCode == lastLocalVoiceKeyCode &&
+            isVoiceDoublePress(lastLocalVoiceDownMs, now)
+        if (isDouble) {
+            resetLocalVoiceDoublePress()
+            // YandexAliceLauncher.trigger() calls stopForExternalAssistant() first, so the Local
+            // AudioRecord/TTS ownership is released before Alice starts listening.
+            aliceLauncher.trigger()
+            return
+        }
+        lastLocalVoiceDownMs = now
+        lastLocalVoiceKeyCode = event.keyCode
+        entryPoint().voiceController().onPttPressed()
+    }
+
+    private fun resetLocalVoiceDoublePress() {
+        lastLocalVoiceDownMs = 0L
+        lastLocalVoiceKeyCode = -1
     }
 
     private fun entryPoint(): ClusterEntryPoint =

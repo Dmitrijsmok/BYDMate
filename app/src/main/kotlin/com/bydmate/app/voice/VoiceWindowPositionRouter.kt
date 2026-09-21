@@ -1,38 +1,29 @@
 package com.bydmate.app.voice
 
-/** Maps local voice window commands to the same closed-loop position controller Alice uses.
- *  This is intentionally separate from CommandTranslator: on DiLink 3 a raw percentage write can
- *  be accepted without landing at the requested aperture, while the closed-loop controller reads
- *  the pane and falls back to open/close + stop when needed. */
+/** Maps individual local voice window-position commands to the same closed-loop controller Alice
+ *  uses. Aggregate detents (all/front/rear half or vent) deliberately stay OUT of this router:
+ *  VehicleApi's composite path fans those panes out as one burst with its Song L-safe stagger and
+ *  shared verification, so "all windows" starts every pane together instead of waiting for each
+ *  closed-loop move to finish before starting the next one. */
 internal object VoiceWindowPositionRouter {
     data class Request(val action: String, val target: Int)
 
     private const val VENT_PERCENT = 10
     private const val HALF_PERCENT = 50
 
-    private val all = listOf(
-        "window.driver.position",
-        "window.passenger.position",
-        "window.rear_left.position",
-        "window.rear_right.position",
+    private val aggregateDetents = setOf(
+        "车窗通风",
+        "车窗半开",
+        "前排车窗通风",
+        "前排车窗半开",
+        "后排车窗通风",
+        "后排车窗半开",
     )
-    private val front = all.take(2)
-    private val rear = all.drop(2)
 
     fun resolve(command: String): List<Request>? {
-        aggregate(command)?.let { return it }
+        if (command in aggregateDetents) return null
         individualDetent(command)?.let { return listOf(it) }
         return explicitPercent(command)?.let(::listOf)
-    }
-
-    private fun aggregate(command: String): List<Request>? = when (command) {
-        "车窗通风" -> requests(all, VENT_PERCENT)
-        "车窗半开" -> requests(all, HALF_PERCENT)
-        "前排车窗通风" -> requests(front, VENT_PERCENT)
-        "前排车窗半开" -> requests(front, HALF_PERCENT)
-        "后排车窗通风" -> requests(rear, VENT_PERCENT)
-        "后排车窗半开" -> requests(rear, HALF_PERCENT)
-        else -> null
     }
 
     private fun individualDetent(command: String): Request? {
@@ -58,9 +49,6 @@ internal object VoiceWindowPositionRouter {
         "后右" -> "window.rear_right.position"
         else -> null
     }
-
-    private fun requests(actions: List<String>, target: Int): List<Request> =
-        actions.map { Request(it, target) }
 
     private val PERCENT = Regex("""(主驾|副驾|后左|后右)打开(\d{1,2})""")
 }

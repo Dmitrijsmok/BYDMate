@@ -68,6 +68,19 @@ fun learnDecision(keyCode: Int, isDown: Boolean): LearnAction {
 
 const val DEFAULT_VOICE_KEYCODE = 320  // steering "voice" button on Leopard 3 (learnable)
 
+/**
+ * Double-press shortcut while Local BYDMate is selected. The first press is never delayed:
+ * Local starts immediately; a second DOWN edge inside this window is reinterpreted as a
+ * one-shot Alice launch and the launcher tears Local down before taking the microphone.
+ */
+const val VOICE_DOUBLE_PRESS_WINDOW_MS = 350L
+
+fun isVoiceDoublePress(previousDownMs: Long, nowMs: Long): Boolean =
+    previousDownMs > 0L &&
+        nowMs >= previousDownMs &&
+        nowMs - previousDownMs <= VOICE_DOUBLE_PRESS_WINDOW_MS
+
+
 enum class VoiceKeyDecision { TRIGGER, CONSUME, IGNORE }
 
 /** Pure gate for the voice push-to-talk button. Independent of star/projection
