@@ -119,6 +119,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import com.bydmate.app.R
 import com.bydmate.app.agent.LlmAgentBackend
 import com.bydmate.app.data.remote.OpenRouterModel
+import com.bydmate.app.data.remote.VoiceAppMatch
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.ui.components.AppLaunchPickerDialog
 import com.bydmate.app.ui.components.MultiAppPickerDialog
@@ -2375,6 +2376,55 @@ private fun AppSection(state: SettingsUiState, viewModel: SettingsViewModel) {
 }
 
 @Composable
+private fun VoiceAppMatchesDialog(
+    matches: List<VoiceAppMatch>,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_voice_app_matches_dialog_title)) },
+        text = {
+            LazyColumn(
+                modifier = Modifier.heightIn(max = 420.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(matches, key = { it.action }) { match ->
+                    Column {
+                        Text(
+                            text = match.name,
+                            color = TextPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        if (match.packageName != null) {
+                            Text(
+                                text = listOfNotNull(match.appLabel, match.packageName)
+                                    .distinct()
+                                    .joinToString(" · "),
+                                color = TextSecondary,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                            )
+                        } else {
+                            Text(
+                                text = stringResource(R.string.settings_voice_app_matches_not_found),
+                                color = TextMuted,
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(android.R.string.ok))
+            }
+        },
+    )
+}
+
+@Composable
 private fun VoiceSettingsContent(
     state: SettingsUiState,
     viewModel: SettingsViewModel,
@@ -2382,6 +2432,14 @@ private fun VoiceSettingsContent(
     onNavigateToAgentChat: () -> Unit,
 ) {
     val context = LocalContext.current
+    var showVoiceAppMatches by remember { mutableStateOf(false) }
+
+    if (showVoiceAppMatches) {
+        VoiceAppMatchesDialog(
+            matches = state.voiceAppMatches,
+            onDismiss = { showVoiceAppMatches = false },
+        )
+    }
 
     // Tracks which action requested the RECORD_AUDIO permission so the onResult
     // callback dispatches the right operation (ENABLE toggle).
@@ -2471,6 +2529,13 @@ private fun VoiceSettingsContent(
         options = routeNavigatorLabels,
         selectedIndex = routeNavigatorIds.indexOf(state.routeNavigator).coerceAtLeast(0),
         onSelect = { viewModel.setRouteNavigator(routeNavigatorIds[it]) },
+    )
+    SettingActionRow(
+        title = stringResource(R.string.settings_voice_app_matches_title),
+        description = stringResource(R.string.settings_voice_app_matches_desc),
+        buttonLabel = stringResource(R.string.settings_voice_app_matches_button),
+        onClick = { showVoiceAppMatches = true },
+        enabled = true,
     )
 
     if (!state.aliceEnabled) {
