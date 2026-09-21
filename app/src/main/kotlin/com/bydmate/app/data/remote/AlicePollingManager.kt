@@ -145,6 +145,7 @@ class AlicePollingManager @Inject constructor(
                 dispatcher = actionDispatcher,
                 data = latestData,
             )
+            action == "window.all.vent" -> return positionAllWindows(10)
             action in windowPositionActions -> {
                 val target = json.valueInt()
                     ?: return Result.failure(IllegalArgumentException("invalid_window_position"))
@@ -159,6 +160,14 @@ class AlicePollingManager @Inject constructor(
 
         appDispatcher.dispatch(json, latestData)?.let { return it }
         return executeSemanticVehicleCommand(json, latestData, vehicleApi)
+    }
+
+    private suspend fun positionAllWindows(target: Int): Result<Unit> {
+        for (action in windowPositionActions) {
+            val result = apertureController.positionWindow(action, target, latestData?.speed)
+            if (result.isFailure) return result
+        }
+        return Result.success(Unit)
     }
 
     private suspend fun executeVehicleText(json: JSONObject): Result<Unit> {
