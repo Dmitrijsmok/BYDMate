@@ -333,6 +333,19 @@ object NluParser {
     private fun detectNumber(rawTokens: List<String>, lang: VoiceLang): Int? {
         rawTokens.firstNotNullOfOrNull { it.toIntOrNull() }?.let { return it }
         val numbers = VoiceLexicon.numberWords(lang)
+
+        // Compose ordinary spoken percentages such as "тридцать семь" / "thirty seven".
+        // VoiceLexicon contains the decade words and 1..9 units, so this keeps the parser compact
+        // while covering every percentage from 20..99 instead of only hand-listed values.
+        val singles = numbers.filterKeys { ' ' !in it }
+        rawTokens.windowed(2).firstNotNullOfOrNull { pair ->
+            val tens = singles[pair[0]]
+            val units = singles[pair[1]]
+            if (tens != null && units != null &&
+                tens in 20..90 && tens % 10 == 0 && units in 1..9
+            ) tens + units else null
+        }?.let { return it }
+
         // Match complete contiguous token sequences only. The old substring search could read
         // "пятьдесят" as "пять" and "двадцать" as "два". Prefer the longest phrase first,
         // then the longest spelling for deterministic single-word matches.
