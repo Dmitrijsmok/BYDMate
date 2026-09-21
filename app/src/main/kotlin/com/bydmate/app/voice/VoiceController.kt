@@ -264,54 +264,54 @@ class VoiceController @Inject constructor(
             return
         }
         if (continuousAsr.isReady() && currentLang() == VoiceLang.RU) {
-            if (continuousAsr.isWarm()) {
-                startContinuousSession()
-            } else {
-                // Never show the listening cue before the native recognizer+VAD can actually
-                // consume microphone frames. The service normally pre-warms this path; this is
-                // the cold-start safety net after process restart/provider switching.
-                if (warmupJob?.isActive == true) return
-                warmupJob = scope.launch(Dispatchers.IO) {
-                    continuousAsr.warmUp()
-                    if (currentCoroutineContext().isActive &&
-                        gate.isEnabled() &&
-                        currentLang() == VoiceLang.RU &&
-                        continuousAsr.isWarm() &&
-                        !_listening.value
-                    ) {
-                        startContinuousSession()
-                    }
-                    warmupJob = null
-                }
-            }
-        } else {
-            // GigaAM model missing (or non-RU language, which GigaAM does not support):
-            // preserve the degraded UX the legacy path produced — overlay + journal ERROR.
-            if (!busy.compareAndSet(false, true)) return
-            // A prior continuous-session hard stop (stopContinuousSession()) leaves stopRequested
-            // set; only startContinuousSession() used to clear it. Without this reset, announce()
-            // below would silently suppress this branch's overlay+speech forever for a user who
-            // can never start a continuous session again to reset the flag (I-1).
-            stopRequested.set(false)
-            // Two distinct causes share this branch (#87): the GigaAM model genuinely
-            // missing vs. a non-RU voice language (GigaAM is Russian-only) — the old
-            // single "model not loaded" text sent EN-locale users chasing a phantom
-            // download problem.
-            val langBlocked = continuousAsr.isReady() && currentLang() != VoiceLang.RU
-            val msg = context.getString(
-                if (langBlocked) R.string.voice_error_lang_not_ru
-                else R.string.voice_error_model_missing
-            )
-            _state.value = VoiceUiState.NotUnderstood("")
-            record(
-                VoiceJournalEntry.Route.NONE, "", "", VoiceJournalEntry.Outcome.ERROR,
-                msg,
-                "GigaAM ${if (langBlocked) "lang not supported" else "model not ready"} lang=${currentLang()}"
-            )
-            busy.set(false)
-            scheduleIdleReset()
-            scope.launch { announce("Голос", msg, msg) }
+            startLocalSessionWhenReady()
+            return
         }
+        reportVoiceUnavailable()
+    }
+
+    private fun startLocalSessionWhenReady() {
+        if (continuousAsr.isWarm()) {
+            startContinuousSession()
+            return
+        }
+        // Never show the listening cue before the native recognizer+VAD can actually consume
+        // microphone frames. The service normally pre-warms this path; this is the cold-start
+        // safety net after process restart/provider switching.
+        if (warmupJob?.isActive == true) return
+        warmupJob = scope.launch(Dispatchers.IO) {
+            continuousAsr.warmUp()
+            if (canStartAfterWarmup()) startContinuousSession()
+            warmupJob = null
+        }
+    }
+
+    private fun canStartAfterWarmup(): Boolean =
+        currentCoroutineContext().isActive &&
+            gate.isEnabled() &&
+            currentLang() == VoiceLang.RU &&
+            continuousAsr.isWarm() &&
+            !_listening.value
+
+    private fun reportVoiceUnavailable() {
+        // GigaAM model missing (or non-RU language, which GigaAM does not support):
+        // preserve the degraded UX the legacy path produced — overlay + journal ERROR.
+        if (!busy.compareAndSet(false, true)) return
+        stopRequested.set(false)
+        val langBlocked = continuousAsr.isReady() && currentLang() != VoiceLang.RU
+        val msg = context.getString(
+            if (langBlocked) R.string.voice_error_lang_not_ru
+            else R.string.voice_error_model_missing
+        )
+        _state.value = VoiceUiState.NotUnderstood("")
+        record(
+            VoiceJournalEntry.Route.NONE, "", "", VoiceJournalEntry.Outcome.ERROR,
+            msg,
+            "GigaAM ${if (langBlocked) "lang not supported" else "model not ready"} lang=${currentLang()}"
+        )
+        busy.set(false)
+        scheduleIdleReset()
+        scope.launch { announce("Голос", msg, msg) }
     }
 
     /** Continuous PTT-toggled session (Wave B): one long-lived mic capture feeds VAD-segmented

@@ -71,7 +71,14 @@ internal class YandexAliceLauncher(
         }
 
         if (pending && packageName == YANDEX_PACKAGE) advance()
-        if (leftYandex(event, packageName)) scheduleFinishIfStillOutside()
+        if (
+            listening &&
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            packageName.isNotBlank() &&
+            packageName != YANDEX_PACKAGE
+        ) {
+            scheduleFinishIfStillOutside()
+        }
     }
 
     fun destroy() {
@@ -102,12 +109,6 @@ internal class YandexAliceLauncher(
             android.os.Build.VERSION.SDK_INT <= 29 &&
             packageName == BYD_VOICE_PACKAGE &&
             event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-
-    private fun leftYandex(event: AccessibilityEvent, packageName: String): Boolean =
-        listening &&
-            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            packageName.isNotBlank() &&
-            packageName != YANDEX_PACKAGE
 
     private fun scheduleFinishIfStillOutside() {
         handler.postDelayed({
