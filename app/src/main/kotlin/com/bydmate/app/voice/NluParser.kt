@@ -333,10 +333,18 @@ object NluParser {
     private fun detectNumber(rawTokens: List<String>, lang: VoiceLang): Int? {
         rawTokens.firstNotNullOfOrNull { it.toIntOrNull() }?.let { return it }
         val numbers = VoiceLexicon.numberWords(lang)
-        // try longest multi-word number first ("двадцать четыре")
-        val joined = rawTokens.joinToString(" ")
+        // Match complete contiguous token sequences only. The old substring search could read
+        // "пятьдесят" as "пять" and "двадцать" as "два". Prefer the longest phrase first,
+        // then the longest spelling for deterministic single-word matches.
         return numbers.entries
-            .sortedByDescending { it.key.split(" ").size }
-            .firstOrNull { joined.contains(it.key) }?.value
+            .sortedWith(
+                compareByDescending<Map.Entry<String, Int>> { it.key.split(" ").size }
+                    .thenByDescending { it.key.length }
+            )
+            .firstOrNull { entry ->
+                val parts = entry.key.split(" ")
+                rawTokens.windowed(parts.size).any { it == parts }
+            }
+            ?.value
     }
 }
