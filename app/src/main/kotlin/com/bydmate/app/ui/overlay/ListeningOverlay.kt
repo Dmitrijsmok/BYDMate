@@ -14,13 +14,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Mic
@@ -63,6 +66,10 @@ import kotlinx.coroutines.withContext
  *
  * v3 (Wave F): both windows are anchored at TOP|START instead of TOP|CENTER_HORIZONTAL, so x is an
  * absolute left-edge offset that does not shift when the pill's content width changes.
+ *
+ * v4: a third, non-touchable microphone indicator is pinned at the upper-right while the local
+ * BYDMate continuous session is alive. It disappears with the same [hide] teardown as the pill,
+ * so Alice's lifecycle and UI are completely independent.
  */
 object ListeningOverlay {
 
@@ -71,6 +78,8 @@ object ListeningOverlay {
     internal const val TOP_MARGIN_DP = 56
     // Gap between the pill window and the dialog window below it.
     internal const val PILL_OFFSET_DP = 48
+    // Right-edge inset for the always-visible listening mic indicator.
+    internal const val MIC_INDICATOR_MARGIN_DP = 16
     // The dialog block grows with the answer up to this share of the screen height; beyond that
     // it would cover the road view behind the overlay.
     private const val DIALOG_MAX_HEIGHT_FRACTION = 0.5f
@@ -265,10 +274,29 @@ object ListeningOverlay {
             y = startY + pillOffsetPx
         }
 
+        // Independent status indicator: always pinned at the upper-right for the whole local
+        // continuous session, even when the draggable pill has been moved elsewhere. It is purely
+        // visual and never intercepts touches.
+        val micParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.END
+            x = (MIC_INDICATOR_MARGIN_DP * density).toInt()
+            y = (TOP_MARGIN_DP * density).toInt()
+        }
+
         val pillOwner = OverlayLifecycleOwner().also { it.onCreate() }
         val dialogOwner = OverlayLifecycleOwner().also { it.onCreate() }
+        val micOwner = OverlayLifecycleOwner().also { it.onCreate() }
         val pillView = ComposeView(context)
         val dialogView = ComposeView(context)
+        val micView = ComposeView(context)
 
         // Default centering after the first layout pass (only when there is no saved position).
         if (savedX == ORB_X_UNSET) {
@@ -329,16 +357,43 @@ object ListeningOverlay {
             setViewTreeSavedStateRegistryOwner(dialogOwner)
             setContent { DialogContent(youLabel, agentLabel) }
         }
+        micView.apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindowOrReleasedFromPool)
+            setViewTreeLifecycleOwner(micOwner)
+            setViewTreeSavedStateRegistryOwner(micOwner)
+            setContent { ListeningMicIndicator() }
+        }
 
         wm.addView(pillView, pillParams)
         wm.addView(dialogView, dialogParams)
+        wm.addView(micView, micParams)
 
         return CompositeOverlayHandle(
             listOf(
                 RealOverlayHandle(wm, pillView, pillOwner),
                 RealOverlayHandle(wm, dialogView, dialogOwner),
+                RealOverlayHandle(wm, micView, micOwner),
             ),
         )
+    }
+
+    @Composable
+    private fun ListeningMicIndicator() {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(40.dp)
+                .background(CardSurface.copy(alpha = 0.94f), CircleShape)
+                .border(1.dp, AccentGreen, CircleShape)
+                .padding(8.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Mic,
+                contentDescription = null,
+                tint = AccentGreen,
+                modifier = Modifier.size(24.dp),
+            )
+        }
     }
 
     @Composable
