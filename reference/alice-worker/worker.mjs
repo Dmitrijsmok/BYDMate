@@ -159,6 +159,7 @@ const DEVICE = {
   windowRearRight: "bydmate-window-rear-right",
   allWindows: "bydmate-windows-all",
   windowsVent: "bydmate-windows-vent",
+  windowsVentVoice: "bydmate-windows-vent-voice",
 
   interiorLight: "bydmate-interior-light",
   ambientLight: "bydmate-ambient-light",
@@ -166,6 +167,7 @@ const DEVICE = {
   hazard: "bydmate-hazard",
 
   seatDriverHeat: "bydmate-seat-driver-heat",
+  seatDriverHeat2: "bydmate-seat-driver-heat-level-2",
   seatDriverVent: "bydmate-seat-driver-vent",
   seatPassengerHeat: "bydmate-seat-passenger-heat",
   seatPassengerVent: "bydmate-seat-passenger-vent",
@@ -884,7 +886,7 @@ function baseDevice(
     device_info: {
       manufacturer: "BYDMate",
       model: name,
-      sw_version: "5.10",
+      sw_version: "5.11",
     },
   };
 }
@@ -1176,11 +1178,29 @@ function yandexDevices() {
       "Приоткрыть все окна для проветривания"
     ),
 
+    // Voice shortcut with the exact phrase used in the car. Yandex sometimes treats
+    // "проветри машину" as a generic conversational request instead of selecting the
+    // "Проветривание окон" card; this unambiguous device keeps the command in Smart Home.
+    oneShotDevice(
+      DEVICE.windowsVentVoice,
+      "Проветри машину",
+      "Приоткрыть все окна BYD для проветривания"
+    ),
+
     // Seats
     seatHeatDevice(
       DEVICE.seatDriverHeat,
       "Подогрев сиденья водителя",
       "Подогрев водительского сиденья BYD"
+    ),
+
+    // Yandex's official heat mode vocabulary is min/max rather than "первый/второй
+    // уровень". Keep the normal card above and add one exact voice shortcut for the
+    // driver's second physical level observed in the car.
+    oneShotDevice(
+      DEVICE.seatDriverHeat2,
+      "Подогрев сиденья водителя второй уровень",
+      "Включить второй уровень подогрева водительского сиденья BYD"
     ),
 
     seatVentDevice(
@@ -1319,7 +1339,7 @@ function yandexDevices() {
 
     baseDevice(
       DEVICE.outsideTemp,
-      "Наружный датчик машины",
+      "Температура снаружи машины",
       "Наружная температура автомобиля BYD",
       "devices.types.sensor.climate",
       [],
@@ -1346,8 +1366,8 @@ function yandexDevices() {
 
     appDevice(
       DEVICE.youtube,
-      "Ютуб BYD",
-      "Открыть YouTube"
+      "Видео BYD",
+      "Открыть установленный YouTube или ReVanced на экране автомобиля"
     ),
 
     appDevice(
@@ -1626,6 +1646,13 @@ const APP_ACTIONS = {
     "app.tiktok.open",
 };
 
+const FIXED_VALUE_ACTIONS = {
+  [DEVICE.seatDriverHeat2]: {
+    action: "seat.driver.heat",
+    value: 2,
+  },
+};
+
 const ONE_SHOT_ACTIONS = {
   [DEVICE.airflowFace]:
     "climate.airflow_face",
@@ -1651,6 +1678,9 @@ const ONE_SHOT_ACTIONS = {
   [DEVICE.windowsVent]:
     "window.all.vent",
 
+  [DEVICE.windowsVentVoice]:
+    "window.all.vent",
+
   [DEVICE.sunroofComfort]:
     "sunroof.comfort",
 
@@ -1674,6 +1704,10 @@ function isActionOnlyDevice(
     ) ||
     Object.prototype.hasOwnProperty.call(
       ONE_SHOT_ACTIONS,
+      id
+    ) ||
+    Object.prototype.hasOwnProperty.call(
+      FIXED_VALUE_ACTIONS,
       id
     ) ||
     id ===
@@ -3148,6 +3182,37 @@ async function handleBinaryAction(
    APP / ONE-SHOT ACTIONS
    ====================================================== */
 
+async function handleFixedValueAction(
+  env,
+  config,
+  capability
+) {
+  const type = capability.type || "";
+  const state = capability.state || {};
+
+  if (
+    type !== "devices.capabilities.on_off" ||
+    state.instance !== "on"
+  ) {
+    return actionError(
+      type,
+      state.instance || "unknown",
+      "INVALID_ACTION",
+      "Fixed-value shortcut is not supported"
+    );
+  }
+
+  if (Boolean(state.value)) {
+    await enqueueCommand(
+      env,
+      config.action,
+      config.value
+    );
+  }
+
+  return actionDone(type, "on");
+}
+
 async function handleOneShotAction(
   env,
   action,
@@ -3360,7 +3425,7 @@ function dashboard() {
   name="viewport"
   content="width=device-width,initial-scale=1"
 >
-<title>BYDmate Alice Bridge 5.10</title>
+<title>BYDmate Alice Bridge 5.11</title>
 <style>
 body{
   font-family:sans-serif;
@@ -3407,7 +3472,7 @@ small{
 </head>
 <body>
 
-<h2>BYDmate Alice Bridge 5.10</h2>
+<h2>BYDmate Alice Bridge 5.11</h2>
 
 <input
   id="key"
@@ -3728,7 +3793,7 @@ export default {
         service:
           "bydmate-alice",
         bridge:
-          "5.10",
+          "5.11",
         devices:
           exposedYandexDevices(env).length,
         actions:
@@ -4096,6 +4161,24 @@ export default {
                 capabilityResults.push(
                   await handleMediaAction(
                     env,
+                    capability
+                  )
+                );
+
+                continue;
+              }
+
+              if (
+                FIXED_VALUE_ACTIONS[
+                  device.id
+                ]
+              ) {
+                capabilityResults.push(
+                  await handleFixedValueAction(
+                    env,
+                    FIXED_VALUE_ACTIONS[
+                      device.id
+                    ],
                     capability
                   )
                 );
@@ -4506,7 +4589,7 @@ export default {
 
       return json({
         bridge:
-          "5.10",
+          "5.11",
 
         allowed_actions:
           Array.from(
