@@ -8,7 +8,7 @@ const dbPath = process.env.DB_PATH || "./bydmate-alice.sqlite";
 const apiKey = String(process.env.BYDMATE_API_KEY || "").trim();
 const yandexClientId = String(process.env.YANDEX_CLIENT_ID || "").trim();
 const aliceDialogToken = String(process.env.ALICE_DIALOG_TOKEN || "").trim();
-const aliceSmartHomeCards = String(process.env.ALICE_SMART_HOME_CARDS || "compact").trim();
+const aliceSmartHomeCards = String(process.env.ALICE_SMART_HOME_CARDS || "full").trim();
 
 if (!apiKey) throw new Error("BYDMATE_API_KEY is required");
 if (!yandexClientId) throw new Error("YANDEX_CLIENT_ID is required");
