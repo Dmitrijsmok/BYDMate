@@ -55,6 +55,7 @@ object NluParser {
 
         val devices2 = disambiguateAirflow(devices, stems, lang)
         val (actions2, devices3) = narrowSeatOff(effectiveActions, devices2)
+        resolveWindowPercentage(text, actions2, devices3, qualifiers, number)?.let { return it }
         if (devices3.any { isAperture(it) } && hasExplicitNumber(rawTokens, lang)) {
             return ParseResult.Unrecognized
         }
@@ -205,6 +206,53 @@ object NluParser {
 
     private fun isAperture(d: DeviceSlot) =
         d.name.startsWith("WINDOW") || d == DeviceSlot.SUNROOF
+
+    /** Explicit percentages are a real DiLink 3 capability (per-door *_pos FIDs). Preserve the
+     * author's existing full/half/vent commands; only phrases that explicitly contain percent/% 
+     * take this path. Endpoints 0/100 intentionally emit the existing strings so the translator
+     * uses dedicated close/open FIDs on DiLink 3 rather than the inert percentage endpoints. */
+    private fun resolveWindowPercentage(
+        rawText: String,
+        actions: Set<ActionSlot>,
+        devices: Set<DeviceSlot>,
+        qualifiers: Set<Qual>,
+        number: Int?,
+    ): ParseResult.Command? {
+        val percent = number?.takeIf { it in 0..100 } ?: return null
+        if (devices.none { it.name.startsWith("WINDOW") }) return null
+        if (!hasPercentMarker(rawText)) return null
+        if (actions.none { it == ActionSlot.OPEN || it == ActionSlot.HALF || it == ActionSlot.SET }) return null
+
+        val commands = when (windowFor(qualifiers)) {
+            DeviceSlot.WINDOW_DRIVER -> listOf(windowPositionCommand("主驾", percent))
+            DeviceSlot.WINDOW_PASSENGER -> listOf(windowPositionCommand("副驾", percent))
+            DeviceSlot.WINDOW_REAR_LEFT -> listOf(windowPositionCommand("后左", percent))
+            DeviceSlot.WINDOW_REAR_RIGHT -> listOf(windowPositionCommand("后右", percent))
+            DeviceSlot.WINDOW_FRONT -> listOf(
+                windowPositionCommand("主驾", percent),
+                windowPositionCommand("副驾", percent),
+            )
+            DeviceSlot.WINDOW_REAR -> listOf(
+                windowPositionCommand("后左", percent),
+                windowPositionCommand("后右", percent),
+            )
+            else -> listOf(
+                windowPositionCommand("主驾", percent),
+                windowPositionCommand("副驾", percent),
+                windowPositionCommand("后左", percent),
+                windowPositionCommand("后右", percent),
+            )
+        }
+        return ParseResult.Command(commands)
+    }
+
+    private fun hasPercentMarker(rawText: String): Boolean {
+        val s = rawText.lowercase()
+        return '%' in s || "процент" in s || "percent" in s
+    }
+
+    private fun windowPositionCommand(prefix: String, percent: Int): String =
+        prefix + "打开" + percent
 
     /** "открой наполовину водительское окно" names both the verb (OPEN) and the
      *  detent (HALF/VENT): the detent is what the driver asked for, the verb only
