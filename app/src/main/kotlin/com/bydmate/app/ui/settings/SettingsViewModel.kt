@@ -1418,7 +1418,10 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(ttsVoice = voiceId) }
         appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
             .edit().putString("tts_voice", voiceId).apply()
+        // reload() drops the previous model; immediately queue warmUp() behind that reload so
+        // switching Sofia/Dmitri does not make the next spoken answer pay the full model load.
         ttsEngine.reload()
+        ttsEngine.warmUp()
     }
 
     private val ttsDownloadJobs = mutableMapOf<String, Job>()

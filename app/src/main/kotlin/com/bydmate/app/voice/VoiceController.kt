@@ -16,6 +16,8 @@ import com.bydmate.app.util.appLocalizedContext
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -323,6 +325,10 @@ class VoiceController @Inject constructor(
     private fun startContinuousSession() {
         if (!busy.compareAndSet(false, true)) return
         ensureSupertonicStressDict()
+        // Warm the currently selected local TTS voice as soon as the Local BYDMate session
+        // starts. This covers voice switches (Sofia -> Dmitri etc.) and keeps even NLU-only
+        // confirmations such as "Готово" from paying model-load latency on the first command.
+        if (gate.ttsEnabled()) runCatching { ttsEngine.warmUp() }
         // Barge-in: kill any ongoing TTS so it neither talks over the user nor bleeds into capture.
         runCatching { ttsEngine.stop() }
         lastSpeakingSeenMs = 0L
@@ -591,7 +597,10 @@ class VoiceController @Inject constructor(
     private fun scheduleClear(text: String, spoken: Boolean) {
         clearJob?.cancel()
         clearJob = scope.launch {
-            ttsEngine.speaking.first { !it }   // wait out the spoken answer (immediate if TTS off)
+            // A broken/cold TTS engine must never pin the previous "Ты/Агент" block forever.
+            withTimeoutOrNull(DIALOG_TTS_WAIT_TIMEOUT_MS) {
+                ttsEngine.speaking.first { !it }
+            }
             delay(readingDwellMs(text, spoken))
             clearDialogHook()
         }
@@ -668,16 +677,22 @@ class VoiceController @Inject constructor(
     ): com.bydmate.app.data.automation.DispatchResult? {
         val requests = VoiceWindowPositionRouter.resolve(command) ?: return null
         val controller = apertureController ?: return null
-        for (request in requests) {
-            val result = controller.positionWindow(request.action, request.target, speed)
-            if (result.isFailure) {
-                return com.bydmate.app.data.automation.DispatchResult(
-                    false,
-                    result.exceptionOrNull()?.message ?: "window_position_failed",
-                )
-            }
+        val results = coroutineScope {
+            requests.map { request ->
+                async {
+                    controller.positionWindow(request.action, request.target, speed)
+                }
+            }.awaitAll()
         }
-        return com.bydmate.app.data.automation.DispatchResult(true)
+        val failed = results.firstOrNull { it.isFailure }
+        return if (failed == null) {
+            com.bydmate.app.data.automation.DispatchResult(true)
+        } else {
+            com.bydmate.app.data.automation.DispatchResult(
+                false,
+                failed.exceptionOrNull()?.message ?: "window_position_failed",
+            )
+        }
     }
 
     /** Relative temperature: read the live AC setpoint, step +-1, clamp 16..30,
@@ -910,6 +925,7 @@ class VoiceController @Inject constructor(
         // Wave D2: dwell before the orb dialog block ("Ты: …"/"Агент: …") is cleared, measured from
         // when the spoken answer finishes (or from when it is shown, if TTS is off).
         private const val DIALOG_CLEAR_MS = 6_000L
+        private const val DIALOG_TTS_WAIT_TIMEOUT_MS = 12_000L
 
         // Reading dwell for an answer nobody spoke aloud: rough Russian reading speed, ~1000
         // characters per minute, with a hard cap so the block never squats on the screen.
@@ -920,7 +936,7 @@ class VoiceController @Inject constructor(
         // transitions to false (see the speakingWatcher in startContinuousSession()).
         private const val TTS_MUTE_GRACE_MS = 500L
         private const val TURN_TTS_START_GRACE_MS = 1_500L
-        private const val TURN_TTS_DRAIN_TIMEOUT_MS = 60_000L
+        private const val TURN_TTS_DRAIN_TIMEOUT_MS = 12_000L
 
         /** Pure so it is unit-testable without a real clock/session: whether capture should
          *  currently be muted -- either TTS is actively speaking right now, or we're still

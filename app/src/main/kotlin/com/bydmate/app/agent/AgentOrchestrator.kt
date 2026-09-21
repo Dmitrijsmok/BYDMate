@@ -197,6 +197,8 @@ class AgentOrchestrator @Inject constructor(
     ): AgentResult {
         val outcomes = mutableListOf<AgentToolOutcome>()
         val callCounts = mutableMapOf<String, Int>()
+        var lastToolName: String? = null
+        var lastToolResult: String? = null
         var loopStrikes = 0
         repeat(MAX_ITERATIONS) {
             // Fresh chunker per LLM turn: a tool round's unterminated tail is discarded when
@@ -217,8 +219,11 @@ class AgentOrchestrator @Inject constructor(
                 }
             tracer.reply(reply)
             if (reply.toolCalls.isEmpty()) {
-                val answer = finalAnswer(reply)
-                if (answer.isEmpty()) return AgentResult.Error("Пустой ответ модели")
+                var answer = finalAnswer(reply)
+                if (answer.isEmpty()) {
+                    answer = successfulToolFallback(lastToolName, lastToolResult, outcomes)
+                        ?: return AgentResult.Error("Пустой ответ модели")
+                }
                 if (onSentence != null) chunker?.flush()?.let(onSentence)
                 messages += AgentMessage.Assistant(answer)
                 onTerminal()
@@ -256,11 +261,35 @@ class AgentOrchestrator @Inject constructor(
                 val ok = runCatching { !JSONObject(res).has("error") }.getOrDefault(true)
                 tracer.tool(call, if (ok) "ok" else "error", nowMs() - toolStart, res)
                 outcomes += AgentToolOutcome(call.name, ok)
+                lastToolName = call.name
+                lastToolResult = res
                 messages += AgentMessage.Tool(call.id, res)
             }
         }
         onTerminal()
         return AgentResult.Error("Слишком длинная цепочка инструментов")
+    }
+
+    /** Provider occasionally returns an empty terminal message after a tool already succeeded.
+     *  Never turn a real side effect (settings opened, vehicle command executed) into a false
+     *  failure signal. Read-only vehicle state gets a small deterministic fallback too. */
+    private fun successfulToolFallback(
+        toolName: String?,
+        toolResult: String?,
+        outcomes: List<AgentToolOutcome>,
+    ): String? {
+        if (toolName == null || outcomes.isEmpty() || outcomes.any { !it.ok }) return null
+        if (toolName == "get_vehicle_state") {
+            val json = runCatching { JSONObject(toolResult.orEmpty()) }.getOrNull() ?: return null
+            val soc = json.optInt("soc_percent", -1).takeIf { it in 0..100 }
+            val range = json.optInt("range_km", -1).takeIf { it >= 0 }
+            return when {
+                soc != null && range != null -> "Заряд $soc%, запас примерно $range км."
+                soc != null -> "Заряд $soc%."
+                else -> null
+            }
+        }
+        return if (toolName in MUTATING_TOOLS) "Готово." else null
     }
 
     /** Shared by [ask] and [noteAction] (both run under [mutex]) so they can't drift: a history
@@ -300,6 +329,12 @@ class AgentOrchestrator @Inject constructor(
         private const val MAX_HISTORY = 20
         private const val MAX_IDENTICAL_CALLS = 2
         private const val MAX_LOOP_STRIKES = 2
+        private val MUTATING_TOOLS = setOf(
+            "vehicle_control", "media_volume", "run_automation", "add_charge",
+            "create_place", "navigate_to", "go_home", "play_music", "youtube",
+            "launch_app", "open_settings", "set_cluster_projection", "set_sentry",
+            "set_hotspot", "split_screen", "set_automation_enabled", "create_automation",
+        )
 
         /** Provider stop reason meaning the answer hit max_tokens, plus the mark that makes
          *  such a cut visible in the pill and in the journal. */
