@@ -71,14 +71,19 @@ internal class YandexAliceLauncher(
         }
 
         if (pending && packageName == YANDEX_PACKAGE) advance()
-        if (
-            listening &&
-            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            packageName.isNotBlank() &&
-            packageName != YANDEX_PACKAGE
-        ) {
+        if (leftYandexWhileListening(event, packageName)) {
             scheduleFinishIfStillOutside()
         }
+    }
+
+    private fun leftYandexWhileListening(
+        event: AccessibilityEvent,
+        packageName: String,
+    ): Boolean {
+        if (!listening) return false
+        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return false
+        if (packageName.isBlank()) return false
+        return packageName != YANDEX_PACKAGE
     }
 
     fun destroy() {
