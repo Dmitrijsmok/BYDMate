@@ -1608,4 +1608,10 @@
     <string name="settings_alice_endpoint">Endpoint URL</string>
     <string name="settings_alice_api_key">API Key</string>
     <string name="settings_alice_autosave_hint">Endpoint і ключ захоўваюцца аўтаматычна</string>
+
+    <string name="settings_voice_app_matches_title">Праграмы галасавых каманд</string>
+    <string name="settings_voice_app_matches_desc">Паказвае, якую ўсталяваную праграму BYDMate знайшоў для кожнай галасавой каманды.</string>
+    <string name="settings_voice_app_matches_button">Паказаць</string>
+    <string name="settings_voice_app_matches_dialog_title">Супадзенні праграм</string>
+    <string name="settings_voice_app_matches_not_found">Не знойдзена на гэтай прыладзе</string>
 </resources>
