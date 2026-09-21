@@ -21,6 +21,12 @@ object NluParser {
             .filter { it.isNotBlank() }
         if (rawTokens.isEmpty()) return ParseResult.Unrecognized
 
+        // Driver wording observed on-car: "проветри машину" / "включи проветривание".
+        // "Проветривание" means cracking the windows, not HVAC airflow; keep the author's
+        // existing all-window vent command and resolve it before CAR makes the generic slot
+        // combination ambiguous and sends the phrase to the LLM.
+        resolveWholeCarVent(text, lang)?.let { return it }
+
         val stems = rawTokens.map { VoiceStemmer.stem(it) }
 
         // Negation ("не открывай", "нет, не надо") is beyond slot NLU: guessing an
@@ -96,6 +102,15 @@ object NluParser {
         }
         return if (resolved.size == 1) ParseResult.Command(resolved.first())
         else ParseResult.Unrecognized
+    }
+
+    private fun resolveWholeCarVent(text: String, lang: VoiceLang): ParseResult.Command? {
+        if (lang != VoiceLang.RU) return null
+        val normalized = text.lowercase()
+        if (!normalized.contains("проветр")) return null
+        val mentionsCar = normalized.contains("машин")
+        val genericEnable = normalized.contains("включ") && !normalized.contains("окн")
+        return if (mentionsCar || genericEnable) ParseResult.Command("车窗通风") else null
     }
 
     private fun <T> matchSlots(stems: List<String>, words: Map<T, List<String>>): Set<T> {
