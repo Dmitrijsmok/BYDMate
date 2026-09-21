@@ -129,6 +129,8 @@ object VoiceLexicon {
         "двадцать" to 20, "двадцать один" to 21, "двадцать два" to 22, "двадцать три" to 23,
         "двадцать четыре" to 24, "двадцать пять" to 25, "двадцать шесть" to 26,
         "двадцать семь" to 27, "двадцать восемь" to 28, "двадцать девять" to 29, "тридцать" to 30,
+        "сорок" to 40, "пятьдесят" to 50, "шестьдесят" to 60, "семьдесят" to 70,
+        "восемьдесят" to 80, "девяносто" to 90, "сто" to 100,
     )
 
     private fun buildNumberWordsEn(): Map<String, Int> = mapOf(
@@ -140,5 +142,7 @@ object VoiceLexicon {
         "twenty" to 20, "twenty one" to 21, "twenty two" to 22, "twenty three" to 23,
         "twenty four" to 24, "twenty five" to 25, "twenty six" to 26,
         "twenty seven" to 27, "twenty eight" to 28, "twenty nine" to 29, "thirty" to 30,
+        "forty" to 40, "fifty" to 50, "sixty" to 60, "seventy" to 70,
+        "eighty" to 80, "ninety" to 90, "one hundred" to 100, "hundred" to 100,
     )
 }
