@@ -151,7 +151,8 @@ class SteeringWheelKeyService : AccessibilityService() {
         VoiceKeyDecision.TRIGGER -> {
             if (event.repeatCount == 0) {
                 if (aliceEnabled) {
-                    resetLocalVoiceDoublePress()
+                    lastLocalVoiceDownMs = 0L
+                    lastLocalVoiceKeyCode = -1
                     aliceLauncher.trigger()
                 } else {
                     triggerLocalOrAliceOnDoublePress(event)
@@ -168,7 +169,8 @@ class SteeringWheelKeyService : AccessibilityService() {
         val isDouble = event.keyCode == lastLocalVoiceKeyCode &&
             isVoiceDoublePress(lastLocalVoiceDownMs, now)
         if (isDouble) {
-            resetLocalVoiceDoublePress()
+            lastLocalVoiceDownMs = 0L
+            lastLocalVoiceKeyCode = -1
             // YandexAliceLauncher.trigger() calls stopForExternalAssistant() first, so the Local
             // AudioRecord/TTS ownership is released before Alice starts listening.
             aliceLauncher.trigger()
@@ -177,11 +179,6 @@ class SteeringWheelKeyService : AccessibilityService() {
         lastLocalVoiceDownMs = now
         lastLocalVoiceKeyCode = event.keyCode
         entryPoint().voiceController().onPttPressed()
-    }
-
-    private fun resetLocalVoiceDoublePress() {
-        lastLocalVoiceDownMs = 0L
-        lastLocalVoiceKeyCode = -1
     }
 
     private fun entryPoint(): ClusterEntryPoint =

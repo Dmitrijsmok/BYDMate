@@ -154,7 +154,6 @@ class AliceApertureController @Inject constructor(
         private const val SUNROOF_OPEN = "天窗打开100"
         private const val SUNROOF_HALF = "天窗打开50"
         private const val SUNROOF_CLOSE = "天窗打开0"
-        private const val SUNROOF_STOP = "天窗停止"
     }
 }
 
