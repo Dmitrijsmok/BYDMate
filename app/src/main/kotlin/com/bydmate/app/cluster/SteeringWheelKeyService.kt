@@ -129,30 +129,33 @@ class SteeringWheelKeyService : AccessibilityService() {
         val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)
 
         if (android.os.Build.VERSION.SDK_INT <= 29) {
-            when (diLink3VoiceDecision(event.keyCode, isDown, voiceEnabled)) {
-                VoiceKeyDecision.TRIGGER -> {
-                    if (event.repeatCount == 0) {
-                        if (aliceEnabled) aliceLauncher.trigger()
-                        else entryPoint().voiceController().onPttPressed()
-                    }
-                    return true
-                }
-                VoiceKeyDecision.CONSUME -> return true
-                VoiceKeyDecision.IGNORE -> {}
-            }
+            val diLink3Decision = diLink3VoiceDecision(event.keyCode, isDown, voiceEnabled)
+            handleVoiceDecision(diLink3Decision, event, aliceEnabled)?.let { return it }
         }
 
-        return when (voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey)) {
-            VoiceKeyDecision.TRIGGER -> {
-                if (event.repeatCount == 0) {
-                    if (aliceEnabled) aliceLauncher.trigger()
-                    else entryPoint().voiceController().onPttPressed()
-                }
-                true
-            }
-            VoiceKeyDecision.CONSUME -> true
-            VoiceKeyDecision.IGNORE -> null
+        return handleVoiceDecision(
+            voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey),
+            event,
+            aliceEnabled,
+        )
+    }
+
+    private fun handleVoiceDecision(
+        decision: VoiceKeyDecision,
+        event: KeyEvent,
+        aliceEnabled: Boolean,
+    ): Boolean? = when (decision) {
+        VoiceKeyDecision.TRIGGER -> {
+            if (event.repeatCount == 0) triggerSelectedVoiceProvider(aliceEnabled)
+            true
         }
+        VoiceKeyDecision.CONSUME -> true
+        VoiceKeyDecision.IGNORE -> null
+    }
+
+    private fun triggerSelectedVoiceProvider(aliceEnabled: Boolean) {
+        if (aliceEnabled) aliceLauncher.trigger()
+        else entryPoint().voiceController().onPttPressed()
     }
 
     private fun entryPoint(): ClusterEntryPoint =
