@@ -31,17 +31,21 @@ import kotlinx.coroutines.flow.MutableStateFlow
  */
 private enum class VoicePressRoute { NONE, LOCAL, ALICE }
 
+private data class VoicePressMemory(
+    val keyCode: Int,
+    val downMs: Long,
+)
+
 private fun voicePressRoute(
     repeatCount: Int,
     aliceEnabled: Boolean,
     keyCode: Int,
-    lastLocalKeyCode: Int,
-    lastLocalDownMs: Long,
+    previous: VoicePressMemory,
     nowMs: Long,
 ): VoicePressRoute = when {
     repeatCount != 0 -> VoicePressRoute.NONE
     aliceEnabled -> VoicePressRoute.ALICE
-    keyCode == lastLocalKeyCode && isVoiceDoublePress(lastLocalDownMs, nowMs) ->
+    keyCode == previous.keyCode && isVoiceDoublePress(previous.downMs, nowMs) ->
         VoicePressRoute.ALICE
     else -> VoicePressRoute.LOCAL
 }
@@ -172,8 +176,7 @@ class SteeringWheelKeyService : AccessibilityService() {
                     repeatCount = event.repeatCount,
                     aliceEnabled = aliceEnabled,
                     keyCode = event.keyCode,
-                    lastLocalKeyCode = lastLocalVoiceKeyCode,
-                    lastLocalDownMs = lastLocalVoiceDownMs,
+                    previous = VoicePressMemory(lastLocalVoiceKeyCode, lastLocalVoiceDownMs),
                     nowMs = now,
                 )
             ) {
