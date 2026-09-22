@@ -70,9 +70,13 @@ class NativeParsReader @Inject constructor(
                         // Shadow snapshot: compared, never returned — so it must not update
                         // any state a returned snapshot depends on (see stickyDriveMode).
                         assembleSnapshot(
-                            decodeBatch(batchRaw, table),
+                            withInsideTempFallback(
+                                decodeBatch(batchRaw, table),
+                                batchRaw.getOrNull(insideTempIndex)?.let { (status, word) ->
+                                    if (status == 0) word else null
+                                },
+                            ),
                             windowRrRawFromBatch(batchRaw),
-                            insideTempRawFromBatch(batchRaw),
                             rememberSticky = false,
                         ),
                     )
@@ -84,22 +88,17 @@ class NativeParsReader @Inject constructor(
 
     private suspend fun fetchViaBatch(table: ResolvedFidTable): DiParsData? {
         val pairs = helperClient.readBatch(batchItems(table)) ?: return null
+        val insideTempRaw = pairs.getOrNull(insideTempIndex)
+            ?.let { (status, word) -> if (status == 0) word else null }
         return assembleSnapshot(
-            decodeBatch(pairs, table),
+            withInsideTempFallback(decodeBatch(pairs, table), insideTempRaw),
             windowRrRawFromBatch(pairs),
-            insideTempRawFromBatch(pairs),
         )
     }
 
-    /** Raw pre-decode primary value when the read itself succeeded, else null. */
-    private fun rawFromBatch(pairs: List<Pair<Int, Int>>, index: Int): Int? =
-        pairs.getOrNull(index)?.let { (status, word) -> if (status == 0) word else null }
-
+    /** Raw pre-decode windowRR value when the read itself succeeded, else null. */
     private fun windowRrRawFromBatch(pairs: List<Pair<Int, Int>>): Int? =
-        rawFromBatch(pairs, windowRrIndex)
-
-    private fun insideTempRawFromBatch(pairs: List<Pair<Int, Int>>): Int? =
-        rawFromBatch(pairs, insideTempIndex)
+        pairs.getOrNull(windowRrIndex)?.let { (status, word) -> if (status == 0) word else null }
 
     /**
      * Decodes raw (status, value) pairs with the EXACT pipeline the ADB path uses:
@@ -200,7 +199,7 @@ class NativeParsReader @Inject constructor(
             decoded[entry.field] = value
         }
 
-        return assembleSnapshot(decoded, windowRrRaw, insideTempRaw)
+        return assembleSnapshot(withInsideTempFallback(decoded, insideTempRaw), windowRrRaw)
     }
 
     // Range rejects (INT_TEMP_C / INT_PERCENT) used to vanish silently: a car answering a
@@ -237,7 +236,6 @@ class NativeParsReader @Inject constructor(
     private suspend fun assembleSnapshot(
         decoded: Map<String, Any?>,
         windowRrPrimaryRaw: Int?,
-        insideTempPrimaryRaw: Int?,
         rememberSticky: Boolean = true,
     ): DiParsData? {
         // What the poll read this tick, for the `poll≠push` dump comparison. Shadow snapshots
@@ -335,11 +333,7 @@ class NativeParsReader @Inject constructor(
             exteriorTemp        = field<Int>("exteriorTemp"),
             gear                = field<Int>("gear"),
             powerState          = field<Int>("powerState"),
-            insideTemp          = field<Int>("insideTemp")
-                ?: field<Int>("insideTempAlt")?.takeIf {
-                    insideTempPrimaryRaw == FEATURE_LINK_ERROR ||
-                        insideTempPrimaryRaw == SentinelDecoder.WRONG_DIRECTION
-                },
+            insideTemp          = field<Int>("insideTemp"),
             acStatus            = field<Int>("acStatus"),
             acTemp              = field<Int>("acTemp"),
             fanLevel            = field<Int>("fanLevel"),
@@ -451,6 +445,21 @@ class NativeParsReader @Inject constructor(
         val windowRrIndex: Int = FidMap.entries.indexOf(windowRrEntry)
         val insideTempEntry: FidEntry = FidMap.entries.first { it.field == "insideTemp" }
         val insideTempIndex: Int = FidMap.entries.indexOf(insideTempEntry)
+    }
+}
+
+
+private fun withInsideTempFallback(
+    decoded: Map<String, Any?>,
+    primaryRaw: Int?,
+): Map<String, Any?> {
+    if (decoded["insideTemp"] != null) return decoded
+    val mayFallback = primaryRaw == SentinelDecoder.FEATURE_LINK_ERROR ||
+        primaryRaw == SentinelDecoder.WRONG_DIRECTION
+    return if (mayFallback && decoded["insideTempAlt"] != null) {
+        decoded + ("insideTemp" to decoded["insideTempAlt"])
+    } else {
+        decoded
     }
 }
 

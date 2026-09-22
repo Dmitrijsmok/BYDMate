@@ -84,7 +84,12 @@ internal class YandexAliceLauncher(
 
         if (pending && isAliceContextPackage(packageName)) advance()
         if (leftYandexWhileListening(listening, event, packageName)) {
-            scheduleFinishIfStillOutside()
+            handler.postDelayed({
+                val active = runCatching {
+                    service.rootInActiveWindow?.packageName?.toString()
+                }.getOrNull()
+                if (listening && !isAliceContextPackage(active.orEmpty())) finish()
+            }, EXIT_GRACE_MS)
         }
     }
 
@@ -117,12 +122,6 @@ internal class YandexAliceLauncher(
             packageName == BYD_VOICE_PACKAGE &&
             event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
 
-    private fun scheduleFinishIfStillOutside() {
-        handler.postDelayed({
-            val active = runCatching { service.rootInActiveWindow?.packageName?.toString() }.getOrNull()
-            if (listening && !isAliceContextPackage(active.orEmpty())) finish()
-        }, EXIT_GRACE_MS)
-    }
 
     private fun resetAttempt() {
         handler.removeCallbacksAndMessages(null)
