@@ -69,8 +69,10 @@ internal object LocalVehicleQuery {
     private fun looksLikeRead(q: String): Boolean =
         q == "заряд" || READ_PREFIXES.any(q::startsWith) || "уровень заряда" in q
 
-    private val OUTSIDE_MARKERS = listOf("на улице", "снаруж", "за борт")
-    private val INSIDE_MARKERS = listOf("в салон", "внутри салон", "внутри машин")
+    private val OUTSIDE_MARKERS = listOf("на улице", "на улиц", "снаруж", "за борт")
+    private val INSIDE_MARKERS = listOf(
+        "в салон", "внутри салон", "внутри машин", "в машине", "в машин", "в автомоб",
+    )
     private val CLIMATE_MARKERS = listOf("климат", "кондиционер")
     private val READ_PREFIXES = listOf(
         "заряд ",

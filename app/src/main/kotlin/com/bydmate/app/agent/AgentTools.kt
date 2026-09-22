@@ -2631,6 +2631,11 @@ class AgentTools @Inject constructor(
         // Yandex Maps ships under several package names; reuse the navigation list so the
         // alias never drifts from the guidance-source set.
         private val YANDEX_MAPS_PACKAGES = NavPackages.YANDEX_MAPS.toList()
+        private val TIKTOK_PACKAGES = listOf(
+            "com.zhiliaoapp.musically",
+            "com.ss.android.ugc.trill",
+            "com.zhiliaoapp.musically.go",
+        )
 
         // RU aliases for stock DiLink apps whose launcher labels are Chinese/English and thus
         // unreachable by label match. Values are candidate packages in priority order; an alias
@@ -2639,6 +2644,10 @@ class AgentTools @Inject constructor(
         private val APP_ALIAS_LABELS: Map<String, String> = mapOf(
             "ютуб" to "youtube",
             "youtube" to "youtube",
+            "тик ток" to "tiktok",
+            "тикток" to "tiktok",
+            "тик-ток" to "tiktok",
+            "tiktok" to "tiktok",
             "браузер" to "chrome",
             "хром" to "chrome",
             "яндекс музыка" to "яндекс музыка",
@@ -2682,6 +2691,10 @@ class AgentTools @Inject constructor(
             ),
             "rvx" to listOf("app.rvx.android.youtube", "anddea.youtube"),
             "revanced" to listOf("app.revanced.android.youtube", "anddea.youtube"),
+            "тик ток" to TIKTOK_PACKAGES,
+            "тикток" to TIKTOK_PACKAGES,
+            "тик-ток" to TIKTOK_PACKAGES,
+            "tiktok" to TIKTOK_PACKAGES,
             "настройки машины" to listOf("com.byd.carsettings"),
             "настройки автомобиля" to listOf("com.byd.carsettings"),
             "файлы" to listOf("com.byd.filemanager"),

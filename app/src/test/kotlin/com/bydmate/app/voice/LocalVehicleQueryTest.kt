@@ -21,6 +21,20 @@ class LocalVehicleQueryTest {
         )
     }
 
+    @Test fun outside_temperature_asr_truncation_stays_local() {
+        assertEquals(
+            LocalVehicleQuery.Reply("outside_temp", "Снаружи 16 градусов."),
+            LocalVehicleQuery.answer("температура на улиц", VoiceLang.RU, diParsData(exteriorTemp = 16)),
+        )
+    }
+
+    @Test fun temperature_in_car_phrase_is_cabin_query() {
+        assertEquals(
+            LocalVehicleQuery.Reply("inside_temp", "В салоне 24 градусов."),
+            LocalVehicleQuery.answer("температура в машине", VoiceLang.RU, diParsData(insideTemp = 24)),
+        )
+    }
+
     @Test fun cabin_temperature_never_falls_back_to_climate_setpoint() {
         val data = diParsData(insideTemp = null, acTemp = 22)
         assertEquals(

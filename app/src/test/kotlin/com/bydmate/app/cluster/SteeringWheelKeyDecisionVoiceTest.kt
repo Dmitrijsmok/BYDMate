@@ -56,4 +56,36 @@ class SteeringWheelKeyDecisionVoiceTest {
         assertFalse(isVoiceDoublePress(previousDownMs = 0L, nowMs = 100L))
     }
 
+    @Test fun yandex_context_routes_single_press_to_alice() {
+        assertEquals(
+            VoicePressRoute.ALICE,
+            voicePressRoute(
+                repeatCount = 0,
+                aliceContextActive = true,
+                keyCode = 304,
+                previous = VoicePressMemory(-1, 0L),
+                nowMs = 10_000L,
+            ),
+        )
+    }
+
+    @Test fun outside_yandex_context_first_press_routes_to_local() {
+        assertEquals(
+            VoicePressRoute.LOCAL,
+            voicePressRoute(
+                repeatCount = 0,
+                aliceContextActive = false,
+                keyCode = 304,
+                previous = VoicePressMemory(-1, 0L),
+                nowMs = 10_000L,
+            ),
+        )
+    }
+
+    @Test fun yandex_browser_and_navigator_are_alice_contexts() {
+        assertTrue(isAliceContextPackage("com.yandex.browser"))
+        assertTrue(isAliceContextPackage("ru.yandex.yandexnavi"))
+        assertFalse(isAliceContextPackage("com.bydmate.app"))
+    }
+
 }

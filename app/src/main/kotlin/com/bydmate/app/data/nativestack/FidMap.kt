@@ -63,6 +63,9 @@ object FidMap {
         FidEntry("fanLevel",             1000, 1077936156,   5, Decoder.INT_RAW, symbol = "Ac.AC_WIND_LEVEL"),
         FidEntry("acCirc",               1000, 1077936148,   5, Decoder.INT_ENUM, symbol = "Ac.AC_CYCLE_MODE"),
         FidEntry("insideTemp",           1000, 1031798832,   5, Decoder.INT_TEMP_C, symbol = "Ac.AC_TEMP_INSIDE"),
+        // Older BYD SDK/Song Plus catalog carries the same AC_TEMP_INSIDE symbol at 1320181776.
+        // Use it only when the primary channel explicitly reports FEATURE_LINK_ERROR (-10011).
+        FidEntry("insideTempAlt",        1000, 1320181776,   5, Decoder.INT_TEMP_C, symbol = "Ac.AC_TEMP_INSIDE"),
         FidEntry("exteriorTemp",         1000, 1077936184,   5, Decoder.INT_TEMP_C, symbol = "Ac.AC_TEMP_OUT"),
         // Body
         FidEntry("hood",                 1001, 692060188,    5, Decoder.INT_ENUM, symbol = "Bodywork.BODYWORK_HOOD"),

@@ -7,6 +7,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.bydmate.app.navdata.NavPackages
 import com.bydmate.app.voice.VoiceController
 import java.util.ArrayDeque
 import java.util.Locale
@@ -24,6 +25,17 @@ internal class YandexAliceLauncher(
     private var lastTrigger = 0L
     private var listening = false
     private var suppressNativeUntil = 0L
+
+    fun ownsMicButton(): Boolean {
+        if (pending || listening) return true
+        val active = runCatching { service.rootInActiveWindow?.packageName?.toString() }.getOrNull()
+        if (isAliceContextPackage(active.orEmpty())) return true
+        return runCatching {
+            service.windows.any { window ->
+                isAliceContextPackage(window.root?.packageName?.toString().orEmpty())
+            }
+        }.getOrDefault(false)
+    }
 
     fun trigger() {
         val now = SystemClock.elapsedRealtime()
@@ -70,7 +82,7 @@ internal class YandexAliceLauncher(
             return
         }
 
-        if (pending && packageName == YANDEX_PACKAGE) advance()
+        if (pending && isAliceContextPackage(packageName)) advance()
         if (leftYandexWhileListening(listening, event, packageName)) {
             scheduleFinishIfStillOutside()
         }
@@ -108,7 +120,7 @@ internal class YandexAliceLauncher(
     private fun scheduleFinishIfStillOutside() {
         handler.postDelayed({
             val active = runCatching { service.rootInActiveWindow?.packageName?.toString() }.getOrNull()
-            if (listening && active != YANDEX_PACKAGE) finish()
+            if (listening && !isAliceContextPackage(active.orEmpty())) finish()
         }, EXIT_GRACE_MS)
     }
 
@@ -276,10 +288,13 @@ private fun addYandexRoot(
     roots: MutableList<AccessibilityNodeInfo>,
     root: AccessibilityNodeInfo?,
 ) {
-    if (root?.packageName?.toString() == YANDEX_PACKAGE) roots += root
+    if (isAliceContextPackage(root?.packageName?.toString().orEmpty())) roots += root
 }
 
 private const val YANDEX_PACKAGE = "com.yandex.browser"
+
+internal fun isAliceContextPackage(packageName: String): Boolean =
+    packageName == YANDEX_PACKAGE || packageName in NavPackages.YANDEX_NAVI
 private const val BYD_VOICE_PACKAGE = "com.byd.vrassistant"
 private const val EXACT_VIEW_ID = "com.yandex.browser:id/alice_input_quarknyx"
 private const val COLD_ID_FAMILY = "bro_omnibox_button_microphone"
@@ -303,7 +318,7 @@ private fun leftYandexWhileListening(
     if (!listening) return false
     if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return false
     if (packageName.isBlank()) return false
-    return packageName != YANDEX_PACKAGE
+    return !isAliceContextPackage(packageName)
 }
 
 

@@ -1917,22 +1917,34 @@ class SettingsViewModel @Inject constructor(
             // channel from a decoder mismatch. Read this one fid raw for field diagnostics.
             appendLine("--- cabin temperature probe ---")
             try {
-                val address = com.bydmate.app.data.nativestack.FidAddresses.of("insideTemp")
+                val primary = com.bydmate.app.data.nativestack.FidAddresses.of("insideTemp")
+                val alternate = com.bydmate.app.data.nativestack.FidAddresses.of("insideTempAlt")
                 val raw = helperClient.readBatch(
-                    listOf(com.bydmate.app.data.vehicle.BatchReadItem(5, address.device, address.fid))
-                )?.firstOrNull()
+                    listOf(
+                        com.bydmate.app.data.vehicle.BatchReadItem(5, primary.device, primary.fid),
+                        com.bydmate.app.data.vehicle.BatchReadItem(5, alternate.device, alternate.fid),
+                    )
+                )
                 val catalogFid = fidCatalogManager.catalog?.fidOf("Ac.AC_TEMP_INSIDE")
-                if (raw == null) {
-                    appendLine(
-                        "insideTemp dev=${address.device} fid=${address.fid} status=unavailable " +
-                            "catalog_fid=${catalogFid ?: "-"} decoded=${live?.insideTemp}"
-                    )
-                } else {
-                    appendLine(
-                        "insideTemp dev=${address.device} fid=${address.fid} status=${raw.first} " +
-                            "raw=${raw.second} catalog_fid=${catalogFid ?: "-"} decoded=${live?.insideTemp}"
-                    )
+                fun renderProbe(
+                    label: String,
+                    address: com.bydmate.app.data.nativestack.FidAddress,
+                    sample: Pair<Int, Int>?,
+                ) {
+                    if (sample == null) {
+                        appendLine(
+                            "$label dev=${address.device} fid=${address.fid} status=unavailable " +
+                                "catalog_fid=${catalogFid ?: "-"} decoded=${live?.insideTemp}"
+                        )
+                    } else {
+                        appendLine(
+                            "$label dev=${address.device} fid=${address.fid} status=${sample.first} " +
+                                "raw=${sample.second} catalog_fid=${catalogFid ?: "-"} decoded=${live?.insideTemp}"
+                        )
+                    }
                 }
+                renderProbe("insideTemp", primary, raw?.getOrNull(0))
+                renderProbe("insideTempAlt", alternate, raw?.getOrNull(1))
             } catch (e: Exception) {
                 appendLine("error: ${e.message}")
             }

@@ -29,22 +29,22 @@ import kotlinx.coroutines.flow.MutableStateFlow
  * no Accessibility UI on DiLink) AND the settings switch is on, so it does nothing for users who
  * never opt in.
  */
-private enum class VoicePressRoute { NONE, LOCAL, ALICE }
+internal enum class VoicePressRoute { NONE, LOCAL, ALICE }
 
-private data class VoicePressMemory(
+internal data class VoicePressMemory(
     val keyCode: Int,
     val downMs: Long,
 )
 
-private fun voicePressRoute(
+internal fun voicePressRoute(
     repeatCount: Int,
-    aliceEnabled: Boolean,
+    aliceContextActive: Boolean,
     keyCode: Int,
     previous: VoicePressMemory,
     nowMs: Long,
 ): VoicePressRoute = when {
     repeatCount != 0 -> VoicePressRoute.NONE
-    aliceEnabled -> VoicePressRoute.ALICE
+    aliceContextActive -> VoicePressRoute.ALICE
     keyCode == previous.keyCode && isVoiceDoublePress(previous.downMs, nowMs) ->
         VoicePressRoute.ALICE
     else -> VoicePressRoute.LOCAL
@@ -149,32 +149,29 @@ class SteeringWheelKeyService : AccessibilityService() {
     private fun handleVoiceKey(event: KeyEvent, isDown: Boolean): Boolean? {
         val voicePrefs = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
         val voiceEnabled = voicePrefs.getBoolean("voice_enabled", false)
-        val aliceEnabled = voicePrefs.getBoolean("alice_enabled", false)
         val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)
 
         if (android.os.Build.VERSION.SDK_INT <= 29) {
             val diLink3Decision = diLink3VoiceDecision(event.keyCode, isDown, voiceEnabled)
-            handleVoiceDecision(diLink3Decision, event, aliceEnabled)?.let { return it }
+            handleVoiceDecision(diLink3Decision, event)?.let { return it }
         }
 
         return handleVoiceDecision(
             voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey),
             event,
-            aliceEnabled,
         )
     }
 
     private fun handleVoiceDecision(
         decision: VoiceKeyDecision,
         event: KeyEvent,
-        aliceEnabled: Boolean,
     ): Boolean? = when (decision) {
         VoiceKeyDecision.TRIGGER -> {
             val now = SystemClock.elapsedRealtime()
             when (
                 voicePressRoute(
                     repeatCount = event.repeatCount,
-                    aliceEnabled = aliceEnabled,
+                    aliceContextActive = aliceLauncher.ownsMicButton(),
                     keyCode = event.keyCode,
                     previous = VoicePressMemory(lastLocalVoiceKeyCode, lastLocalVoiceDownMs),
                     nowMs = now,

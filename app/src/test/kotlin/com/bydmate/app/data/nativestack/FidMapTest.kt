@@ -184,6 +184,7 @@ class FidMapTest {
             "chargingCapacity", "bmsState",
             "turnSignal", "gear", "bsdLeft", "bsdRight",
             "windowFL", "windowFR", "windowRL", "windowRR", "windowRRGen3",
+            "insideTemp", "insideTempAlt",
         ) + com.bydmate.app.ui.settings.SeatsDiagnostics.FIDS.map { it.field }
         val missing = asked.filterNot { it in FidMap.byField }
         assertTrue("FidMap has no entry for $missing", missing.isEmpty())

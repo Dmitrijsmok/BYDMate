@@ -72,6 +72,7 @@ class NativeParsReader @Inject constructor(
                         assembleSnapshot(
                             decodeBatch(batchRaw, table),
                             windowRrRawFromBatch(batchRaw),
+                            insideTempRawFromBatch(batchRaw),
                             rememberSticky = false,
                         ),
                     )
@@ -83,12 +84,22 @@ class NativeParsReader @Inject constructor(
 
     private suspend fun fetchViaBatch(table: ResolvedFidTable): DiParsData? {
         val pairs = helperClient.readBatch(batchItems(table)) ?: return null
-        return assembleSnapshot(decodeBatch(pairs, table), windowRrRawFromBatch(pairs))
+        return assembleSnapshot(
+            decodeBatch(pairs, table),
+            windowRrRawFromBatch(pairs),
+            insideTempRawFromBatch(pairs),
+        )
     }
 
-    /** Raw pre-decode windowRR value when the read itself succeeded, else null. */
+    /** Raw pre-decode primary value when the read itself succeeded, else null. */
+    private fun rawFromBatch(pairs: List<Pair<Int, Int>>, index: Int): Int? =
+        pairs.getOrNull(index)?.let { (status, word) -> if (status == 0) word else null }
+
     private fun windowRrRawFromBatch(pairs: List<Pair<Int, Int>>): Int? =
-        pairs.getOrNull(windowRrIndex)?.let { (status, word) -> if (status == 0) word else null }
+        rawFromBatch(pairs, windowRrIndex)
+
+    private fun insideTempRawFromBatch(pairs: List<Pair<Int, Int>>): Int? =
+        rawFromBatch(pairs, insideTempIndex)
 
     /**
      * Decodes raw (status, value) pairs with the EXACT pipeline the ADB path uses:
@@ -162,6 +173,7 @@ class NativeParsReader @Inject constructor(
         // sample the value came from, or a window that moved between two reads would
         // decide the generation.
         var windowRrRaw: Int? = null
+        var insideTempRaw: Int? = null
 
         for (entry in FidMap.entries) {
             val address = table.address(entry.field)
@@ -169,6 +181,10 @@ class NativeParsReader @Inject constructor(
                 entry === windowRrEntry -> {
                     windowRrRaw = autoservice.getIntRaw(address.device, address.fid)
                     decodeTx5(entry, windowRrRaw?.let { SentinelDecoder.decodeInt(it) }, table)
+                }
+                entry === insideTempEntry -> {
+                    insideTempRaw = autoservice.getIntRaw(address.device, address.fid)
+                    decodeTx5(entry, insideTempRaw?.let { SentinelDecoder.decodeInt(it) }, table)
                 }
                 entry.transact == 5 -> decodeTx5(entry, autoservice.getInt(address.device, address.fid), table)
                 entry.transact == 7 -> {
@@ -184,7 +200,7 @@ class NativeParsReader @Inject constructor(
             decoded[entry.field] = value
         }
 
-        return assembleSnapshot(decoded, windowRrRaw)
+        return assembleSnapshot(decoded, windowRrRaw, insideTempRaw)
     }
 
     // Range rejects (INT_TEMP_C / INT_PERCENT) used to vanish silently: a car answering a
@@ -221,6 +237,7 @@ class NativeParsReader @Inject constructor(
     private suspend fun assembleSnapshot(
         decoded: Map<String, Any?>,
         windowRrPrimaryRaw: Int?,
+        insideTempPrimaryRaw: Int?,
         rememberSticky: Boolean = true,
     ): DiParsData? {
         // What the poll read this tick, for the `poll≠push` dump comparison. Shadow snapshots
@@ -318,7 +335,8 @@ class NativeParsReader @Inject constructor(
             exteriorTemp        = field<Int>("exteriorTemp"),
             gear                = field<Int>("gear"),
             powerState          = field<Int>("powerState"),
-            insideTemp          = field<Int>("insideTemp"),
+            insideTemp          = field<Int>("insideTemp")
+                ?: field<Int>("insideTempAlt")?.takeIf { insideTempPrimaryRaw == FEATURE_LINK_ERROR },
             acStatus            = field<Int>("acStatus"),
             acTemp              = field<Int>("acTemp"),
             fanLevel            = field<Int>("fanLevel"),
@@ -428,6 +446,8 @@ class NativeParsReader @Inject constructor(
 
         val windowRrEntry: FidEntry = FidMap.entries.first { it.field == "windowRR" }
         val windowRrIndex: Int = FidMap.entries.indexOf(windowRrEntry)
+        val insideTempEntry: FidEntry = FidMap.entries.first { it.field == "insideTemp" }
+        val insideTempIndex: Int = FidMap.entries.indexOf(insideTempEntry)
     }
 }
 
