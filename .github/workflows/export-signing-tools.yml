@@ -1,0 +1,32 @@
+name: Export Android signing tools
+
+on:
+  push:
+    branches:
+      - build/64020-alice-stable
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Package apksigner and zipalign
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOOLS_DIR="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          mkdir -p signing-tools/lib
+          cp "$TOOLS_DIR/apksigner" signing-tools/
+          cp "$TOOLS_DIR/zipalign" signing-tools/
+          cp "$TOOLS_DIR/lib/apksigner.jar" signing-tools/lib/
+          chmod +x signing-tools/apksigner signing-tools/zipalign
+          "$TOOLS_DIR/apksigner" version
+          "$TOOLS_DIR/zipalign" -h >/dev/null 2>&1 || true
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-signing-tools-linux
+          path: signing-tools/
+          if-no-files-found: error
+          retention-days: 1
