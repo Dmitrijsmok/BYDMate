@@ -43,17 +43,13 @@ internal object LocalVehicleQuery {
     }
 
     private fun isOutsideTemperature(q: String): Boolean =
-        mentionsTemperature(q) && (
-            "на улице" in q || "снаруж" in q || "за борт" in q
-        )
+        mentionsTemperature(q) && OUTSIDE_MARKERS.any(q::contains)
 
     private fun isInsideTemperature(q: String): Boolean =
-        mentionsTemperature(q) && (
-            "в салон" in q || "внутри салон" in q || "внутри машин" in q
-        )
+        mentionsTemperature(q) && INSIDE_MARKERS.any(q::contains)
 
     private fun isClimateSetpoint(q: String): Boolean =
-        mentionsTemperature(q) && ("климат" in q || "кондиционер" in q) && looksLikeRead(q)
+        mentionsTemperature(q) && CLIMATE_MARKERS.any(q::contains) && looksLikeRead(q)
 
     private fun isBatteryCharge(q: String): Boolean {
         val mentionsCharge = "заряд" in q || ("батаре" in q && "процент" in q)
@@ -64,13 +60,18 @@ internal object LocalVehicleQuery {
         "температур" in q || "градус" in q
 
     private fun looksLikeRead(q: String): Boolean =
-        q == "заряд" ||
-            q.startsWith("заряд ") ||
-            q.startsWith("температура") ||
-            q.startsWith("сколько") ||
-            q.startsWith("какой") ||
-            q.startsWith("какая") ||
-            q.startsWith("покажи") ||
-            q.startsWith("скажи") ||
-            "уровень заряда" in q
+        q == "заряд" || READ_PREFIXES.any(q::startsWith) || "уровень заряда" in q
+
+    private val OUTSIDE_MARKERS = listOf("на улице", "снаруж", "за борт")
+    private val INSIDE_MARKERS = listOf("в салон", "внутри салон", "внутри машин")
+    private val CLIMATE_MARKERS = listOf("климат", "кондиционер")
+    private val READ_PREFIXES = listOf(
+        "заряд ",
+        "температура",
+        "сколько",
+        "какой",
+        "какая",
+        "покажи",
+        "скажи",
+    )
 }
