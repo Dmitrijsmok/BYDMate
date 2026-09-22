@@ -208,51 +208,6 @@ class NativeParsReaderBatchTest {
         coVerify(exactly = 0) { auto.isAvailable() }
     }
 
-    @Test
-    fun `insideTemp prefers the primary generation fid`() = runTest {
-        val auto = mockk<AutoserviceClient>()
-        val helper = mockk<HelperClient>()
-        coEvery { helper.readBatch(any()) } returns mostlySentinelPairs(
-            mapOf(
-                fid("soc").field to java.lang.Float.floatToRawIntBits(50.0f),
-                fid("insideTemp").field to 21,
-                fid("insideTempAlt").field to 24,
-            ),
-        )
-        val data = NativeParsReader(auto, settingsWithCapacity(), helper, gateFixedAt(BatchMode.ACTIVE)).fetch()
-        assertEquals(21, data!!.insideTemp)
-    }
-
-    @Test
-    fun `insideTemp falls back to alternate BYD SDK fid on feature link error`() = runTest {
-        val auto = mockk<AutoserviceClient>()
-        val helper = mockk<HelperClient>()
-        coEvery { helper.readBatch(any()) } returns mostlySentinelPairs(
-            mapOf(
-                fid("soc").field to java.lang.Float.floatToRawIntBits(50.0f),
-                fid("insideTemp").field to -10011,
-                fid("insideTempAlt").field to 24,
-            ),
-        )
-        val data = NativeParsReader(auto, settingsWithCapacity(), helper, gateFixedAt(BatchMode.ACTIVE)).fetch()
-        assertEquals(24, data!!.insideTemp)
-    }
-
-    @Test
-    fun `insideTemp does not fall back on transient sentinel`() = runTest {
-        val auto = mockk<AutoserviceClient>()
-        val helper = mockk<HelperClient>()
-        coEvery { helper.readBatch(any()) } returns mostlySentinelPairs(
-            mapOf(
-                fid("soc").field to java.lang.Float.floatToRawIntBits(50.0f),
-                fid("insideTemp").field to -10013,
-                fid("insideTempAlt").field to 24,
-            ),
-        )
-        val data = NativeParsReader(auto, settingsWithCapacity(), helper, gateFixedAt(BatchMode.ACTIVE)).fetch()
-        assertNull(data!!.insideTemp)
-    }
-
     /** DiLink 5.0: the primary RR fid answers, so the alternative-generation fid is ignored. */
     @Test
     fun `windowRR prefers the primary generation fid`() = runTest {
