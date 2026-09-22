@@ -20,12 +20,14 @@ jobs:
           mkdir -p signing-tools/lib
           cp "$TOOLS_DIR/apksigner" signing-tools/
           cp "$TOOLS_DIR/zipalign" signing-tools/
+          cp "$TOOLS_DIR/aapt" signing-tools/
+          cp "$TOOLS_DIR/aapt2" signing-tools/
           cp "$TOOLS_DIR/lib/apksigner.jar" signing-tools/lib/
           mkdir -p signing-tools/lib64
           LIBCPP="$(find "$ANDROID_HOME" -type f -name libc++.so -print -quit)"
           test -n "$LIBCPP"
           cp "$LIBCPP" signing-tools/lib64/libc++.so
-          chmod +x signing-tools/apksigner signing-tools/zipalign
+          chmod +x signing-tools/apksigner signing-tools/zipalign signing-tools/aapt signing-tools/aapt2
           "$TOOLS_DIR/apksigner" version
           "$TOOLS_DIR/zipalign" -h >/dev/null 2>&1 || true
       - uses: actions/upload-artifact@v7
