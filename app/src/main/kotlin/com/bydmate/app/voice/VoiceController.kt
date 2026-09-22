@@ -662,7 +662,7 @@ class VoiceController @Inject constructor(
         // failure so the announce never claims success for a half-done utterance (#98).
         var failReason: String? = null
         for (command in commands) {
-            val result = dispatchWindowPosition(command, snapshot?.speed)
+            val result = dispatchWindowPosition(apertureController, command, snapshot?.speed)
                 ?: actionDispatcher.dispatch(
                     ActionDef(command = command, displayName = command, kind = "param"),
                     data = snapshot
@@ -687,30 +687,6 @@ class VoiceController @Inject constructor(
             record(VoiceJournalEntry.Route.NLU, transcript, withDecodeMs(transcript, decodeMs), VoiceJournalEntry.Outcome.BLOCKED, failReason,
                 "NLU blocked: cmd=$cmdLog transcript=\"$transcript\" reason=$failReason")
             announce("Голос", "Услышал: «$transcript». Отказ: $failReason", "Не получилось")
-        }
-    }
-
-    private suspend fun dispatchWindowPosition(
-        command: String,
-        speed: Int?,
-    ): com.bydmate.app.data.automation.DispatchResult? {
-        val requests = VoiceWindowPositionRouter.resolve(command) ?: return null
-        val controller = apertureController ?: return null
-        val results = coroutineScope {
-            requests.map { request ->
-                async {
-                    controller.positionWindow(request.action, request.target, speed)
-                }
-            }.awaitAll()
-        }
-        val failed = results.firstOrNull { it.isFailure }
-        return if (failed == null) {
-            com.bydmate.app.data.automation.DispatchResult(true)
-        } else {
-            com.bydmate.app.data.automation.DispatchResult(
-                false,
-                failed.exceptionOrNull()?.message ?: "window_position_failed",
-            )
         }
     }
 
@@ -962,6 +938,29 @@ class VoiceController @Inject constructor(
          *  inside the post-speech grace window. */
         internal fun shouldMute(nowMs: Long, muteUntilMs: Long, speaking: Boolean): Boolean =
             speaking || nowMs < muteUntilMs
+    }
+}
+
+private suspend fun dispatchWindowPosition(
+    controller: AliceApertureController?,
+    command: String,
+    speed: Int?,
+): com.bydmate.app.data.automation.DispatchResult? {
+    val requests = VoiceWindowPositionRouter.resolve(command) ?: return null
+    controller ?: return null
+    val results = coroutineScope {
+        requests.map { request ->
+            async { controller.positionWindow(request.action, request.target, speed) }
+        }.awaitAll()
+    }
+    val failed = results.firstOrNull { it.isFailure }
+    return if (failed == null) {
+        com.bydmate.app.data.automation.DispatchResult(true)
+    } else {
+        com.bydmate.app.data.automation.DispatchResult(
+            false,
+            failed.exceptionOrNull()?.message ?: "window_position_failed",
+        )
     }
 }
 

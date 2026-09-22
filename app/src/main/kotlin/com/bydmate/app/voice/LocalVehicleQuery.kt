@@ -16,31 +16,38 @@ internal object LocalVehicleQuery {
     fun answer(text: String, lang: VoiceLang, data: DiParsData?): Reply? {
         if (lang != VoiceLang.RU) return null
         val q = text.lowercase().replace('ё', 'е').trim()
+        return temperatureAnswer(q, data) ?: batteryAnswer(q, data)
+    }
 
-        return when {
-            isOutsideTemperature(q) -> Reply(
-                "outside_temp",
-                data?.exteriorTemp?.let { "Снаружи $it градусов." }
-                    ?: "Температура снаружи недоступна.",
-            )
-            isInsideTemperature(q) -> Reply(
-                "inside_temp",
-                data?.insideTemp?.let { "В салоне $it градусов." }
-                    ?: "Температура в салоне недоступна.",
-            )
-            isClimateSetpoint(q) -> Reply(
-                "climate_setpoint",
-                data?.acTemp?.let { "Климат установлен на $it градусов." }
-                    ?: "Температура климата недоступна.",
-            )
-            isBatteryCharge(q) -> Reply(
+    private fun temperatureAnswer(q: String, data: DiParsData?): Reply? = when {
+        isOutsideTemperature(q) -> Reply(
+            "outside_temp",
+            data?.exteriorTemp?.let { "Снаружи $it градусов." }
+                ?: "Температура снаружи недоступна.",
+        )
+        isInsideTemperature(q) -> Reply(
+            "inside_temp",
+            data?.insideTemp?.let { "В салоне $it градусов." }
+                ?: "Температура в салоне недоступна.",
+        )
+        isClimateSetpoint(q) -> Reply(
+            "climate_setpoint",
+            data?.acTemp?.let { "Климат установлен на $it градусов." }
+                ?: "Температура климата недоступна.",
+        )
+        else -> null
+    }
+
+    private fun batteryAnswer(q: String, data: DiParsData?): Reply? =
+        if (isBatteryCharge(q)) {
+            Reply(
                 "soc",
                 data?.soc?.let { "Заряд $it%." }
                     ?: "Заряд батареи сейчас недоступен.",
             )
-            else -> null
+        } else {
+            null
         }
-    }
 
     private fun isOutsideTemperature(q: String): Boolean =
         mentionsTemperature(q) && OUTSIDE_MARKERS.any(q::contains)
