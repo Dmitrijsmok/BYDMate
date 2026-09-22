@@ -21,6 +21,10 @@ jobs:
           cp "$TOOLS_DIR/apksigner" signing-tools/
           cp "$TOOLS_DIR/zipalign" signing-tools/
           cp "$TOOLS_DIR/lib/apksigner.jar" signing-tools/lib/
+          mkdir -p signing-tools/lib64
+          LIBCPP="$(find "$ANDROID_HOME" -type f -name libc++.so | head -1)"
+          test -n "$LIBCPP"
+          cp "$LIBCPP" signing-tools/lib64/libc++.so
           chmod +x signing-tools/apksigner signing-tools/zipalign
           "$TOOLS_DIR/apksigner" version
           "$TOOLS_DIR/zipalign" -h >/dev/null 2>&1 || true
