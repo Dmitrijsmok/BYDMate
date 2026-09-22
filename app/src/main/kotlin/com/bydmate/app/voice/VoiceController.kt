@@ -325,10 +325,6 @@ class VoiceController @Inject constructor(
     private fun startContinuousSession() {
         if (!busy.compareAndSet(false, true)) return
         ensureSupertonicStressDict()
-        // Warm the currently selected local TTS voice as soon as the Local BYDMate session
-        // starts. This covers voice switches (Sofia -> Dmitri etc.) and keeps even NLU-only
-        // confirmations such as "Готово" from paying model-load latency on the first command.
-        if (gate.ttsEnabled()) runCatching { ttsEngine.warmUp() }
         // Barge-in: kill any ongoing TTS so it neither talks over the user nor bleeds into capture.
         runCatching { ttsEngine.stop() }
         lastSpeakingSeenMs = 0L
