@@ -159,9 +159,11 @@ class GigaAmSegmenterTest {
         jobA.join()
         jobB.join()
 
-        assertEquals(2, vads.size)
+        // Two collections each consume/close one VAD. The engine may already have prepared
+        // one extra UNUSED spare for the next PTT, so total creations can be 2 or 3 here.
+        assertTrue(vads.size in 2..3)
         assertEquals(1, recognizers.size)
-        assertTrue(vads.all { it.closed })
+        assertEquals(2, vads.count { it.closed })
         assertFalse(recognizers.first().closed)
     }
 
@@ -205,26 +207,36 @@ class GigaAmSegmenterTest {
         engine.transcribe(flowOf(ShortArray(160))).collect {}
         engine.transcribe(flowOf(ShortArray(160))).collect {}
         assertEquals(1, recognizerCreations)
-        assertEquals(2, vadCreations)
+        // Two sessions each own one closed VAD; one fresh spare may already be ready.
+        assertTrue(vadCreations in 2..3)
         assertEquals(0, recognizerClosed)   // cached recognizer is NOT closed in finally
     }
 
     // --- Task 5: pre-warm the recognizer so the first PTT's transcribe() doesn't pay the
     // cold model-load cost before the mic starts recording. ---
 
-    @Test fun `warmUp builds recognizer once and transcribe reuses it`() = runTest {
+    @Test fun `warmUp builds recognizer and vad before first transcribe`() = runTest {
         var recognizerCreations = 0
+        var vadCreations = 0
+        val warmedVad = FakeVadHandle()
         val engine = GigaAmAsrEngine(
             modelManager = readyModelManager(),
             recognizerFactory = { recognizerCreations++; FakeRecognizerHandle() },
-            vadFactory = { FakeVadHandle() },
+            vadFactory = {
+                vadCreations++
+                if (vadCreations == 1) warmedVad else FakeVadHandle()
+            },
         )
 
+        assertFalse(engine.isWarm())
         engine.warmUp()
         assertEquals(1, recognizerCreations)
+        assertEquals(1, vadCreations)
+        assertTrue(engine.isWarm())
 
         engine.transcribe(flowOf(ShortArray(160))).collect {}
         assertEquals(1, recognizerCreations)   // reused, not rebuilt
+        assertTrue(warmedVad.closed)           // warmed spare was the session-owned VAD
     }
 
     @Test fun `warmUp is a no-op when model files absent`() = runTest {

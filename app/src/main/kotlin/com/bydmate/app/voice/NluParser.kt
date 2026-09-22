@@ -21,6 +21,12 @@ object NluParser {
             .filter { it.isNotBlank() }
         if (rawTokens.isEmpty()) return ParseResult.Unrecognized
 
+        // Driver wording observed on-car: "проветри машину" / "включи проветривание".
+        // "Проветривание" means cracking the windows, not HVAC airflow; keep the author's
+        // existing all-window vent command and resolve it before CAR makes the generic slot
+        // combination ambiguous and sends the phrase to the LLM.
+        resolveWholeCarVent(text, lang)?.let { return it }
+
         val stems = rawTokens.map { VoiceStemmer.stem(it) }
 
         // Negation ("не открывай", "нет, не надо") is beyond slot NLU: guessing an
@@ -55,6 +61,7 @@ object NluParser {
 
         val devices2 = disambiguateAirflow(devices, stems, lang)
         val (actions2, devices3) = narrowSeatOff(effectiveActions, devices2)
+        resolveWindowPercentage(text, actions2, devices3, qualifiers, number)?.let { return it }
         if (devices3.any { isAperture(it) } && hasExplicitNumber(rawTokens, lang)) {
             return ParseResult.Unrecognized
         }
@@ -95,6 +102,15 @@ object NluParser {
         }
         return if (resolved.size == 1) ParseResult.Command(resolved.first())
         else ParseResult.Unrecognized
+    }
+
+    private fun resolveWholeCarVent(text: String, lang: VoiceLang): ParseResult.Command? {
+        if (lang != VoiceLang.RU) return null
+        val normalized = text.lowercase()
+        if (!normalized.contains("проветр")) return null
+        val mentionsCar = normalized.contains("машин")
+        val genericEnable = normalized.contains("включ") && !normalized.contains("окн")
+        return if (mentionsCar || genericEnable) ParseResult.Command("车窗通风") else null
     }
 
     private fun <T> matchSlots(stems: List<String>, words: Map<T, List<String>>): Set<T> {
@@ -206,6 +222,53 @@ object NluParser {
     private fun isAperture(d: DeviceSlot) =
         d.name.startsWith("WINDOW") || d == DeviceSlot.SUNROOF
 
+    /** Explicit percentages are a real DiLink 3 capability (per-door *_pos FIDs). Preserve the
+     * author's existing full/half/vent commands; only phrases that explicitly contain percent/% 
+     * take this path. Endpoints 0/100 intentionally emit the existing strings so the translator
+     * uses dedicated close/open FIDs on DiLink 3 rather than the inert percentage endpoints. */
+    private fun resolveWindowPercentage(
+        rawText: String,
+        actions: Set<ActionSlot>,
+        devices: Set<DeviceSlot>,
+        qualifiers: Set<Qual>,
+        number: Int?,
+    ): ParseResult.Command? {
+        val percent = number?.takeIf { it in 0..100 } ?: return null
+        if (devices.none { it.name.startsWith("WINDOW") }) return null
+        if (!hasPercentMarker(rawText)) return null
+        if (actions.none { it == ActionSlot.OPEN || it == ActionSlot.HALF || it == ActionSlot.SET }) return null
+
+        val commands = when (windowFor(qualifiers)) {
+            DeviceSlot.WINDOW_DRIVER -> listOf(windowPositionCommand("主驾", percent))
+            DeviceSlot.WINDOW_PASSENGER -> listOf(windowPositionCommand("副驾", percent))
+            DeviceSlot.WINDOW_REAR_LEFT -> listOf(windowPositionCommand("后左", percent))
+            DeviceSlot.WINDOW_REAR_RIGHT -> listOf(windowPositionCommand("后右", percent))
+            DeviceSlot.WINDOW_FRONT -> listOf(
+                windowPositionCommand("主驾", percent),
+                windowPositionCommand("副驾", percent),
+            )
+            DeviceSlot.WINDOW_REAR -> listOf(
+                windowPositionCommand("后左", percent),
+                windowPositionCommand("后右", percent),
+            )
+            else -> listOf(
+                windowPositionCommand("主驾", percent),
+                windowPositionCommand("副驾", percent),
+                windowPositionCommand("后左", percent),
+                windowPositionCommand("后右", percent),
+            )
+        }
+        return ParseResult.Command(commands)
+    }
+
+    private fun hasPercentMarker(rawText: String): Boolean {
+        val s = rawText.lowercase()
+        return '%' in s || "процент" in s || "percent" in s
+    }
+
+    private fun windowPositionCommand(prefix: String, percent: Int): String =
+        prefix + "打开" + percent
+
     /** "открой наполовину водительское окно" names both the verb (OPEN) and the
      *  detent (HALF/VENT): the detent is what the driver asked for, the verb only
      *  says which way the glass moves. Without this the utterance resolves to two
@@ -282,13 +345,39 @@ object NluParser {
         }
     }
 
+    private fun composeDecade(tens: Int?, units: Int?): Int? {
+        if (tens == null) return null
+        if (units == null) return null
+        if (tens !in 20..90) return null
+        if (tens % 10 != 0) return null
+        if (units !in 1..9) return null
+        return tens + units
+    }
+
     private fun detectNumber(rawTokens: List<String>, lang: VoiceLang): Int? {
         rawTokens.firstNotNullOfOrNull { it.toIntOrNull() }?.let { return it }
         val numbers = VoiceLexicon.numberWords(lang)
-        // try longest multi-word number first ("двадцать четыре")
-        val joined = rawTokens.joinToString(" ")
+
+        // Compose ordinary spoken percentages such as "тридцать семь" / "thirty seven".
+        // VoiceLexicon contains the decade words and 1..9 units, so this keeps the parser compact
+        // while covering every percentage from 20..99 instead of only hand-listed values.
+        val singles = numbers.filterKeys { ' ' !in it }
+        rawTokens.windowed(2).firstNotNullOfOrNull { pair ->
+            composeDecade(singles[pair[0]], singles[pair[1]])
+        }?.let { return it }
+
+        // Match complete contiguous token sequences only. The old substring search could read
+        // "пятьдесят" as "пять" and "двадцать" as "два". Prefer the longest phrase first,
+        // then the longest spelling for deterministic single-word matches.
         return numbers.entries
-            .sortedByDescending { it.key.split(" ").size }
-            .firstOrNull { joined.contains(it.key) }?.value
+            .sortedWith(
+                compareByDescending<Map.Entry<String, Int>> { it.key.split(" ").size }
+                    .thenByDescending { it.key.length }
+            )
+            .firstOrNull { entry ->
+                val parts = entry.key.split(" ")
+                rawTokens.windowed(parts.size).any { it == parts }
+            }
+            ?.value
     }
 }

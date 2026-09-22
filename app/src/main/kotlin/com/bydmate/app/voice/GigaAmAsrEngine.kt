@@ -10,6 +10,8 @@ import com.k2fsa.sherpa.onnx.Vad
 import com.k2fsa.sherpa.onnx.VadModelConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
 
 /** Isolates all sherpa-onnx JNI recognizer access behind primitive-only signatures so unit
  *  tests never load com.k2fsa.sherpa.onnx.* (its companion init calls System.loadLibrary and
@@ -105,6 +107,12 @@ internal class GigaAmAsrEngine(
     // first listened words (field defect APK 337). The VAD stays per-collection: it is cheap and
     // stateful, so a fresh instance per session is the safe reset.
     @Volatile private var cachedRecognizer: RecognizerHandle? = null
+    // Keep one UNUSED VAD instance hot. A VAD is stateful, so a session takes the spare and owns
+    // it exclusively; while that session runs we prepare the next spare in the background.
+    @Volatile private var cachedVad: VadHandle? = null
+    private val vadWarmupInFlight = AtomicBoolean(false)
+
+    override fun isWarm(): Boolean = cachedRecognizer != null && cachedVad != null
 
     /** Drop the cached recognizer so the next session reloads the model from disk. Called when
      *  the model files change (re-download). The old handle is NOT closed here: an in-flight
@@ -116,14 +124,23 @@ internal class GigaAmAsrEngine(
      *  driver restarts the app anyway -- building that wiring now would be speculative (YAGNI). */
     internal fun invalidateCachedRecognizer() {
         cachedRecognizer = null
+        synchronized(this) {
+            runCatching { cachedVad?.close() }
+            cachedVad = null
+        }
     }
 
-    /** Pre-builds the cached recognizer (~1.3 s cold load of the 226 MiB model) so the first
-     *  PTT's transcribe() starts the mic immediately instead of after model load (field defect:
-     *  first words swallowed on the first session after app start). */
+    /** Pre-build both native pieces used before pcm.collect starts. Without the VAD spare the
+     *  mic flow is still subscribed only AFTER the Silero model constructor returns, which on
+     *  the ATTO 3 can swallow several seconds of the driver's first words. */
     @Synchronized
     override fun warmUp() {
-        if (isReady()) runCatching { obtainRecognizer() }
+        if (!isReady()) return
+        // Do not continue into a second native model load after the recognizer failed. Besides
+        // wasting work, that would overwrite the crash-loop guard's most recent artifact and
+        // make the next process start quarantine the wrong file.
+        val recognizerReady = runCatching { obtainRecognizer() }.isSuccess
+        if (recognizerReady) runCatching { ensureCachedVad() }
     }
 
     /** Single synchronized build point for the shared recognizer: warmUp() and transcribe()
@@ -141,6 +158,40 @@ internal class GigaAmAsrEngine(
             handle.also { cachedRecognizer = it }
         }
 
+    private fun buildVad(): VadHandle {
+        loadGuard?.noteLoadBegin(AsrLoadGuard.ARTIFACT_VAD)
+        val handle = vadFactory()
+        loadGuard?.noteLoadSuccess(AsrLoadGuard.ARTIFACT_VAD)
+        return handle
+    }
+
+    @Synchronized
+    private fun ensureCachedVad(): VadHandle =
+        cachedVad ?: buildVad().also { cachedVad = it }
+
+    @Synchronized
+    private fun takeVad(): VadHandle {
+        val ready = cachedVad
+        if (ready != null) {
+            cachedVad = null
+            return ready
+        }
+        return buildVad()
+    }
+
+    private fun prewarmNextVad() {
+        if (!isReady() || cachedVad != null || !vadWarmupInFlight.compareAndSet(false, true)) return
+        thread(name = "gigaam-vad-prewarm", isDaemon = true) {
+            try {
+                synchronized(this@GigaAmAsrEngine) {
+                    if (cachedVad == null && isReady()) cachedVad = buildVad()
+                }
+            } finally {
+                vadWarmupInFlight.set(false)
+            }
+        }
+    }
+
     // VAD is a local of the flow builder, so each collection owns its own instance: a second
     // (even concurrent) collect can never clobber or double-release another collection's VAD.
     // The recognizer is shared (cachedRecognizer above) and deliberately outlives every
@@ -152,12 +203,10 @@ internal class GigaAmAsrEngine(
         // call site into this engine, so the old unsynchronized check-then-act could have
         // double-loaded the model and orphaned one handle.
         val recognizer = obtainRecognizer()
-        // Same crash-loop bracket as the recognizer: the silero VAD is a native .onnx load
-        // too, and a corrupt file aborts the process the same way. Separate artifact key so
-        // a successful recognizer load can't wipe the VAD's crash evidence.
-        loadGuard?.noteLoadBegin(AsrLoadGuard.ARTIFACT_VAD)
-        val vad = vadFactory()   // recognizer is cached -- no paired close needed on this throw path
-        loadGuard?.noteLoadSuccess(AsrLoadGuard.ARTIFACT_VAD)
+        // Take the already-built fresh VAD so pcm collection can begin immediately, then prepare
+        // another unused instance while this session is running.
+        val vad = takeVad()
+        prewarmNextVad()
         try {
             var speaking = false
             var silentMs = 0L

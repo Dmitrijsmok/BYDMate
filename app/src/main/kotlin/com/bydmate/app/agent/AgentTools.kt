@@ -347,9 +347,9 @@ class AgentTools @Inject constructor(
         ))
         put(tool(
             "vehicle_control",
-            "Выполнить команду управления машиной. У окон ровно три положения: полностью открыть, " +
-                "наполовину и проветривание; произвольный процент машина не умеет — если водитель " +
-                "назвал процент, выбери ближайшее из трёх и скажи в ответе, какое. " +
+            "Выполнить команду управления машиной. Боковые окна поддерживают точный процент " +
+                "через локальный оконный контроллер; обычные команды полностью/наполовину/проветривание " +
+                "перечислены здесь. Ограничение по процентам относится к люку, а не к боковым окнам. " +
                 "command — идентификатор из списка:\n" +
                 AgentCommandCatalog.idsDoc(),
             JSONObject()
@@ -598,11 +598,21 @@ class AgentTools @Inject constructor(
             "launch_app",
             "Запустить установленное приложение по названию. Понимает русские названия штатных " +
                 "приложений машины: навигатор, яндекс карты, музыка, камера, видеорегистратор, " +
-                "браузер, ютуб, настройки машины, файлы, режимы вождения, часовой, АБРП, " +
-                "медиацентр, телефон.",
+                "браузер, ютуб, файлы, режимы вождения, часовой, АБРП, медиацентр, телефон. " +
+                "Для системных настроек используй open_settings.",
             JSONObject().put("name", JSONObject().put("type", "string")
                 .put("description", "Название приложения, как на домашнем экране")),
             listOf("name"),
+        ))
+        put(tool(
+            "open_settings",
+            "Открыть системные настройки головного устройства без поиска launcher-приложения. " +
+                "car = штатные настройки BYD; display = настройки экрана; android = общие настройки Android; " +
+                "wifi, bluetooth, sound, apps = соответствующие системные разделы.",
+            JSONObject().put("section", JSONObject().put("type", "string")
+                .put("enum", JSONArray(listOf("car", "display", "android", "wifi", "bluetooth", "sound", "apps")))
+                .put("description", "Какой раздел настроек открыть")),
+            listOf("section"),
         ))
         put(tool(
             "set_cluster_projection",
@@ -841,6 +851,7 @@ class AgentTools @Inject constructor(
                 "play_music" -> playMusic(args)
                 "youtube" -> youtubeTool(args)
                 "launch_app" -> launchAppTool(args)
+                "open_settings" -> openSettings(args)
                 "set_cluster_projection" -> setClusterProjection(args)
                 "set_sentry" -> setSentry(args)
                 "set_hotspot" -> setHotspot(args)
@@ -1882,6 +1893,9 @@ class AgentTools @Inject constructor(
     private suspend fun launchAppTool(args: JSONObject): String {
         val name = args.optString("name").trim()
         if (name.isEmpty()) return """{"error":"не указано название приложения"}"""
+        settingsSectionForName(name)?.let { section ->
+            return openSettings(JSONObject().put("section", section))
+        }
         val (label, pkg) = when (val r = resolveLauncherApp(name)) {
             is Built.Error -> return JSONObject().put("error", r.message).toString()
             is Built.Value -> r.value
@@ -1891,6 +1905,37 @@ class AgentTools @Inject constructor(
                 payload = JSONObject().put("packageName", pkg).toString()), data = null)
         return if (result.success) JSONObject().put("ok", true).put("app", label).toString()
         else JSONObject().put("error", result.reason ?: "не получилось запустить $label").toString()
+    }
+
+    private suspend fun openSettings(args: JSONObject): String {
+        val section = args.optString("section").trim().lowercase()
+        if (section !in SETTINGS_SECTIONS) {
+            return JSONObject().put("error", "неизвестный раздел настроек: $section").toString()
+        }
+        val result = actionDispatcher.dispatch(
+            ActionDef(
+                command = "",
+                displayName = "Настройки",
+                kind = "system_settings",
+                payload = JSONObject().put("section", section).toString(),
+            ),
+            data = null,
+        )
+        return dispatchJson(result)
+    }
+
+    private fun settingsSectionForName(name: String): String? {
+        val normalized = name.trim().lowercase().replace('ё', 'е')
+        return when {
+            normalized in setOf("настройки машины", "настройки автомобиля", "car settings") -> "car"
+            normalized in setOf("настройки экрана", "экран", "display settings") -> "display"
+            normalized in setOf("настройки android", "android settings", "системные настройки", "настройки") -> "android"
+            normalized in setOf("настройки wifi", "настройки wi-fi", "wifi", "wi-fi") -> "wifi"
+            normalized in setOf("настройки bluetooth", "bluetooth", "блютус") -> "bluetooth"
+            normalized in setOf("настройки звука", "звук", "sound settings") -> "sound"
+            normalized in setOf("настройки приложений", "приложения", "apps settings") -> "apps"
+            else -> null
+        }
     }
 
     // --- cluster projection ---
@@ -2586,6 +2631,11 @@ class AgentTools @Inject constructor(
         // Yandex Maps ships under several package names; reuse the navigation list so the
         // alias never drifts from the guidance-source set.
         private val YANDEX_MAPS_PACKAGES = NavPackages.YANDEX_MAPS.toList()
+        private val TIKTOK_PACKAGES = listOf(
+            "com.zhiliaoapp.musically",
+            "com.ss.android.ugc.trill",
+            "com.zhiliaoapp.musically.go",
+        )
 
         // RU aliases for stock DiLink apps whose launcher labels are Chinese/English and thus
         // unreachable by label match. Values are candidate packages in priority order; an alias
@@ -2594,6 +2644,10 @@ class AgentTools @Inject constructor(
         private val APP_ALIAS_LABELS: Map<String, String> = mapOf(
             "ютуб" to "youtube",
             "youtube" to "youtube",
+            "тик ток" to "tiktok",
+            "тикток" to "tiktok",
+            "тик-ток" to "tiktok",
+            "tiktok" to "tiktok",
             "браузер" to "chrome",
             "хром" to "chrome",
             "яндекс музыка" to "яндекс музыка",
@@ -2604,6 +2658,10 @@ class AgentTools @Inject constructor(
             "навигатор" to "навигатор",
             "регистратор" to "регистратор",
             "видеорегистратор" to "регистратор",
+        )
+
+        private val SETTINGS_SECTIONS = setOf(
+            "car", "display", "android", "wifi", "bluetooth", "sound", "apps",
         )
 
         internal val APP_ALIASES: Map<String, List<String>> = mapOf(
@@ -2619,7 +2677,24 @@ class AgentTools @Inject constructor(
             "регистратор" to listOf("com.byd.cdr"),
             "браузер" to listOf("com.android.chrome"),
             "хром" to listOf("com.android.chrome"),
-            "ютуб" to listOf("anddea.youtube", "com.google.android.youtube"),
+            "ютуб" to listOf(
+                "anddea.youtube",
+                "app.rvx.android.youtube",
+                "app.revanced.android.youtube",
+                "com.google.android.youtube",
+            ),
+            "youtube" to listOf(
+                "anddea.youtube",
+                "app.rvx.android.youtube",
+                "app.revanced.android.youtube",
+                "com.google.android.youtube",
+            ),
+            "rvx" to listOf("app.rvx.android.youtube", "anddea.youtube"),
+            "revanced" to listOf("app.revanced.android.youtube", "anddea.youtube"),
+            "тик ток" to TIKTOK_PACKAGES,
+            "тикток" to TIKTOK_PACKAGES,
+            "тик-ток" to TIKTOK_PACKAGES,
+            "tiktok" to TIKTOK_PACKAGES,
             "настройки машины" to listOf("com.byd.carsettings"),
             "настройки автомобиля" to listOf("com.byd.carsettings"),
             "файлы" to listOf("com.byd.filemanager"),

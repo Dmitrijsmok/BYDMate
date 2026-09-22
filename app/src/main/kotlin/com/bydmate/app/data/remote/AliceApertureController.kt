@@ -28,33 +28,11 @@ class AliceApertureController @Inject constructor(
     }
 
     suspend fun positionSunroof(target: Int, data: DiParsData?): Result<Unit> {
-        if (target !in 0..100) return failure("invalid_sunroof_position")
-        sunroofEndpoint(target, data?.speed)?.let { return it }
-
-        val start = data?.sunroof ?: return failure("sunroof_position_unavailable")
-        if (near(start, target, 2)) return Result.success(Unit)
-
-        val opening = target > start
-        val command = if (opening) SUNROOF_OPEN else SUNROOF_CLOSE
-        blockOpening(command, opening, data.speed)?.let { return it }
-
-        val started = vehicleApi.dispatch(command)
-        if (started.isFailure) return started
-
-        val reached = waitForTarget(
-            { latestData?.sunroof },
-            WaitSpec(target, opening, 15_000L, 75L, 2),
-        )
-        val stopped = vehicleApi.dispatch(SUNROOF_STOP)
-        if (stopped.isFailure) return stopped
-
-        delay(300L)
-        val final = latestData?.sunroof ?: reached
-        return if (reached != null && final != null && near(final, target, 4)) {
-            Result.success(Unit)
-        } else {
-            failure("sunroof_position_miss")
+        if (target !in SUPPORTED_SUNROOF_POSITIONS) {
+            return failure("sunroof_percent_not_supported")
         }
+        return sunroofEndpoint(target, data?.speed)
+            ?: failure("sunroof_position_not_supported")
     }
 
     private suspend fun windowEndpoint(
@@ -172,10 +150,10 @@ class AliceApertureController @Inject constructor(
     )
 
     companion object {
+        private val SUPPORTED_SUNROOF_POSITIONS = setOf(0, 50, 100)
         private const val SUNROOF_OPEN = "天窗打开100"
         private const val SUNROOF_HALF = "天窗打开50"
         private const val SUNROOF_CLOSE = "天窗打开0"
-        private const val SUNROOF_STOP = "天窗停止"
     }
 }
 

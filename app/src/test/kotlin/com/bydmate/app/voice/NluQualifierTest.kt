@@ -32,8 +32,10 @@ class NluQualifierTest {
     @Test fun vent_rear_pair() = assertEquals("后排车窗通风", cmd("проветри задние окна"))
     @Test fun half_sunroof_with_open_verb() = assertEquals("天窗打开50", cmd("открой люк наполовину"))
 
-    // An explicit percentage is not one of the three apertures: the agent names them.
-    @Test fun window_percentage_goes_to_agent() = unrecognized("открой водительское окно на двадцать процентов")
+    // DiLink 3 exposes real per-window percentage FIDs, so explicit window percentages are
+    // deterministic. Sunroof percentages are still not part of the local NLU contract.
+    @Test fun window_percentage_resolves_locally() =
+        assertEquals("主驾打开20", cmd("открой водительское окно на двадцать процентов"))
     @Test fun sunroof_percentage_goes_to_agent() = unrecognized("открой люк на тридцать процентов")
 
     // Front trunk is NOT the rear tailgate — must go to the agent.

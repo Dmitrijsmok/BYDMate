@@ -1456,4 +1456,10 @@
     <string name="settings_alice_endpoint">Endpoint URL</string>
     <string name="settings_alice_api_key">API Key</string>
     <string name="settings_alice_autosave_hint">Endpoint and key are saved automatically</string>
+
+    <string name="settings_voice_app_matches_title">Voice command apps</string>
+    <string name="settings_voice_app_matches_desc">Shows which installed app BYDMate matched to each voice command.</string>
+    <string name="settings_voice_app_matches_button">Show</string>
+    <string name="settings_voice_app_matches_dialog_title">Application matches</string>
+    <string name="settings_voice_app_matches_not_found">Not found on this device</string>
 </resources>

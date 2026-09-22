@@ -48,6 +48,29 @@ class AliceBridgeCommandTranslatorTest {
         )
     }
 
+    @Test fun `Alice window percentage maps to deterministic vehicle command`() {
+        assertEquals(
+            "主驾打开37",
+            AliceBridgeCommandTranslator.resolve(
+                JSONObject("""{"action":"window.driver.position","value":37}""")
+            )?.vehicleCommand,
+        )
+        assertEquals(
+            "后右打开65",
+            AliceBridgeCommandTranslator.resolve(
+                JSONObject("""{"action":"window.rear_right.position","value":65}""")
+            )?.vehicleCommand,
+        )
+    }
+
+    @Test fun `Alice window percentage rejects out of range values`() {
+        assertNull(
+            AliceBridgeCommandTranslator.resolve(
+                JSONObject("""{"action":"window.driver.position","value":101}""")
+            )
+        )
+    }
+
     @Test fun `airflow and roof actions stay semantic`() {
         assertEquals(
             "吹面吹脚除霜",

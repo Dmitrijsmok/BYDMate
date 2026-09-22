@@ -103,6 +103,38 @@ class NluParserTest {
         assertEquals("车窗半开", cmd("окна наполовину"))
     }
 
+    @Test fun driver_window_explicit_percentage() {
+        assertEquals("主驾打开37", cmd("открой окно водителя на 37 процентов"))
+        assertEquals("主驾打开37", cmd("открой окно водителя на тридцать семь процентов"))
+        assertEquals("主驾打开50", cmd("открой окно водителя на пятьдесят процентов"))
+        assertEquals("主驾打开99", cmd("открой окно водителя на девяносто девять процентов"))
+    }
+
+    @Test fun all_windows_explicit_percentage_fans_out() {
+        val result = NluParser.parse("открой окна на 25 процентов", VoiceLang.RU) as ParseResult.Command
+        assertEquals(
+            listOf("主驾打开25", "副驾打开25", "后左打开25", "后右打开25"),
+            result.commands,
+        )
+    }
+
+    @Test fun window_percentage_endpoints_keep_existing_open_close_strings() {
+        assertEquals("主驾打开100", cmd("открой окно водителя на 100 процентов"))
+        assertEquals("主驾打开0", cmd("открой окно водителя на 0 процентов"))
+    }
+
+    @Test fun vent_logic_is_unchanged_when_no_percentage_is_spoken() {
+        assertEquals("车窗通风", cmd("проветри окна"))
+        assertEquals("车窗通风", cmd("проветри машину"))
+        assertEquals("车窗通风", cmd("включи проветривание"))
+        assertEquals("副驾通风", cmd("проветри окно пассажира"))
+    }
+
+    @Test fun half_window_field_phrases_resolve_locally() {
+        assertEquals("车窗半开", cmd("открой окно наполовину"))
+        assertEquals("车窗半开", cmd("открой окна наполовину"))
+    }
+
     @Test fun sunroof_tilt() {
         assertEquals("天窗打开50", cmd("приоткрой люк"))
     }

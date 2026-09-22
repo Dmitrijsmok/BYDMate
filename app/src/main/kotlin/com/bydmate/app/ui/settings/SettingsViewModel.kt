@@ -34,6 +34,8 @@ import com.bydmate.app.data.remote.InsightsManager
 import com.bydmate.app.data.remote.LlmHttpException
 import com.bydmate.app.data.remote.OpenRouterClient
 import com.bydmate.app.data.remote.OpenRouterModel
+import com.bydmate.app.data.remote.AliceAppResolver
+import com.bydmate.app.data.remote.VoiceAppMatch
 import com.bydmate.app.data.local.dao.TariffPeriodDao
 import com.bydmate.app.data.local.entity.PlaceEntity
 import com.bydmate.app.data.local.entity.TariffPeriodEntity
@@ -225,6 +227,8 @@ data class SettingsUiState(
     val routeNavigator: String = com.bydmate.app.data.automation.RouteNavigatorUris.YANDEX,
     /** Only navigator apps that currently expose a launcher activity on this head unit. */
     val routeNavigatorOptions: List<String> = emptyList(),
+    /** Resolved voice-action -> installed launcher package diagnostics for the Settings UI. */
+    val voiceAppMatches: List<VoiceAppMatch> = emptyList(),
     /** Long-term facts the agent remembered about the driver (DriverMemory). */
     val agentMemoryFacts: List<String> = emptyList(),
     // Wave J: multi-provider LLM connections (OpenRouter / z.ai / custom)
@@ -511,6 +515,7 @@ class SettingsViewModel @Inject constructor(
                 routePrefs.getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null)
             )
             val routeNavigatorOptions = installedRouteNavigatorIds()
+            val voiceAppMatches = AliceAppResolver(appContext).diagnosticMatches()
             val routeNavigator = if (
                 routeNavigatorOptions.isEmpty() || savedRouteNavigator in routeNavigatorOptions
             ) savedRouteNavigator else routeNavigatorOptions.first()
@@ -580,6 +585,7 @@ class SettingsViewModel @Inject constructor(
                     agentGender = agentGender,
                     routeNavigator = routeNavigator,
                     routeNavigatorOptions = routeNavigatorOptions,
+                    voiceAppMatches = voiceAppMatches,
                     agentMemoryFacts = driverMemory.facts(),
                     zaiApiKey = zaiApiKey,
                     customName = customName,
@@ -1182,16 +1188,19 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun toggleAlice(enabled: Boolean) {
+        if (enabled) voiceController.stopForExternalAssistant()
         _uiState.update { it.copy(aliceEnabled = enabled) }
         appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
             .edit().putBoolean(SettingsRepository.KEY_ALICE_ENABLED, enabled).apply()
+        if (!enabled && _uiState.value.voiceEnabled) {
+            viewModelScope.launch(Dispatchers.IO) { runCatching { continuousAsr.warmUp() } }
+            runCatching { ttsEngine.warmUp() }
+        }
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_ALICE_ENABLED, enabled.toString())
             if (_uiState.value.voiceEnabled) {
                 ensureVoiceKeyService(if (enabled) "alice-provider" else "local-provider")
-                if (!enabled) {
-                    viewModelScope.launch(Dispatchers.IO) { runCatching { continuousAsr.warmUp() } }
-                }
+                // Warm-up already starts immediately above so a fast PTT press cannot outrun it.
             }
         }
     }
@@ -1409,7 +1418,10 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(ttsVoice = voiceId) }
         appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
             .edit().putString("tts_voice", voiceId).apply()
+        // reload() drops the previous model; immediately queue warmUp() behind that reload so
+        // switching Sofia/Dmitri does not make the next spoken answer pay the full model load.
         ttsEngine.reload()
+        ttsEngine.warmUp()
     }
 
     private val ttsDownloadJobs = mutableMapOf<String, Job>()
@@ -1898,6 +1910,43 @@ class SettingsViewModel @Inject constructor(
                         "chargerConnect=${live.chargerConnectState} " +
                         "connectIndicator=${live.chargeConnectIndicator}"
                 )
+            }
+
+            // Cabin temperature is optional across BYD generations. The normal snapshot only
+            // shows null after sentinel/range filtering, which is not enough to tell an unsupported
+            // channel from a decoder mismatch. Read this one fid raw for field diagnostics.
+            appendLine("--- cabin temperature probe ---")
+            try {
+                val primary = com.bydmate.app.data.nativestack.FidAddresses.of("insideTemp")
+                val alternate = com.bydmate.app.data.nativestack.FidAddresses.of("insideTempAlt")
+                val raw = helperClient.readBatch(
+                    listOf(
+                        com.bydmate.app.data.vehicle.BatchReadItem(5, primary.device, primary.fid),
+                        com.bydmate.app.data.vehicle.BatchReadItem(5, alternate.device, alternate.fid),
+                    )
+                )
+                val catalogFid = fidCatalogManager.catalog?.fidOf("Ac.AC_TEMP_INSIDE")
+                fun renderProbe(
+                    label: String,
+                    address: com.bydmate.app.data.nativestack.FidAddress,
+                    sample: Pair<Int, Int>?,
+                ) {
+                    if (sample == null) {
+                        appendLine(
+                            "$label dev=${address.device} fid=${address.fid} status=unavailable " +
+                                "catalog_fid=${catalogFid ?: "-"} decoded=${live?.insideTemp}"
+                        )
+                    } else {
+                        appendLine(
+                            "$label dev=${address.device} fid=${address.fid} status=${sample.first} " +
+                                "raw=${sample.second} catalog_fid=${catalogFid ?: "-"} decoded=${live?.insideTemp}"
+                        )
+                    }
+                }
+                renderProbe("insideTemp", primary, raw?.getOrNull(0))
+                renderProbe("insideTempAlt", alternate, raw?.getOrNull(1))
+            } catch (e: Exception) {
+                appendLine("error: ${e.message}")
             }
 
             // ICE-side addresses nothing in the app reads yet (#184). A DM-i owner sends this

@@ -5,6 +5,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
@@ -28,9 +29,32 @@ import kotlinx.coroutines.flow.MutableStateFlow
  * no Accessibility UI on DiLink) AND the settings switch is on, so it does nothing for users who
  * never opt in.
  */
+internal enum class VoicePressRoute { NONE, LOCAL, ALICE }
+
+internal data class VoicePressMemory(
+    val keyCode: Int,
+    val downMs: Long,
+)
+
+internal fun voicePressRoute(
+    repeatCount: Int,
+    aliceContextActive: Boolean,
+    keyCode: Int,
+    previous: VoicePressMemory,
+    nowMs: Long,
+): VoicePressRoute = when {
+    repeatCount != 0 -> VoicePressRoute.NONE
+    aliceContextActive -> VoicePressRoute.ALICE
+    keyCode == previous.keyCode && isVoiceDoublePress(previous.downMs, nowMs) ->
+        VoicePressRoute.ALICE
+    else -> VoicePressRoute.LOCAL
+}
+
 class SteeringWheelKeyService : AccessibilityService() {
 
     private var cachedEntryPoint: ClusterEntryPoint? = null
+    private var lastLocalVoiceDownMs = 0L
+    private var lastLocalVoiceKeyCode = -1
     private val aliceLauncher by lazy { YandexAliceLauncher(this) { entryPoint().voiceController() } }
     private val prefs: SharedPreferences by lazy {
         applicationContext.getSharedPreferences(ClusterProjectionManager.PREFS_NAME, Context.MODE_PRIVATE)
@@ -125,29 +149,46 @@ class SteeringWheelKeyService : AccessibilityService() {
     private fun handleVoiceKey(event: KeyEvent, isDown: Boolean): Boolean? {
         val voicePrefs = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
         val voiceEnabled = voicePrefs.getBoolean("voice_enabled", false)
-        val aliceEnabled = voicePrefs.getBoolean("alice_enabled", false)
         val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)
 
         if (android.os.Build.VERSION.SDK_INT <= 29) {
             val diLink3Decision = diLink3VoiceDecision(event.keyCode, isDown, voiceEnabled)
-            handleVoiceDecision(diLink3Decision, event, aliceEnabled)?.let { return it }
+            handleVoiceDecision(diLink3Decision, event)?.let { return it }
         }
 
         return handleVoiceDecision(
             voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey),
             event,
-            aliceEnabled,
         )
     }
 
     private fun handleVoiceDecision(
         decision: VoiceKeyDecision,
         event: KeyEvent,
-        aliceEnabled: Boolean,
     ): Boolean? = when (decision) {
         VoiceKeyDecision.TRIGGER -> {
-            if (event.repeatCount == 0) {
-                if (aliceEnabled) aliceLauncher.trigger() else entryPoint().voiceController().onPttPressed()
+            val now = SystemClock.elapsedRealtime()
+            when (
+                voicePressRoute(
+                    repeatCount = event.repeatCount,
+                    aliceContextActive = aliceLauncher.ownsMicButton(),
+                    keyCode = event.keyCode,
+                    previous = VoicePressMemory(lastLocalVoiceKeyCode, lastLocalVoiceDownMs),
+                    nowMs = now,
+                )
+            ) {
+                VoicePressRoute.ALICE -> {
+                    lastLocalVoiceDownMs = 0L
+                    lastLocalVoiceKeyCode = -1
+                    // The launcher tears Local AudioRecord/TTS down before Alice takes the mic.
+                    aliceLauncher.trigger()
+                }
+                VoicePressRoute.LOCAL -> {
+                    lastLocalVoiceDownMs = now
+                    lastLocalVoiceKeyCode = event.keyCode
+                    entryPoint().voiceController().onPttPressed()
+                }
+                VoicePressRoute.NONE -> Unit
             }
             true
         }

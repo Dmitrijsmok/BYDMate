@@ -217,6 +217,10 @@ object CommandTranslator {
         val stripped = commandString.removePrefix("迪加")
         composite[stripped]?.let { return it }
         table[stripped]?.let { return listOf(it) }
+        // Dynamic window positions: 1..99 use the validated per-door percentage fids.
+        // Exact 0/100 are already caught by [table] above and intentionally use the dedicated
+        // close/open fids because DiLink 3 accepts the percentage endpoints but does not move.
+        resolveWindowPosition(stripped)?.let { return it }
         // Dynamic temperature: 18..32 are numeric setpoints. 17 is BYD LO and 33 is BYD HI.
         // Requests below/above the numeric range collapse to those two sentinel setpoints.
         TEMP_REGEX.matchEntire(stripped)?.let { m ->
@@ -243,6 +247,30 @@ object CommandTranslator {
         return emptyList()
     }
 
+    private val resolveWindowPosition: (String) -> List<Resolved>? = { command ->
+        val match = WINDOW_POSITION_REGEX.matchEntire(command)
+        if (match == null) {
+            null
+        } else {
+            val action = WINDOW_POSITION_ACTIONS[match.groupValues[1]]
+            val percent = match.groupValues[2].toIntOrNull()
+            if (action == null || percent == null || percent !in 1..99) {
+                emptyList()
+            } else {
+                listOf(Resolved(action, percent))
+            }
+        }
+    }
+
+    // Dynamic per-window aperture command emitted by local NLU and the Alice bridge.
+    private val WINDOW_POSITION_REGEX = Regex("""(主驾|副驾|后左|后右)打开(\d{1,3})""")
+    private val WINDOW_POSITION_ACTIONS = mapOf(
+        "主驾" to "window_driver_pos",
+        "副驾" to "window_passenger_pos",
+        "后左" to "window_rear_left_pos",
+        "后右" to "window_rear_right_pos",
+    )
+
     // Dynamic temperature command: 设置温度<N> (e.g. 设置温度24). Range-clamped in resolve().
     private val TEMP_REGEX = Regex("""设置温度(\d+)""")
     private const val TEMP_MIN = 17
@@ -265,12 +293,19 @@ object CommandTranslator {
     // opening for fresh air; tune from user feedback. Stays under the >80 km/h gate.
     private const val VENT_PCT = 10
 
-    // Half = the 50 % detent, the only aperture between vent and full open that
-    // voice and the agent expose (arbitrary percentages are not offered).
+    // Half = the 50 % detent used by the existing author command. Arbitrary percentages
+    // are additionally accepted when the user explicitly says a percentage.
     private const val HALF_PCT = 50
 
     /** Action names produced only by dynamic resolution (absent from [table]). */
-    private val DYNAMIC_ACTIONS = setOf("ac_temp_main", "ac_wind_level")
+    private val DYNAMIC_ACTIONS = setOf(
+        "ac_temp_main",
+        "ac_wind_level",
+        "window_driver_pos",
+        "window_passenger_pos",
+        "window_rear_left_pos",
+        "window_rear_right_pos",
+    )
 
     /** Set of all action_names referenced by this translator. Used by invariant test. */
     fun allActions(): Set<String> =

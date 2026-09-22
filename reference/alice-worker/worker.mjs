@@ -70,7 +70,6 @@ const ALLOWED_ACTIONS = new Set([
   "sunroof.open",
   "sunroof.close",
   "sunroof.tilt",
-  "sunroof.position",
   "sunroof.vent",
   "sunroof.comfort",
   "sunroof.stop",
@@ -159,6 +158,7 @@ const DEVICE = {
   windowRearRight: "bydmate-window-rear-right",
   allWindows: "bydmate-windows-all",
   windowsVent: "bydmate-windows-vent",
+  windowsVentVoice: "bydmate-windows-vent-voice",
 
   interiorLight: "bydmate-interior-light",
   ambientLight: "bydmate-ambient-light",
@@ -166,6 +166,7 @@ const DEVICE = {
   hazard: "bydmate-hazard",
 
   seatDriverHeat: "bydmate-seat-driver-heat",
+  seatDriverHeat2: "bydmate-seat-driver-heat-level-2",
   seatDriverVent: "bydmate-seat-driver-vent",
   seatPassengerHeat: "bydmate-seat-passenger-heat",
   seatPassengerVent: "bydmate-seat-passenger-vent",
@@ -369,7 +370,10 @@ function aperturePositionCommand(text) {
 
   const value = Math.max(0, Math.min(100, Number(match[1])));
   if (normalized.includes("люк") || normalized.includes("sunroof")) {
-    return { action: "sunroof.position", value };
+    if (value === 0) return { action: "sunroof.close" };
+    if (value === 50) return { action: "sunroof.tilt" };
+    if (value === 100) return { action: "sunroof.open" };
+    return null;
   }
 
   if (!containsAny(normalized, ["окн", "стекл", "window"])) return null;
@@ -402,6 +406,31 @@ function dialogCommandFor(utterance) {
 
   const aperture = aperturePositionCommand(normalized);
   if (aperture) return aperture;
+
+  // On-car phrases that Yandex may hand to the Dialog webhook instead of a Smart Home
+  // capability. Keep them deterministic: no LLM and no ambiguity with cabin HVAC.
+  if (
+    normalized.includes("проветр") &&
+    containsAny(normalized, ["машин", "окн"])
+  ) {
+    return { action: "window.all.vent" };
+  }
+
+  if (
+    containsAny(normalized, ["подогрев", "обогрев"]) &&
+    normalized.includes("сид") &&
+    !normalized.includes("пассажир") &&
+    containsAny(normalized, [" 2", "2 ", "втор", "максим"])
+  ) {
+    return { action: "seat.driver.heat", value: 2 };
+  }
+
+  if (
+    containsAny(normalized, ["youtube", "ютуб", "revanced", "реванс", "rvx"]) &&
+    containsAny(normalized, ["открой", "открыть", "запусти", "запустить", "включи"])
+  ) {
+    return { action: "app.youtube.open" };
+  }
 
   const nav = extractNavigationApp(normalized);
   const routeVerb =
@@ -866,7 +895,7 @@ function baseDevice(
     device_info: {
       manufacturer: "BYDMate",
       model: name,
-      sw_version: "5.9",
+      sw_version: "5.12",
     },
   };
 }
@@ -1154,8 +1183,17 @@ function yandexDevices() {
 
     oneShotDevice(
       DEVICE.windowsVent,
-      "Проветри машину",
+      "Проветривание окон",
       "Приоткрыть все окна для проветривания"
+    ),
+
+    // Voice shortcut with the exact phrase used in the car. Yandex sometimes treats
+    // "проветри машину" as a generic conversational request instead of selecting the
+    // "Проветривание окон" card; this unambiguous device keeps the command in Smart Home.
+    oneShotDevice(
+      DEVICE.windowsVentVoice,
+      "Проветри машину",
+      "Приоткрыть все окна BYD для проветривания"
     ),
 
     // Seats
@@ -1163,6 +1201,15 @@ function yandexDevices() {
       DEVICE.seatDriverHeat,
       "Подогрев сиденья водителя",
       "Подогрев водительского сиденья BYD"
+    ),
+
+    // Yandex's official heat mode vocabulary is min/max rather than "первый/второй
+    // уровень". Keep the normal card above and add one exact voice shortcut for the
+    // driver's second physical level observed in the car.
+    oneShotDevice(
+      DEVICE.seatDriverHeat2,
+      "Второй уровень подогрева водителя",
+      "Включить второй уровень подогрева водительского сиденья BYD"
     ),
 
     seatVentDevice(
@@ -1235,19 +1282,15 @@ function yandexDevices() {
       "devices.types.openable",
       [
         onOffCapability(true),
-
-        rangeCapability(
-          "open",
-          0,
-          100,
-          10,
-          "unit.percent",
-          false,
-          true
-        ),
       ]
     ),
-    
+
+    oneShotDevice(
+      DEVICE.sunroofTilt,
+      "Люк наполовину",
+      "Открыть панорамный люк наполовину"
+    ),
+
     oneShotDevice(
       DEVICE.sunroofVent,
       "Проветривание крыши",
@@ -1301,7 +1344,7 @@ function yandexDevices() {
 
     baseDevice(
       DEVICE.outsideTemp,
-      "Наружный датчик машины",
+      "Температура снаружи машины",
       "Наружная температура автомобиля BYD",
       "devices.types.sensor.climate",
       [],
@@ -1328,8 +1371,8 @@ function yandexDevices() {
 
     appDevice(
       DEVICE.youtube,
-      "YouTube Premium",
-      "Открыть YouTube"
+      "YouTube BYD",
+      "Открыть установленный YouTube, ReVanced или RVX на экране автомобиля"
     ),
 
     appDevice(
@@ -1608,6 +1651,13 @@ const APP_ACTIONS = {
     "app.tiktok.open",
 };
 
+const FIXED_VALUE_ACTIONS = {
+  [DEVICE.seatDriverHeat2]: {
+    action: "seat.driver.heat",
+    value: 2,
+  },
+};
+
 const ONE_SHOT_ACTIONS = {
   [DEVICE.airflowFace]:
     "climate.airflow_face",
@@ -1633,6 +1683,9 @@ const ONE_SHOT_ACTIONS = {
   [DEVICE.windowsVent]:
     "window.all.vent",
 
+  [DEVICE.windowsVentVoice]:
+    "window.all.vent",
+
   [DEVICE.sunroofComfort]:
     "sunroof.comfort",
 
@@ -1656,6 +1709,10 @@ function isActionOnlyDevice(
     ) ||
     Object.prototype.hasOwnProperty.call(
       ONE_SHOT_ACTIONS,
+      id
+    ) ||
+    Object.prototype.hasOwnProperty.call(
+      FIXED_VALUE_ACTIONS,
       id
     ) ||
     id ===
@@ -2885,56 +2942,28 @@ async function handleSunroofAction(
       "devices.capabilities.range" &&
     state.instance === "open"
   ) {
-    const raw =
-      Number(state.value);
-
+    const raw = Number(state.value);
     if (!Number.isFinite(raw)) {
+      return actionError(type, "open", "INVALID_ACTION", "Invalid sunroof position");
+    }
+    const value = Math.max(0, Math.min(100, Math.round(raw / 10) * 10));
+    const action =
+      value === 0 ? "sunroof.close" :
+      value === 50 ? "sunroof.tilt" :
+      value === 100 ? "sunroof.open" :
+      null;
+
+    if (!action) {
       return actionError(
         type,
         "open",
         "INVALID_ACTION",
-        "Invalid sunroof position"
+        "Sunroof supports only closed, half, full and ventilation positions"
       );
     }
 
-    // Yandex exposes 10% steps. Keep 0/50/100 on the car's native
-    // detents; every other step is positioned locally by BYDMate 5.4
-    // using live sunroof percentage readback + STOP at the target.
-    const value = Math.max(
-      0,
-      Math.min(
-        100,
-        Math.round(raw / 10) * 10
-      )
-    );
-
-    if (value === 0) {
-      await enqueueCommand(
-        env,
-        "sunroof.close"
-      );
-    } else if (value === 50) {
-      await enqueueCommand(
-        env,
-        "sunroof.tilt"
-      );
-    } else if (value === 100) {
-      await enqueueCommand(
-        env,
-        "sunroof.open"
-      );
-    } else {
-      await enqueueCommand(
-        env,
-        "sunroof.position",
-        value
-      );
-    }
-
-    return actionDone(
-      type,
-      "open"
-    );
+    await enqueueCommand(env, action);
+    return actionDone(type, "open");
   }
 
   return actionError(
@@ -3129,6 +3158,37 @@ async function handleBinaryAction(
 /* ======================================================
    APP / ONE-SHOT ACTIONS
    ====================================================== */
+
+async function handleFixedValueAction(
+  env,
+  config,
+  capability
+) {
+  const type = capability.type || "";
+  const state = capability.state || {};
+
+  if (
+    type !== "devices.capabilities.on_off" ||
+    state.instance !== "on"
+  ) {
+    return actionError(
+      type,
+      state.instance || "unknown",
+      "INVALID_ACTION",
+      "Fixed-value shortcut is not supported"
+    );
+  }
+
+  if (Boolean(state.value)) {
+    await enqueueCommand(
+      env,
+      config.action,
+      config.value
+    );
+  }
+
+  return actionDone(type, "on");
+}
 
 async function handleOneShotAction(
   env,
@@ -3342,7 +3402,7 @@ function dashboard() {
   name="viewport"
   content="width=device-width,initial-scale=1"
 >
-<title>BYDmate Alice Bridge 5.9</title>
+<title>BYDmate Alice Bridge 5.12</title>
 <style>
 body{
   font-family:sans-serif;
@@ -3389,7 +3449,7 @@ small{
 </head>
 <body>
 
-<h2>BYDmate Alice Bridge 5.9</h2>
+<h2>BYDmate Alice Bridge 5.12</h2>
 
 <input
   id="key"
@@ -3710,7 +3770,7 @@ export default {
         service:
           "bydmate-alice",
         bridge:
-          "5.9",
+          "5.12",
         devices:
           exposedYandexDevices(env).length,
         actions:
@@ -4078,6 +4138,24 @@ export default {
                 capabilityResults.push(
                   await handleMediaAction(
                     env,
+                    capability
+                  )
+                );
+
+                continue;
+              }
+
+              if (
+                FIXED_VALUE_ACTIONS[
+                  device.id
+                ]
+              ) {
+                capabilityResults.push(
+                  await handleFixedValueAction(
+                    env,
+                    FIXED_VALUE_ACTIONS[
+                      device.id
+                    ],
                     capability
                   )
                 );
@@ -4488,7 +4566,7 @@ export default {
 
       return json({
         bridge:
-          "5.9",
+          "5.12",
 
         allowed_actions:
           Array.from(

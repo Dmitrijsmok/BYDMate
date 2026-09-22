@@ -13,6 +13,7 @@ import android.media.session.MediaSessionManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
+import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.bydmate.app.R
@@ -63,7 +64,13 @@ class ActionDispatcher @Inject constructor(
         private const val BT_CALL_ACTION_DIAL_HANGUP = "com.byd.btcall.action.DIAL_HANGUP"
         private const val BT_CALL_KEYCODE_DIAL = 313
         private const val YANDEX_MUSIC_PACKAGE = "ru.yandex.music"
-        private val YOUTUBE_PACKAGES = listOf("anddea.youtube", "com.google.android.youtube")
+        private val YOUTUBE_PACKAGES = listOf(
+            "anddea.youtube",
+            "app.rvx.android.youtube",
+            "app.revanced.android.youtube",
+            "com.google.android.youtube",
+        )
+        private const val CAR_SETTINGS_PACKAGE = "com.byd.carsettings"
         private const val NAVI_PACKAGE = "ru.yandex.yandexnavi"
         // Hard cap on user-set delay action; protects against typos like "60000000".
         private const val MAX_DELAY_MS = 60_000L
@@ -455,6 +462,7 @@ class ActionDispatcher @Inject constructor(
             "param" -> dispatchParam(action, data)
             "notification", "notification_silent", "notification_sound" -> showNotification(action)
             "app_launch" -> launchApp(action)
+            "system_settings" -> openSystemSettings(action)
             "call" -> dial(action)
             "navigate" -> navigate(action)
             "url" -> openUrl(action)
@@ -838,6 +846,35 @@ class ActionDispatcher @Inject constructor(
     }
 
     // --- external activities ---
+
+    private suspend fun openSystemSettings(action: ActionDef): DispatchResult {
+        val section = parsePayload(action.payload)?.optString("section")?.trim()?.lowercase()
+            ?.takeIf(String::isNotBlank)
+            ?: return DispatchResult(false, "section не задан")
+        if (section == "car") {
+            return launchApp(
+                ActionDef(
+                    command = "",
+                    displayName = "Настройки машины",
+                    kind = "app_launch",
+                    payload = JSONObject().put("packageName", CAR_SETTINGS_PACKAGE).toString(),
+                )
+            )
+        }
+        val intentAction = when (section) {
+            "android" -> Settings.ACTION_SETTINGS
+            "display" -> Settings.ACTION_DISPLAY_SETTINGS
+            "wifi" -> Settings.ACTION_WIFI_SETTINGS
+            "bluetooth" -> Settings.ACTION_BLUETOOTH_SETTINGS
+            "sound" -> Settings.ACTION_SOUND_SETTINGS
+            "apps" -> Settings.ACTION_APPLICATION_SETTINGS
+            else -> return DispatchResult(false, "неизвестный раздел настроек: $section")
+        }
+        return tryStartActivity(
+            Intent(intentAction).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            "system_settings:$section",
+        )
+    }
 
     private suspend fun launchApp(action: ActionDef): DispatchResult {
         val payload = parsePayload(action.payload)

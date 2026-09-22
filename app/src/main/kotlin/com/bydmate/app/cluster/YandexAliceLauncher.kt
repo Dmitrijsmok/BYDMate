@@ -7,6 +7,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.bydmate.app.navdata.NavPackages
 import com.bydmate.app.voice.VoiceController
 import java.util.ArrayDeque
 import java.util.Locale
@@ -25,12 +26,32 @@ internal class YandexAliceLauncher(
     private var listening = false
     private var suppressNativeUntil = 0L
 
+    fun ownsMicButton(): Boolean {
+        if (pending || listening) return true
+        val active = runCatching { service.rootInActiveWindow?.packageName?.toString() }.getOrNull()
+        if (isAliceContextPackage(active.orEmpty())) return true
+        return runCatching {
+            service.windows.any { window ->
+                isAliceContextPackage(window.root?.packageName?.toString().orEmpty())
+            }
+        }.getOrDefault(false)
+    }
+
     fun trigger() {
         val now = SystemClock.elapsedRealtime()
         if (now - lastTrigger < TRIGGER_DEBOUNCE_MS) return
         lastTrigger = now
         suppressNativeUntil = now + NATIVE_SUPPRESS_MS
 
+        val localWasActive = voiceController().stopForExternalAssistant()
+        if (localWasActive) {
+            handler.postDelayed({ startAliceUi() }, LOCAL_RELEASE_MS)
+        } else {
+            startAliceUi()
+        }
+    }
+
+    private fun startAliceUi() {
         resetAttempt()
         voiceController().beginExternalAssistantAudio()
 
@@ -61,8 +82,15 @@ internal class YandexAliceLauncher(
             return
         }
 
-        if (pending && packageName == YANDEX_PACKAGE) advance()
-        if (leftYandex(event, packageName)) scheduleFinishIfStillOutside()
+        if (pending && isAliceContextPackage(packageName)) advance()
+        if (leftYandexWhileListening(listening, event, packageName)) {
+            handler.postDelayed({
+                val active = runCatching {
+                    service.rootInActiveWindow?.packageName?.toString()
+                }.getOrNull()
+                if (listening && !isAliceContextPackage(active.orEmpty())) finish()
+            }, EXIT_GRACE_MS)
+        }
     }
 
     fun destroy() {
@@ -94,18 +122,6 @@ internal class YandexAliceLauncher(
             packageName == BYD_VOICE_PACKAGE &&
             event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
 
-    private fun leftYandex(event: AccessibilityEvent, packageName: String): Boolean =
-        listening &&
-            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            packageName.isNotBlank() &&
-            packageName != YANDEX_PACKAGE
-
-    private fun scheduleFinishIfStillOutside() {
-        handler.postDelayed({
-            val active = runCatching { service.rootInActiveWindow?.packageName?.toString() }.getOrNull()
-            if (listening && active != YANDEX_PACKAGE) finish()
-        }, EXIT_GRACE_MS)
-    }
 
     private fun resetAttempt() {
         handler.removeCallbacksAndMessages(null)
@@ -129,15 +145,12 @@ private class YandexAliceUiDriver(
 ) {
     private var coldClicks = 0
     private var lastColdClick = 0L
-    private var exactClicks = 0
-    private var lastExactClick = 0L
     private var lastUiClick = 0L
 
     fun resetAttempt() {
         coldClicks = 0
         lastColdClick = 0L
-        exactClicks = 0
-        lastExactClick = 0L
+
     }
 
     fun advance(): AliceUiStep {
@@ -158,23 +171,14 @@ private class YandexAliceUiDriver(
     }
 
     private fun stepExact(roots: List<AccessibilityNodeInfo>): AliceUiStep {
-        val now = SystemClock.elapsedRealtime()
-        val coldChain = coldClicks > 0
-        if (coldChain && exactClicks > 0 && now - lastExactClick < UI_DEBOUNCE_MS) {
-            return AliceUiStep.NONE
-        }
-
         val node = roots.asSequence().flatMap { root ->
             runCatching { root.findAccessibilityNodeInfosByViewId(EXACT_VIEW_ID) }
                 .getOrNull().orEmpty().asSequence()
         }.firstOrNull() ?: return AliceUiStep.NONE
 
-        if (!click(node)) return AliceUiStep.NONE
-        if (!coldChain) return AliceUiStep.DONE
-
-        exactClicks++
-        lastExactClick = now
-        return if (exactClicks > 1) AliceUiStep.DONE else AliceUiStep.PROGRESS
+        // One confirmed Alice control click is enough on current Yandex Browser. The old cold-chain
+        // logic deliberately clicked it twice; on DiLink 3 that toggled listening ON -> OFF -> ON.
+        return if (click(node)) AliceUiStep.DONE else AliceUiStep.NONE
     }
 
     private fun stepDescription(roots: List<AccessibilityNodeInfo>): AliceUiStep {
@@ -283,10 +287,13 @@ private fun addYandexRoot(
     roots: MutableList<AccessibilityNodeInfo>,
     root: AccessibilityNodeInfo?,
 ) {
-    if (root?.packageName?.toString() == YANDEX_PACKAGE) roots += root
+    if (root != null && isAliceContextPackage(root.packageName?.toString().orEmpty())) roots += root
 }
 
 private const val YANDEX_PACKAGE = "com.yandex.browser"
+
+internal fun isAliceContextPackage(packageName: String): Boolean =
+    packageName == YANDEX_PACKAGE || packageName in NavPackages.YANDEX_NAVI
 private const val BYD_VOICE_PACKAGE = "com.byd.vrassistant"
 private const val EXACT_VIEW_ID = "com.yandex.browser:id/alice_input_quarknyx"
 private const val COLD_ID_FAMILY = "bro_omnibox_button_microphone"
@@ -301,6 +308,19 @@ private val COLD_DESCRIPTIONS = setOf(
     "voice search",
 )
 private const val WARMUP_MS = 150L
+private const val LOCAL_RELEASE_MS = 220L
+private fun leftYandexWhileListening(
+    listening: Boolean,
+    event: AccessibilityEvent,
+    packageName: String,
+): Boolean {
+    if (!listening) return false
+    if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return false
+    if (packageName.isBlank()) return false
+    return !isAliceContextPackage(packageName)
+}
+
+
 private const val RETRY_MS = 180L
 private const val COLD_RETRY_MS = 900L
 private const val UI_DEBOUNCE_MS = 800L

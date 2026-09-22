@@ -627,15 +627,23 @@ class SherpaTtsEngine(
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .setSampleRate(sampleRate)
             .build()
-        // BYD DiLink routes STREAM_BTTS(17) to the UI "Voice" volume slider (live-validated on
-        // Leopard 3, 2026-07-05). setLegacyStreamType is the only public way to target a custom
-        // stream; if this firmware rejects it (exception or uninitialized track), fall back to
-        // the previous accessibility route, which has an independent volume.
+        // BYD DiLink routes STREAM_BTTS(17) to the UI "Voice" volume slider on firmwares
+        // that expose it (live-validated on Leopard 3, 2026-07-05). DiLink 3 / ATTO 3 field
+        // diagnostics report that stream 17 is absent, yet constructing a track can still appear
+        // to succeed and leave speech extremely quiet. Skip stream 17 entirely on DiLink 3 and
+        // use the accessibility speech route directly. Other firmwares keep the old primary +
+        // fallback behaviour unchanged.
         var viaFallback = false
-        val result = createTrackWithFallback(
-            primary = { newTrack(bydVoiceAttributes(), format, bufLen).takeIfInitialized() },
-            fallback = { viaFallback = true; newTrack(accessibilityAttributes(), format, bufLen) },
-        )
+        val result = if (shouldUseBydVoiceStream(Build.FINGERPRINT)) {
+            createTrackWithFallback(
+                primary = { newTrack(bydVoiceAttributes(), format, bufLen).takeIfInitialized() },
+                fallback = { viaFallback = true; newTrack(accessibilityAttributes(), format, bufLen) },
+            )
+        } else {
+            viaFallback = true
+            Log.i(TAG, "DiLink3 detected: skipping BYD stream $BYD_STREAM_BTTS")
+            newTrack(accessibilityAttributes(), format, bufLen)
+        }
         if (result.state != AudioTrack.STATE_INITIALIZED) {
             Log.w(TAG, "audio track bad state")
             runCatching { result.release() }
@@ -683,6 +691,11 @@ class SherpaTtsEngine(
         internal val TTS_USAGE = AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY
         // BYD custom stream behind the DiLink UI "Voice" volume slider.
         internal const val BYD_STREAM_BTTS = 17
+
+        /** DiLink 3 / ATTO 3 does not expose BYD's custom voice stream 17. Keep the decision
+         *  pure so field fingerprints can be pinned by unit tests without Android audio APIs. */
+        internal fun shouldUseBydVoiceStream(fingerprint: String): Boolean =
+            !fingerprint.contains("DiLink3", ignoreCase = true)
 
         // The track buffer holds this many seconds of audio so a whole sentence's blocking write
         // returns while the sentence is still playing -- the worker then synthesizes the NEXT

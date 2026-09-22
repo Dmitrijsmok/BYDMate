@@ -1,6 +1,8 @@
 package com.bydmate.app.cluster
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SteeringWheelKeyDecisionVoiceTest {
@@ -42,4 +44,48 @@ class SteeringWheelKeyDecisionVoiceTest {
         assertEquals(VoiceKeyDecision.IGNORE, diLink3VoiceDecision(304, isDown = true, voiceEnabled = false))
         assertEquals(VoiceKeyDecision.IGNORE, diLink3VoiceDecision(327, isDown = true, voiceEnabled = false))
     }
+    @Test fun local_voice_second_press_within_window_is_double_press() {
+        assertTrue(isVoiceDoublePress(previousDownMs = 1_000L, nowMs = 1_350L))
+    }
+
+    @Test fun local_voice_press_after_window_is_normal_press() {
+        assertFalse(isVoiceDoublePress(previousDownMs = 1_000L, nowMs = 1_351L))
+    }
+
+    @Test fun first_local_voice_press_is_never_double_press() {
+        assertFalse(isVoiceDoublePress(previousDownMs = 0L, nowMs = 100L))
+    }
+
+    @Test fun yandex_context_routes_single_press_to_alice() {
+        assertEquals(
+            VoicePressRoute.ALICE,
+            voicePressRoute(
+                repeatCount = 0,
+                aliceContextActive = true,
+                keyCode = 304,
+                previous = VoicePressMemory(-1, 0L),
+                nowMs = 10_000L,
+            ),
+        )
+    }
+
+    @Test fun outside_yandex_context_first_press_routes_to_local() {
+        assertEquals(
+            VoicePressRoute.LOCAL,
+            voicePressRoute(
+                repeatCount = 0,
+                aliceContextActive = false,
+                keyCode = 304,
+                previous = VoicePressMemory(-1, 0L),
+                nowMs = 10_000L,
+            ),
+        )
+    }
+
+    @Test fun yandex_browser_and_navigator_are_alice_contexts() {
+        assertTrue(isAliceContextPackage("com.yandex.browser"))
+        assertTrue(isAliceContextPackage("ru.yandex.yandexnavi"))
+        assertFalse(isAliceContextPackage("com.bydmate.app"))
+    }
+
 }
