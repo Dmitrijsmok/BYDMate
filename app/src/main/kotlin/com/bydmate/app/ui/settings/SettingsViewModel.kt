@@ -1912,6 +1912,31 @@ class SettingsViewModel @Inject constructor(
                 )
             }
 
+            // Cabin temperature is optional across BYD generations. The normal snapshot only
+            // shows null after sentinel/range filtering, which is not enough to tell an unsupported
+            // channel from a decoder mismatch. Read this one fid raw for field diagnostics.
+            appendLine("--- cabin temperature probe ---")
+            try {
+                val address = com.bydmate.app.data.nativestack.FidAddresses.of("insideTemp")
+                val raw = helperClient.readBatch(
+                    listOf(com.bydmate.app.data.vehicle.BatchReadItem(5, address.device, address.fid))
+                )?.firstOrNull()
+                val catalogFid = fidCatalogManager.catalog?.fidOf("Ac.AC_TEMP_INSIDE")
+                if (raw == null) {
+                    appendLine(
+                        "insideTemp dev=${address.device} fid=${address.fid} status=unavailable " +
+                            "catalog_fid=${catalogFid ?: "-"} decoded=${live?.insideTemp}"
+                    )
+                } else {
+                    appendLine(
+                        "insideTemp dev=${address.device} fid=${address.fid} status=${raw.first} " +
+                            "raw=${raw.second} catalog_fid=${catalogFid ?: "-"} decoded=${live?.insideTemp}"
+                    )
+                }
+            } catch (e: Exception) {
+                appendLine("error: ${e.message}")
+            }
+
             // ICE-side addresses nothing in the app reads yet (#184). A DM-i owner sends this
             // dump with the engine running and the raw words say which of them are live there.
             appendLine("--- hybrid probe ---")

@@ -511,9 +511,32 @@ class VoiceController @Inject constructor(
         // An unanswered clarifying question from the agent outranks NLU: the phrase
         // is the ANSWER ("водителя", "назови её Дом") and must reach ask() verbatim.
         val followUp = runCatching { agentOrchestrator.expectsFollowUp() }.getOrDefault(false)
-        val res = if (followUp) null else resolve(command, currentLang())
+        val lang = currentLang()
+        val res = if (followUp) null else resolve(command, lang)
+        val localReply = if (!followUp && res == null) {
+            LocalVehicleQuery.answer(command, lang, gate.vehicleSnapshot())
+        } else {
+            null
+        }
         _state.value = VoiceUiState.Thinking
-        if (res != null) apply(res, command, decodeMs) else agentFallback(command, decodeMs)
+        when {
+            res != null -> apply(res, command, decodeMs)
+            localReply != null -> {
+                earcon.ok()
+                _state.value = VoiceUiState.AgentAnswer(localReply.text)
+                record(
+                    VoiceJournalEntry.Route.NLU,
+                    command,
+                    withDecodeMs(command, decodeMs),
+                    VoiceJournalEntry.Outcome.OK,
+                    null,
+                    "Local vehicle query: kind=${localReply.kind} transcript=\"$command\"",
+                    answer = localReply.text,
+                )
+                announce("Голос", localReply.text, localReply.text)
+            }
+            else -> agentFallback(command, decodeMs)
+        }
     }
 
     /** Wait for the answer belonging to the current turn to actually start and drain.
