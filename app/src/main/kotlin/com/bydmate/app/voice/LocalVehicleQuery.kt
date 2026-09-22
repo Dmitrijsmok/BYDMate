@@ -64,7 +64,8 @@ internal object LocalVehicleQuery {
         "температур" in q || "градус" in q
 
     private fun looksLikeRead(q: String): Boolean =
-        q.startsWith("заряд") ||
+        q == "заряд" ||
+            q.startsWith("заряд ") ||
             q.startsWith("температура") ||
             q.startsWith("сколько") ||
             q.startsWith("какой") ||
