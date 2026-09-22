@@ -1,9 +1,7 @@
 name: Build unsigned APK
 
 on:
-  push:
-    branches:
-      - build/64020-alice-stable
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -11,24 +9,5 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: gradle/actions/setup-gradle@v5
-      - name: Assemble unsigned release
-        run: ./gradlew :app:assembleRelease -PallowUnsignedRelease --stacktrace
-      - name: Show APK
-        run: |
-          ls -lah app/build/outputs/apk/release/
-          sha256sum app/build/outputs/apk/release/*.apk
-      - name: Upload unsigned APK
-        uses: actions/upload-artifact@v7
-        with:
-          name: BYDMate-3.17.4-64020-unsigned
-          path: app/build/outputs/apk/release/*.apk
-          if-no-files-found: error
-          retention-days: 7
+      - run: echo "Manual-only after build 64020"
