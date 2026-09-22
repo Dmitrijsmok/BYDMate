@@ -288,7 +288,7 @@ private fun addYandexRoot(
     roots: MutableList<AccessibilityNodeInfo>,
     root: AccessibilityNodeInfo?,
 ) {
-    if (isAliceContextPackage(root?.packageName?.toString().orEmpty())) roots += root
+    if (root != null && isAliceContextPackage(root.packageName?.toString().orEmpty())) roots += root
 }
 
 private const val YANDEX_PACKAGE = "com.yandex.browser"
