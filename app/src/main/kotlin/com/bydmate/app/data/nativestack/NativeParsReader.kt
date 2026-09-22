@@ -336,7 +336,10 @@ class NativeParsReader @Inject constructor(
             gear                = field<Int>("gear"),
             powerState          = field<Int>("powerState"),
             insideTemp          = field<Int>("insideTemp")
-                ?: field<Int>("insideTempAlt")?.takeIf { insideTempPrimaryRaw == FEATURE_LINK_ERROR },
+                ?: field<Int>("insideTempAlt")?.takeIf {
+                    insideTempPrimaryRaw == FEATURE_LINK_ERROR ||
+                        insideTempPrimaryRaw == SentinelDecoder.WRONG_DIRECTION
+                },
             acStatus            = field<Int>("acStatus"),
             acTemp              = field<Int>("acTemp"),
             fanLevel            = field<Int>("fanLevel"),
