@@ -52,6 +52,7 @@ internal fun voicePressRoute(
     else -> VoicePressRoute.LOCAL
 }
 
+@Suppress("TooManyFunctions") // Voice scheduling helpers keep the key-event lifecycle in one service.
 class SteeringWheelKeyService : AccessibilityService() {
 
     private var cachedEntryPoint: ClusterEntryPoint? = null
