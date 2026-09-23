@@ -53,6 +53,12 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
     // user's latest level. Guarded by duckLock.
     private var pendingRestore: Int? = null
 
+    // DiLink 3 shared MUSIC-route pause ownership. begin/end may be nested because
+    // accessibility can re-enter while a voice hand-off is already active.
+    // Guarded by duckLock so a repeated begin cannot lose the obligation to resume media.
+    private var sharedAssistantPauseDepth = 0
+    private var sharedAssistantPausedByUs = false
+
     // Serializes duckMusic / restoreMusic / applyExplicitVolume / pendingRestoreVolume.
     // Without it, a session teardown racing an explicit volume command can interleave
     // between the command's setStreamVolume and its restore-target registration and
@@ -156,26 +162,39 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
     }
 
     /**
-     * DiLink 3 routes both background media and assistant speech through the same effective
-     * MUSIC path. Lowering STREAM_MUSIC therefore also lowers our/Alice's answer. Pause the
-     * active media session instead; the assistant keeps full speech volume and the microphone
-     * is no longer flooded by music. Returns true only when we actually paused active media.
+     * DiLink 3 routes background media and assistant speech through the same effective MUSIC path.
+     * Volume ducking would also lower assistant speech, so the first active voice owner pauses
+     * media and the final owner resumes it. Nested/repeated begin/end calls are intentionally safe.
      */
-    internal fun pauseMusicForSharedAssistant(): Boolean {
-        if (!audioManager.isMusicActive) return false
-        return runCatching {
-            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
-            Log.i(TAG, "pauseMusicForSharedAssistant: MEDIA_PAUSE")
-            true
-        }.getOrDefault(false)
+    internal fun beginSharedAssistantAudio(): Unit = synchronized(duckLock) {
+        if (sharedAssistantPauseDepth == 0) {
+            sharedAssistantPausedByUs = audioManager.isMusicActive && runCatching {
+                dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
+                Log.i(TAG, "beginSharedAssistantAudio: MEDIA_PAUSE")
+                true
+            }.getOrDefault(false)
+        }
+        sharedAssistantPauseDepth++
+        Log.i(TAG, "beginSharedAssistantAudio: depth=$sharedAssistantPauseDepth paused=$sharedAssistantPausedByUs")
     }
 
-    internal fun resumeMusicAfterSharedAssistant(wasPaused: Boolean) {
-        if (!wasPaused) return
-        runCatching {
-            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
-            Log.i(TAG, "resumeMusicAfterSharedAssistant: MEDIA_PLAY")
+    internal fun endSharedAssistantAudio(): Unit = synchronized(duckLock) {
+        if (sharedAssistantPauseDepth <= 0) {
+            Log.i(TAG, "endSharedAssistantAudio: no owner")
+            return
         }
+        sharedAssistantPauseDepth--
+        if (sharedAssistantPauseDepth == 0) {
+            val resume = sharedAssistantPausedByUs
+            sharedAssistantPausedByUs = false
+            if (resume) {
+                runCatching {
+                    dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
+                    Log.i(TAG, "endSharedAssistantAudio: MEDIA_PLAY")
+                }
+            }
+        }
+        Log.i(TAG, "endSharedAssistantAudio: depth=$sharedAssistantPauseDepth")
     }
 
     private fun dispatchMediaKey(keyCode: Int) {
