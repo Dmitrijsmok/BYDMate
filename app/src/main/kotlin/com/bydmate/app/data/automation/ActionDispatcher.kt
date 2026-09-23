@@ -1009,7 +1009,7 @@ class ActionDispatcher @Inject constructor(
     }
 
     private fun resolveNavigator(): Pair<String, String?> =
-        RouteNavigatorResolver.resolve(context, ::isPackageInstalled) { Log.i(TAG, it) }
+        RouteNavigatorResolver.resolve(context) { Log.i(TAG, it) }
 
     /**
      * Optional per-command navigator override used by external deterministic bridges (Alice).
