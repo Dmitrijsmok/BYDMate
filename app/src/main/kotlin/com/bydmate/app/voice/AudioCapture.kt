@@ -227,7 +227,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         val saved = prefs.getInt(KEY_PRE_DUCK_VOLUME, -1)
         if (saved < 0) return
         val cur = runCatching { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrNull()
-        if (cur != null && cur <= DUCK_VOLUME_INDEX) {
+        if (cur != null && cur <= maxOf(DUCK_VOLUME_INDEX, EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX)) {
             runCatching { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, saved, 0) }
             Log.i(TAG, "restoreStuckDuck: volume stuck at $cur, restored to $saved")
         } else {
