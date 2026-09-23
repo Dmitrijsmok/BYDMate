@@ -1,6 +1,7 @@
 package com.bydmate.app.voice
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import com.bydmate.app.agent.AgentOrchestrator
 import com.bydmate.app.agent.AgentResult
@@ -11,6 +12,7 @@ import com.bydmate.app.R
 import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.data.local.entity.ActionDef
 import com.bydmate.app.data.remote.AliceApertureController
+import com.bydmate.app.data.remote.AliceAppResolver
 import com.bydmate.app.ui.overlay.ListeningOverlay
 import com.bydmate.app.util.appLocalizedContext
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -77,6 +79,17 @@ class VoiceController @Inject constructor(
         apertureController = controller
     }
 
+    // Method injection keeps the constructor stable for the existing JVM voice suite while
+    // explicit app-launch requests reuse Alice's dynamic package/label resolver.
+    private var appResolver: AliceAppResolver? = null
+
+    @Inject
+    internal fun injectAppResolver(resolver: AliceAppResolver) {
+        appResolver = resolver
+    }
+
+    @Volatile private var externalAssistantMediaPaused = false
+
     private val busy = AtomicBoolean(false)
     @Volatile private var sessionJob: Job? = null
     @Volatile private var warmupJob: Job? = null
@@ -96,13 +109,23 @@ class VoiceController @Inject constructor(
     fun sessionActive(): Boolean = listening.value || busy.get()
 
     /**
-     * External assistants such as Alice speak through STREAM_MUSIC on DiLink.
-     * Do not lower STREAM_MUSIC here: doing so also lowers Alice herself, which made every
-     * invocation start at volume index 4. Yandex manages its own audio focus/ducking.
+     * DiLink 3 does not reliably duck background media for Alice, and Alice itself is effectively
+     * on the same MUSIC route. Changing STREAM_MUSIC would lower Alice too, so pause only the
+     * currently active media session and resume it when Alice leaves. Other BYD generations keep
+     * relying on the platform/Yandex audio-focus behaviour.
      */
-    fun beginExternalAssistantAudio() = Unit
+    fun beginExternalAssistantAudio() {
+        if (!SherpaTtsEngine.shouldUseBydVoiceStream(Build.FINGERPRINT.orEmpty())) {
+            externalAssistantMediaPaused =
+                runCatching { audioCapture.pauseMusicForSharedAssistant() }.getOrDefault(false)
+        }
+    }
 
-    fun endExternalAssistantAudio() = Unit
+    fun endExternalAssistantAudio() {
+        val paused = externalAssistantMediaPaused
+        externalAssistantMediaPaused = false
+        runCatching { audioCapture.resumeMusicAfterSharedAssistant(paused) }
+    }
 
     /** Provider hand-off: Alice must never start while Local still owns AudioRecord/TTS.
      *  Returns true when there was local work to tear down, so launchers may allow a short
@@ -335,11 +358,19 @@ class VoiceController @Inject constructor(
         _state.value = VoiceUiState.Listening
         _listening.value = true
         earcon.ok()
-        // Duck the music the instant the orb appears -- captureSession's own duck fires only after
-        // the GigaAM recognizer is constructed (~1.3 s, field defect APK 337). duckMusic() is
-        // idempotent (volume already at the duck target returns null), so the inner call becomes
-        // a no-op and this early saved volume is the one restored at session teardown.
-        val earlyDuck = runCatching { audioCapture.duckMusic() }.getOrNull()
+        // DiLink 3 aliases local TTS and background media onto the same effective MUSIC route.
+        // Direct volume ducking would also make the assistant's answer quiet, so pause media for
+        // the whole local voice session there. Other BYD generations keep the author's explicit
+        // STREAM_MUSIC duck.
+        val mediaPausedForVoice =
+            if (!SherpaTtsEngine.shouldUseBydVoiceStream(Build.FINGERPRINT.orEmpty())) {
+                runCatching { audioCapture.pauseMusicForSharedAssistant() }.getOrDefault(false)
+            } else {
+                false
+            }
+        val earlyDuck =
+            if (mediaPausedForVoice) null
+            else runCatching { audioCapture.duckMusic() }.getOrNull()
         sessionJob = scope.launch {
             val session = coroutineContext[Job]
             runCatching { showListeningOverlay(context.getString(R.string.voice_listening)) }
@@ -454,6 +485,7 @@ class VoiceController @Inject constructor(
                 cancellableAskJob = null
                 processingUtterance = false
                 runCatching { audioCapture.restoreMusic(earlyDuck) }
+                runCatching { audioCapture.resumeMusicAfterSharedAssistant(mediaPausedForVoice) }
                 _listening.value = false
                 _state.value = VoiceUiState.Idle
                 // Distinct off-cue so the driver can tell session start (ok) and stop apart by ear.
@@ -513,7 +545,16 @@ class VoiceController @Inject constructor(
         val followUp = runCatching { agentOrchestrator.expectsFollowUp() }.getOrDefault(false)
         val lang = currentLang()
         val res = if (followUp) null else resolve(command, lang)
-        val localReply = if (!followUp && res == null) {
+        val localApp = if (!followUp && res == null) {
+            LocalAppLaunchQuery.target(command, lang)?.let { appName ->
+                appResolver?.resolveText(appName)?.getOrNull()?.let { packageName ->
+                    appName to packageName
+                }
+            }
+        } else {
+            null
+        }
+        val localReply = if (!followUp && res == null && localApp == null) {
             LocalVehicleQuery.answer(command, lang, gate.vehicleSnapshot())
         } else {
             null
@@ -521,6 +562,7 @@ class VoiceController @Inject constructor(
         _state.value = VoiceUiState.Thinking
         when {
             res != null -> apply(res, command, decodeMs)
+            localApp != null -> launchLocalApp(localApp.first, localApp.second, command, decodeMs)
             localReply != null -> {
                 earcon.ok()
                 _state.value = VoiceUiState.AgentAnswer(localReply.text)
@@ -536,6 +578,52 @@ class VoiceController @Inject constructor(
                 announce("Голос", localReply.text, localReply.text)
             }
             else -> agentFallback(command, decodeMs)
+        }
+    }
+
+    private suspend fun launchLocalApp(
+        appName: String,
+        packageName: String,
+        transcript: String,
+        decodeMs: Long?,
+    ) {
+        val result = actionDispatcher.dispatch(
+            ActionDef(
+                command = "",
+                displayName = "Запуск $appName",
+                kind = "app_launch",
+                payload = org.json.JSONObject().put("packageName", packageName).toString(),
+            ),
+            data = gate.vehicleSnapshot(),
+        )
+        if (result.success) {
+            earcon.ok()
+            val answer = "Открываю $appName."
+            _state.value = VoiceUiState.Done(transcript)
+            record(
+                VoiceJournalEntry.Route.NLU,
+                transcript,
+                withDecodeMs(transcript, decodeMs),
+                VoiceJournalEntry.Outcome.OK,
+                null,
+                "Local app launch: app=$appName package=$packageName transcript=\"$transcript\"",
+                answer = answer,
+            )
+            announce("Голос", answer, answer)
+            scope.launch { runCatching { agentOrchestrator.noteAction(transcript) } }
+        } else {
+            val reason = result.reason ?: "не получилось открыть $appName"
+            earcon.fail()
+            _state.value = VoiceUiState.Blocked(reason)
+            record(
+                VoiceJournalEntry.Route.NLU,
+                transcript,
+                withDecodeMs(transcript, decodeMs),
+                VoiceJournalEntry.Outcome.BLOCKED,
+                reason,
+                "Local app launch failed: app=$appName package=$packageName transcript=\"$transcript\"",
+            )
+            announce("Голос", "Не получилось открыть $appName", "Не получилось")
         }
     }
 
