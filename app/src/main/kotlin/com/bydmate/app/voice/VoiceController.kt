@@ -115,13 +115,13 @@ class VoiceController @Inject constructor(
      */
     fun beginExternalAssistantAudio() {
         if (!SherpaTtsEngine.shouldUseBydVoiceStream(Build.FINGERPRINT.orEmpty())) {
-            runCatching { audioCapture.beginSharedAssistantAudio() }
+            runCatching { audioCapture.beginAssistantAudio(AssistantAudioOwner.ALICE) }
         }
     }
 
     fun endExternalAssistantAudio() {
         if (!SherpaTtsEngine.shouldUseBydVoiceStream(Build.FINGERPRINT.orEmpty())) {
-            runCatching { audioCapture.endSharedAssistantAudio() }
+            runCatching { audioCapture.endAssistantAudio(AssistantAudioOwner.ALICE) }
         }
     }
 
@@ -357,13 +357,12 @@ class VoiceController @Inject constructor(
         _listening.value = true
         earcon.ok()
         // DiLink 3 aliases local TTS and background media onto the same effective MUSIC route.
-        // Direct volume ducking would also make the assistant's answer quiet, so pause media for
-        // the whole local voice session there. Other BYD generations keep the author's explicit
-        // STREAM_MUSIC duck.
+        // Never change/pause STREAM_MUSIC there: ask the media app to duck via audio focus instead.
+        // Other BYD generations retain the author's explicit stream-volume duck.
         val sharedMusicRoute =
             !SherpaTtsEngine.shouldUseBydVoiceStream(Build.FINGERPRINT.orEmpty())
         if (sharedMusicRoute) {
-            runCatching { audioCapture.beginSharedAssistantAudio() }
+            runCatching { audioCapture.beginAssistantAudio(AssistantAudioOwner.LOCAL) }
         }
         val earlyDuck =
             if (sharedMusicRoute) null
@@ -399,6 +398,11 @@ class VoiceController @Inject constructor(
                     when (ev) {
                         is ContinuousAsrEvent.SpeechStart -> {
                             lastEventMs = System.currentTimeMillis()
+                            // Re-assert MAY_DUCK on DiLink 3. This matters when the driver starts
+                            // Yandex Music after the continuous local session was already opened.
+                            if (sharedMusicRoute) {
+                                runCatching { audioCapture.refreshAssistantAudio(AssistantAudioOwner.LOCAL) }
+                            }
                             // The live VAD now detects speech while a routing child is in
                             // flight; clobbering Thinking here would violate the busy-drop
                             // contract (no state change while an utterance is being routed).
@@ -483,7 +487,7 @@ class VoiceController @Inject constructor(
                 processingUtterance = false
                 runCatching { audioCapture.restoreMusic(earlyDuck) }
                 if (sharedMusicRoute) {
-                    runCatching { audioCapture.endSharedAssistantAudio() }
+                    runCatching { audioCapture.endAssistantAudio(AssistantAudioOwner.LOCAL) }
                 }
                 _listening.value = false
                 _state.value = VoiceUiState.Idle
@@ -547,7 +551,16 @@ class VoiceController @Inject constructor(
         val res = if (followUp) null else resolve(command, lang)
         val localApp = if (!followUp && res == null) {
             LocalAppLaunchQuery.target(command, lang)?.let { appName ->
-                appResolver?.resolveText(appName)?.getOrNull()?.let { packageName ->
+                // Hilt normally injects the shared resolver. The direct fallback makes the local
+                // deterministic path fail-safe if method injection is ever skipped in a device-only
+                // lifecycle, instead of silently sending an obvious "open app" command to the LLM.
+                val resolver = appResolver ?: AliceAppResolver(context)
+                val resolved = resolver.resolveText(appName)
+                resolved.exceptionOrNull()?.let {
+                    Log.i(TAG, "Local app resolve miss: app=" + appName + " reason=" + it.message)
+                }
+                resolved.getOrNull()?.let { packageName ->
+                    Log.i(TAG, "Local app resolved: app=" + appName + " package=" + packageName)
                     appName to packageName
                 }
             }
