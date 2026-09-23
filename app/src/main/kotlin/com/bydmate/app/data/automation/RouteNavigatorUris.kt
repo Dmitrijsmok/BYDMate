@@ -32,6 +32,11 @@ object RouteNavigatorUris {
     const val DGIS_PACKAGE = "ru.dublgis.dgismobile"
     const val WAZE_PACKAGE = "com.waze"
     const val GOOGLE_MAPS_PACKAGE = "com.google.android.apps.maps"
+    const val GOOGLE_MAPS_REVANCED_PACKAGE = "app.revanced.android.apps.maps"
+    val GOOGLE_MAPS_PACKAGES = listOf(
+        GOOGLE_MAPS_REVANCED_PACKAGE,
+        GOOGLE_MAPS_PACKAGE,
+    )
 
     /** Log/diagnostic names of the three deep links. */
     const val MODE_SEARCH = "search"
