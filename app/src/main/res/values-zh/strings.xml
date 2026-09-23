@@ -1249,6 +1249,8 @@
     <string name="settings_route_navigator_dgis">2GIS</string>
     <string name="settings_route_navigator_maps">Yandex 地图</string>
     <string name="settings_route_navigator_hint">规划路线和地图搜索时打开哪个应用</string>
+    <string name="settings_route_navigator_package_label">导航应用包名（可选）</string>
+    <string name="settings_route_navigator_package_hint">对于自定义版本，请输入准确的 package，例如 app.revanced.android.apps.maps。留空则自动检测已安装的应用。</string>
     <string name="settings_agent_memory_title">驾驶员记忆</string>
     <string name="settings_agent_memory_hint">当你告诉智能体时，它会记住你的名字和长期偏好。说“忘记……”即可删除某一条</string>
     <string name="settings_agent_memory_empty">暂无记忆内容</string>
