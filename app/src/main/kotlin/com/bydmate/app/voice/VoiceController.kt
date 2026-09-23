@@ -40,6 +40,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
+@Suppress("LargeClass") // Voice session state machine stays cohesive; splitting it risks lifecycle regressions.
 class VoiceController @Inject constructor(
     private val audioCapture: AudioCapture,
     private val actionDispatcher: ActionDispatcher,
@@ -529,6 +530,7 @@ class VoiceController @Inject constructor(
      *  agentFallback path the legacy final-transcript routing uses below (VoiceJournal writes,
      *  noteAction, announce — all unchanged). decodeMs is also logged for RTF measurement on
      *  the car, and threaded into the VoiceJournal detail for each utterance. */
+    @Suppress("CyclomaticComplexMethod") // Ordered NLU/app/vehicle/agent routing is intentionally explicit.
     private suspend fun routeUtterance(transcript: String, decodeMs: Long) {
         // The transcript row is painted synchronously at the Utterance event before this routing
         // coroutine starts; routing must never be what delays visible recognition feedback.
