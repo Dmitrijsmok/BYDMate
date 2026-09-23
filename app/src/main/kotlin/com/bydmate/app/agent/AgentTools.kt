@@ -10,6 +10,7 @@ import com.bydmate.app.data.automation.ActionValidationError
 import com.bydmate.app.data.automation.AutomationEngine
 import com.bydmate.app.data.automation.ConfirmOverlayManager
 import com.bydmate.app.data.automation.DispatchResult
+import com.bydmate.app.data.automation.RouteNavigatorDiscovery
 import com.bydmate.app.data.automation.RouteNavigatorUris
 import com.bydmate.app.data.automation.PlaceGeometry
 import com.bydmate.app.data.automation.RuleDraftValidator
@@ -206,7 +207,11 @@ class AgentTools @Inject constructor(
     }
 
     internal var googleMapsForegroundCheck: (Long) -> Boolean = { sinceMs ->
-        RouteNavigatorUris.GOOGLE_MAPS_PACKAGE in foregroundPackagesSince(sinceMs)
+        val installed = RouteNavigatorDiscovery.packagesFor(
+            RouteNavigatorUris.GOOGLE_MAPS,
+            context.packageManager,
+        ).toSet()
+        foregroundPackagesSince(sinceMs).any { it in installed }
     }
 
     /** Test seam - poll interval for the navigate foreground verification. */
@@ -2654,6 +2659,9 @@ class AgentTools @Inject constructor(
             "музыка" to "яндекс музыка",
             "яндекс карты" to "яндекс карты",
             "карты" to "яндекс карты",
+            "google maps" to "google maps",
+            "гугл карты" to "google maps",
+            "карты google" to "google maps",
             "яндекс навигатор" to "яндекс навигатор",
             "навигатор" to "навигатор",
             "регистратор" to "регистратор",
@@ -2669,6 +2677,9 @@ class AgentTools @Inject constructor(
             "яндекс навигатор" to listOf("ru.yandex.yandexnavi"),
             "яндекс карты" to YANDEX_MAPS_PACKAGES,
             "карты" to YANDEX_MAPS_PACKAGES,
+            "google maps" to RouteNavigatorUris.GOOGLE_MAPS_PACKAGES,
+            "гугл карты" to RouteNavigatorUris.GOOGLE_MAPS_PACKAGES,
+            "карты google" to RouteNavigatorUris.GOOGLE_MAPS_PACKAGES,
             "музыка" to listOf("ru.yandex.music"),
             "яндекс музыка" to listOf("ru.yandex.music"),
             "камера" to listOf("com.byd.avc"),
