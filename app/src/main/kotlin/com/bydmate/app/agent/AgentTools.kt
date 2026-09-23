@@ -494,9 +494,10 @@ class AgentTools @Inject constructor(
                         "false (по умолчанию) для построй/покажи/проложи маршрут - только " +
                         "построить, водитель нажмёт Поехали сам"))
                 .put("app", JSONObject().put("type", "string")
-                    .put("enum", JSONArray().put("navigator").put("maps"))
+                    .put("enum", JSONArray(listOf("navigator", "yandex", "maps", "dgis", "waze", "google_maps")))
                     .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты/Waze/Google Maps, по умолчанию), " +
-                        "maps = явно Яндекс Карты; maps передавай только когда пользователь явно просит Яндекс Карты")),
+                        "yandex = Яндекс Навигатор, maps = Яндекс Карты, dgis = 2ГИС, waze = Waze, " +
+                        "google_maps = Google Maps; явный app передавай, когда пользователь назвал приложение")),
             emptyList(),
         ))
         put(tool(
@@ -509,9 +510,10 @@ class AgentTools @Inject constructor(
             JSONObject().put("query", JSONObject().put("type", "string")
                 .put("description", "Что искать: название места или категория"))
                 .put("app", JSONObject().put("type", "string")
-                    .put("enum", JSONArray().put("navigator").put("maps"))
+                    .put("enum", JSONArray(listOf("navigator", "yandex", "maps", "dgis", "waze", "google_maps")))
                     .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты/Waze/Google Maps, по умолчанию), " +
-                        "maps = явно Яндекс Карты; maps передавай только когда пользователь явно просит Яндекс Карты")),
+                        "yandex = Яндекс Навигатор, maps = Яндекс Карты, dgis = 2ГИС, waze = Waze, " +
+                        "google_maps = Google Maps; явный app передавай, когда пользователь назвал приложение")),
             listOf("query"),
         ))
         put(tool(
@@ -526,9 +528,10 @@ class AgentTools @Inject constructor(
                 .put("lat", JSONObject().put("type", "number").put("description", "Широта, если известна"))
                 .put("lon", JSONObject().put("type", "number").put("description", "Долгота"))
                 .put("app", JSONObject().put("type", "string")
-                    .put("enum", JSONArray().put("navigator").put("maps"))
+                    .put("enum", JSONArray(listOf("navigator", "yandex", "maps", "dgis", "waze", "google_maps")))
                     .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты/Waze/Google Maps, по умолчанию), " +
-                        "maps = явно Яндекс Карты; maps передавай только когда пользователь явно просит Яндекс Карты")),
+                        "yandex = Яндекс Навигатор, maps = Яндекс Карты, dgis = 2ГИС, waze = Waze, " +
+                        "google_maps = Google Maps; явный app передавай, когда пользователь назвал приложение")),
             emptyList(),
         ))
         put(tool(
@@ -597,7 +600,7 @@ class AgentTools @Inject constructor(
         put(tool(
             "launch_app",
             "Запустить установленное приложение по названию. Понимает русские названия штатных " +
-                "приложений машины: навигатор, яндекс карты, музыка, камера, видеорегистратор, " +
+                "приложений машины: навигатор, яндекс карты, Google Maps, музыка, камера, видеорегистратор, " +
                 "браузер, ютуб, файлы, режимы вождения, часовой, АБРП, медиацентр, телефон. " +
                 "Для системных настроек используй open_settings.",
             JSONObject().put("name", JSONObject().put("type", "string")
@@ -1879,7 +1882,9 @@ class AgentTools @Inject constructor(
             apps.filter {
                 val label = it.first.lowercase()
                 label.contains(labelNeedle) ||
-                    (labelNeedle == "youtube" && it.second.lowercase().contains("youtube"))
+                    (labelNeedle == "youtube" && it.second.lowercase().contains("youtube")) ||
+                    (labelNeedle == "google maps" &&
+                        it.second.lowercase().let { pkg -> "google" in pkg && "maps" in pkg })
             }
         }
         return when {
@@ -2654,6 +2659,9 @@ class AgentTools @Inject constructor(
             "музыка" to "яндекс музыка",
             "яндекс карты" to "яндекс карты",
             "карты" to "яндекс карты",
+            "google maps" to "google maps",
+            "гугл карты" to "google maps",
+            "карты google" to "google maps",
             "яндекс навигатор" to "яндекс навигатор",
             "навигатор" to "навигатор",
             "регистратор" to "регистратор",
@@ -2669,6 +2677,9 @@ class AgentTools @Inject constructor(
             "яндекс навигатор" to listOf("ru.yandex.yandexnavi"),
             "яндекс карты" to YANDEX_MAPS_PACKAGES,
             "карты" to YANDEX_MAPS_PACKAGES,
+            "google maps" to listOf(RouteNavigatorUris.GOOGLE_MAPS_PACKAGE),
+            "гугл карты" to listOf(RouteNavigatorUris.GOOGLE_MAPS_PACKAGE),
+            "карты google" to listOf(RouteNavigatorUris.GOOGLE_MAPS_PACKAGE),
             "музыка" to listOf("ru.yandex.music"),
             "яндекс музыка" to listOf("ru.yandex.music"),
             "камера" to listOf("com.byd.avc"),
