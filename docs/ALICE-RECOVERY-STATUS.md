@@ -291,6 +291,270 @@ Do not "simplify" the voice path by removing one of these before field validatio
 
 ---
 
+# DiLink 3 native assistant takeover baseline
+
+This section records the field-proven workaround that stopped the stock BYD voice assistant from competing with BYDMate/Alice on DiLink 3.
+
+This must be preserved across rebases. The solution was not a single toggle. It required several defensive layers because DiLink 3 can still surface the native assistant even when one layer appears to be disabled.
+
+## The original failure mode
+
+Early takeover builds attempted to disable the BYD native assistant by calling:
+
+`helperClient.setAppHidden("com.byd.vrassistant", true)`
+
+but the privileged helper daemon only allowed:
+
+`com.byd.autovoice`
+
+As a result:
+
+- BYDMate believed it had requested the disable,
+- the privileged daemon rejected the real `com.byd.vrassistant` package,
+- diagnostics continued showing the native assistant as ENABLED,
+- the stock assistant could still appear and compete for the microphone/UI.
+
+This was the core DiLink 3 package-hole bug.
+
+## Field-proven fix: Alice 4.5
+
+The decisive fix was added in:
+
+- `.github/alice-build4-5-cold-chain-guard-duck.py`
+
+Historical identity:
+
+- Alice 4.5
+- versionCode: 64006
+- versionName: `3.15.2-alice4.5-cold-chain`
+
+### 1. Privileged helper allowlist must include the real DiLink 3 package
+
+`HelperDaemon.kt` was changed so the exact package:
+
+`com.byd.vrassistant`
+
+is explicitly accepted in addition to:
+
+`com.byd.autovoice`
+
+The operation remains deliberately narrow. Do not expand this into arbitrary package control.
+
+The reversible command pair is:
+
+- disable: `pm disable-user --user 0 <package>`
+- enable: `pm enable <package>`
+
+The helper only accepts the known assistant package and a boolean hidden state.
+
+This was the fix that made the earlier `setAppHidden("com.byd.vrassistant", true)` call actually work.
+
+## 2. Keep the old BYD voice package synchronized too
+
+The takeover path must account for both known BYD voice packages:
+
+- `com.byd.autovoice`
+- `com.byd.vrassistant`
+
+Historical sync patch:
+
+- `.github/alice-build4-2-vrassistant-sync.py`
+
+When the user enables native-assistant blocking, Settings applies the hidden state to both package families.
+
+The diagnostic package set also included:
+
+- `com.byd.autovoice`
+- `com.byd.autovoice.engine`
+- `com.byd.autovoice.tts`
+- `com.byd.vrassistant`
+
+Do not assume that disabling only `com.byd.autovoice` is sufficient on DiLink 3.
+
+## 3. Persist takeover state separately from the visible voice setting
+
+The working integration mirrored the native-assistant state into the voice preferences:
+
+`alice_native_takeover`
+
+Historical patch:
+
+- `.github/alice-build4-native-mirror.py`
+
+The important behavior is:
+
+- takeover enabled -> `alice_native_takeover = true`
+- takeover disabled -> `alice_native_takeover = false`
+
+The hardware-key gate, startup synchronization and Accessibility fallback all read this same persisted flag.
+
+Do not derive takeover state indirectly from a provider selection after every rebase. Preserve a single explicit persisted takeover flag.
+
+## 4. Intercept the DiLink 3 hardware path before the native assistant receives it
+
+Historical master gate:
+
+- `.github/alice-build4-2-master-gate.py`
+
+The working DiLink 3 path intercepted the relevant hardware events inside `SteeringWheelKeyService`.
+
+Historical key handling:
+
+- keyCode `304`: treated as the DiLink 3 microphone/Alice trigger
+- keyCode `327`: explicitly consumed while native takeover was enabled
+
+Behavior:
+
+- if `alice_native_takeover == false`, the event is passed through and the stock system remains untouched;
+- if takeover is enabled, the native trigger is consumed;
+- the BYDMate/Alice route is launched by our service instead of allowing the event to continue to the stock assistant.
+
+Historical log markers:
+
+- `DILINK3_MIC_PASS_THROUGH`
+- `DILINK3_327_BLOCKED`
+- `DILINK3_304_TRIGGER`
+- `DILINK3_304_CONSUMED`
+
+Important: current/newer firmware may report a different steering-wheel keycode. Do not blindly hard-code 304/327 on a new upstream without checking the real diagnostic dump. Preserve the takeover semantics, then map them to the actually observed key events on the target car.
+
+## 5. Re-assert the disabled state after the privileged helper becomes ready
+
+There was a startup race:
+
+1. application startup synchronization ran,
+2. the privileged helper was not ready yet,
+3. the disable request could be lost,
+4. the native assistant remained enabled.
+
+Alice 4.5 fixed this by re-applying:
+
+`helperClient.setAppHidden("com.byd.vrassistant", true)`
+
+immediately after the helper became available during install/update/Accessibility recovery.
+
+Historical marker:
+
+`ALICE4_5_VRASSISTANT_BLOCK startup=<true|false>`
+
+This startup reassertion is mandatory.
+
+A rebase that only applies the package state once from Settings is vulnerable to the same race.
+
+## 6. Accessibility fallback closes the native assistant if it still surfaces
+
+Package disabling and key interception are the primary controls, but the proven implementation added a second safety layer.
+
+When Accessibility receives a window-state event from:
+
+`com.byd.vrassistant`
+
+while `alice_native_takeover` is enabled, the service immediately performs:
+
+`GLOBAL_ACTION_BACK`
+
+Historical marker:
+
+`ALICE4_5_VRASSISTANT_WINDOW_BLOCKED back=<true|false>`
+
+This is deliberately a fallback, not the primary takeover mechanism.
+
+Why it exists:
+
+- DiLink can race the package-disable/hardware path,
+- an already-starting native window may still appear briefly,
+- the Accessibility guard prevents it from staying on screen and stealing the interaction.
+
+Do not remove this fallback merely because package state currently looks DISABLED in diagnostics.
+
+## 7. Startup / boot behavior
+
+The working Alice line also included boot-time coordination.
+
+Historical patch:
+
+- `.github/alice-build4-2-boot-prewarm.py`
+
+When `alice_native_takeover` is enabled and Yandex Browser has microphone permission, the app can prewarm the Alice path shortly after a real boot.
+
+This was primarily a cold-start latency optimization, but it also matters for takeover stability because the replacement assistant is ready before the first steering-wheel use.
+
+The prewarm logic:
+
+- only runs when takeover is enabled,
+- only runs after a real/recent boot marker,
+- waits for Accessibility to be bound,
+- opens/primes Alice,
+- returns to HOME after prewarm.
+
+Do not confuse boot prewarm with the actual native-assistant block. The block must work even if prewarm is disabled.
+
+## 8. Why one-layer fixes are not enough
+
+The field-proven takeover is intentionally redundant:
+
+1. explicit persisted `alice_native_takeover` state
+2. hardware-key interception
+3. privileged package disable for both BYD assistant packages
+4. helper-ready startup reassertion
+5. Accessibility window fallback
+
+Each layer protects against a different DiLink 3 failure mode.
+
+Removing any layer requires a real vehicle test proving it is no longer needed.
+
+## 9. Reversibility is mandatory
+
+The workaround must remain reversible.
+
+When native takeover is turned off:
+
+- hardware events must pass through again,
+- `com.byd.autovoice` must be re-enabled,
+- `com.byd.vrassistant` must be re-enabled,
+- the Accessibility fallback must stop closing BYD assistant windows.
+
+Never leave the stock assistant permanently disabled after the user turns takeover off.
+
+## 10. Regression checklist after every rebase
+
+Before declaring native-assistant takeover preserved:
+
+1. Verify `alice_native_takeover` still exists and is persisted.
+2. Verify current DiLink steering-wheel key events with diagnostics.
+3. Verify takeover-disabled mode passes native key events through.
+4. Verify takeover-enabled mode consumes the native assistant trigger.
+5. Verify HelperDaemon explicitly allows `com.byd.vrassistant`.
+6. Verify the helper still uses reversible `pm disable-user --user 0` / `pm enable`.
+7. Verify both `com.byd.autovoice` and `com.byd.vrassistant` are synchronized.
+8. Verify the disable is re-applied after helper startup/recovery.
+9. Verify Accessibility closes a `com.byd.vrassistant` window if one still appears.
+10. Reboot the head unit and repeat the test.
+11. Toggle takeover OFF and verify the stock BYD assistant works again.
+12. Toggle takeover ON and verify only the selected BYDMate/Alice path responds.
+
+## 11. Critical historical references
+
+Primary scripts:
+
+- `.github/alice-build4-native-mirror.py`
+- `.github/alice-build4-2-master-gate.py`
+- `.github/alice-build4-2-vrassistant-sync.py`
+- `.github/alice-build4-2-boot-prewarm.py`
+- `.github/alice-build4-5-cold-chain-guard-duck.py`
+
+Historical patch archive commit:
+
+- `433c75f49aba8613a51ca35f1b44b885612f405c`
+
+The most important recovery fact is:
+
+**4.2 already tried to disable `com.byd.vrassistant`, but it did not become reliable until 4.5 added that package to the privileged helper allowlist and reasserted the state after helper startup.**
+
+That exact mistake must not be repeated in a future rebase.
+
+---
+
 # Historical patch chain worth preserving
 
 The old patch/workflow chain is preserved under `.github/`.
