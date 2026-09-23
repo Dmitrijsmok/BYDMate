@@ -105,6 +105,34 @@ class VoiceControllerAgentFallbackTest {
             selectedTtsVoice = { TtsVoiceCatalog.byId("dmitri") })
     }
 
+    @Test fun `agent fallback warms TTS before asking the LLM`() {
+        val agentOrchestrator = mockk<AgentOrchestrator>()
+        val ttsEngine = quietTtsEngine()
+        val warmed = java.util.concurrent.atomic.AtomicBoolean(false)
+        every { ttsEngine.warmUp() } answers { warmed.set(true) }
+        every { ttsEngine.startQueue() } returns null
+        coEvery { agentOrchestrator.ask(any(), any()) } coAnswers {
+            assertTrue("TTS must be warming before the external LLM ask begins", warmed.get())
+            AgentResult.Answer("ответ")
+        }
+
+        val fakeAsr = FakeContinuousAsr()
+        val controller = makeController(
+            agentOrchestrator = agentOrchestrator,
+            ttsEnabled = true,
+            ttsEngine = ttsEngine,
+            continuousAsr = fakeAsr,
+        )
+        controller.onPttPressed()
+        awaitTrue { controller.listening.value }
+        awaitSubscribed(fakeAsr.events)
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи о машине"))
+        Thread.sleep(500)
+
+        verify(exactly = 1) { ttsEngine.warmUp() }
+        coVerify(exactly = 1) { agentOrchestrator.ask("расскажи о машине", any()) }
+    }
+
     @Test fun `agent Answer becomes AgentAnswer state, earcon ok, orchestrator called once`() {
         val agentOrchestrator = mockk<AgentOrchestrator>()
         coEvery { agentOrchestrator.ask(any(), any()) } returns AgentResult.Answer("Заряд 80%")
