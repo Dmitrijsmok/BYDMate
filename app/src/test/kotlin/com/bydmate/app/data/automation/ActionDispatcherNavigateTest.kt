@@ -133,6 +133,36 @@ class ActionDispatcherNavigateTest {
         assertEquals("com.waze", intent.`package`)
     }
 
+    @Test fun waze_manual_package_is_authoritative_and_does_not_false_fallback() = runTest {
+        selectNavigator(RouteNavigatorUris.WAZE)
+        app.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, "com.vendor.waze")
+            .commit()
+
+        val res = dispatcher.dispatch(actionDef("""{"lat":57.0,"lon":36.0}"""), null)
+        assertTrue(res.success)
+        assertEquals(null, res.reason)
+        val intent = shadowOf(app).nextStartedActivity
+        assertEquals("com.vendor.waze", intent.`package`)
+        assertEquals("https://waze.com/ul?ll=57.0,36.0&navigate=yes", intent.dataString)
+    }
+
+    @Test fun explicit_google_maps_ignores_default_waze() = runTest {
+        selectNavigator(RouteNavigatorUris.WAZE)
+        installWaze()
+        installGoogleMaps()
+
+        val res = dispatcher.dispatch(
+            actionDef("""{"app":"google_maps","lat":57.0,"lon":36.0}"""),
+            null,
+        )
+        assertTrue(res.success)
+        val intent = shadowOf(app).nextStartedActivity
+        assertEquals("com.google.android.apps.maps", intent.`package`)
+        assertTrue(intent.dataString!!.contains("www.google.com/maps"))
+    }
+
     @Test fun waze_selected_but_missing_falls_back_to_yandex() = runTest {
         selectNavigator(RouteNavigatorUris.WAZE)
 
@@ -192,7 +222,7 @@ class ActionDispatcherNavigateTest {
         assertEquals(null, res.reason)
         val intent = shadowOf(app).nextStartedActivity
         assertEquals("yandexmaps://maps.yandex.ru/?rtext=~57.0,36.0&rtt=auto", intent.dataString)
-        assertEquals(null, intent.`package`)
+        assertEquals("ru.yandex.yandexmaps", intent.`package`)
     }
 
     /** Maps chosen but absent: the action still works, through Yandex Navigator, and says why. */
