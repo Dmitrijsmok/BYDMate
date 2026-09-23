@@ -138,6 +138,159 @@ Therefore the recovery references are:
 
 ---
 
+# Fast Local Agent / issue #222 baseline
+
+This section is mandatory context for any future rebase. The local agent became fast because several latency fixes worked together. Do not reduce this history to "Build95 was fast".
+
+## Field confirmation
+
+User confirmation date: 2026-09-20.
+
+The user explicitly confirmed that in the Build95 line the issue #222 behavior was fixed: after invoking the local TTS agent, it accepted the spoken information and started answering without the long extra pause that existed before.
+
+Build95 is therefore the field-proven responsiveness reference.
+
+Historical identity:
+
+- Alice 4.7 Build95 recovery
+- versionCode: 64008
+- versionName contains `alice4.7-build95-recovery`
+
+## The important implementation detail: warm TTS while the LLM is thinking
+
+The key regression guard later preserved in `VoiceController.agentFallback()` is:
+
+`if (gate.ttsEnabled()) runCatching { ttsEngine.warmUp() }`
+
+This call must happen before / in parallel with the external LLM request, not after the final text has already arrived.
+
+Why it matters:
+
+- `SherpaTtsEngine.warmUp()` creates/warms the local TTS engine on its own worker.
+- The LLM network request is already consuming time.
+- Running TTS warm-up during that network wait hides the local model-load latency behind the LLM latency.
+- Therefore the first spoken sentence no longer pays a separate cold TTS startup penalty after the model has answered.
+
+This behavior first appeared in the fast Build84/85 path and was inherited by Build95.
+
+Historical measured behavior around Build85:
+
+- first model content approximately 1.8 s
+- first phrase approximately 1.9 s
+
+The important point is not the exact millisecond number. The key property is that there was almost no second "cold TTS" delay after model text became available.
+
+## Known regression
+
+A later refactor removed the active `ttsEngine.warmUp()` call from `VoiceController.agentFallback()` even though `SherpaTtsEngine.warmUp()` itself still existed.
+
+That created a deceptive state:
+
+- the warm-up implementation was still present in the codebase,
+- but the real agent path no longer invoked it at the right time,
+- so the first answer after idle again paid cold TTS initialization cost.
+
+This exact regression must be checked after every rebase.
+
+A source snapshot where the correct regression guard is visible:
+
+- commit `29d1e95afc2c2f72d6a7e8034fbf9f8a826e1340`
+
+The relevant comment in that source explicitly identifies it as the regression guard from the fast Build84/85 path.
+
+## Start TTS from streamed sentences, not from the final full answer
+
+The fast path also used the TTS speech queue:
+
+- `ttsEngine.startQueue()`
+- stream sentences from `agentOrchestrator.ask(...)`
+- `queue.enqueue(sentence)`
+- `queue.finish()`
+
+The assistant therefore begins synthesizing/speaking the first complete streamed sentence while the remaining answer is still arriving.
+
+Do NOT regress to:
+
+1. wait for the entire LLM answer,
+2. then synthesize the complete response,
+3. then start playback.
+
+That pattern was observed to create multi-second TTS latency even when OpenRouter itself was reasonably fast.
+
+## Keep deterministic commands out of the LLM
+
+A second major contributor to perceived speed is the local routing split.
+
+Commands that can be resolved locally must stay local:
+
+- vehicle controls
+- navigation/app launches with deterministic mapping
+- direct local vehicle-state answers where the snapshot contains the answer
+
+These should follow:
+
+`ASR -> local NLU/resolver -> local action -> short local acknowledgement`
+
+and must NOT become:
+
+`ASR -> OpenRouter -> tool selection -> local action -> generated answer`
+
+For a command such as a known vehicle control, the local path should remain effectively "command -> action -> Готово" and bypass OpenRouter entirely.
+
+This is separate from the TTS warm-up fix. Both are required for the fast local-agent experience.
+
+## Network/agent optimizations that were kept alongside the warm path
+
+The fast line also retained latency-oriented LLM transport behavior:
+
+- low/minimal reasoning effort for this automotive agent path
+- latency-oriented model sorting where supported
+- streaming responses
+- prompt cache
+- limited retry/fallback behavior
+- one reusable / singleton OkHttp client instead of rebuilding the network stack per request
+
+These optimizations help, but they are NOT a substitute for the TTS warm-up call.
+
+A previous cold profile showed very large first-request latency after idle, improving over successive requests. The warm path was specifically designed so that the local TTS side did not add another cold-start delay on top of that network behavior.
+
+## Important architectural rule
+
+Alice and Local BYDMate are different voice paths.
+
+The fast-local-agent fix belongs to the Local BYDMate agent path.
+
+Do not remove or bypass Local TTS warm-up merely because Alice is now available as another assistant.
+
+A rebase that makes Alice work but removes `ttsEngine.warmUp()` from Local `agentFallback()` is a regression.
+
+## Required regression checks after every rebase
+
+Before a new build is accepted:
+
+1. Search `VoiceController.agentFallback()` and verify active `ttsEngine.warmUp()` before the LLM wait.
+2. Verify the call is not inside a path that only runs after the LLM response has completed.
+3. Verify `ttsEngine.startQueue()` still starts a sentence queue when TTS is enabled.
+4. Verify streamed sentences are enqueued as they arrive.
+5. Verify deterministic local commands do not unnecessarily call the external LLM.
+6. Verify `SherpaTtsEngine.warmUp()` still performs real engine preparation and has not become a no-op.
+7. Vehicle-test a genuine agent question after cold start / idle.
+8. After the model's first text arrives, speech should begin without an additional obvious TTS wake-up pause.
+9. Compare subjectively against the Build95 behavior if uncertain.
+
+## Recovery priority
+
+When porting the proven behavior to a new upstream base, preserve these pieces as a unit:
+
+- Build95 / Build84-85 TTS warm-up timing
+- streamed sentence queue
+- deterministic local routing
+- reusable low-latency LLM transport
+
+Do not "simplify" the voice path by removing one of these before field validation.
+
+---
+
 # Historical patch chain worth preserving
 
 The old patch/workflow chain is preserved under `.github/`.
