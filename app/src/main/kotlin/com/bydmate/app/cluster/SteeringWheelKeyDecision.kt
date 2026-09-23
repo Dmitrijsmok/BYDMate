@@ -69,11 +69,11 @@ fun learnDecision(keyCode: Int, isDown: Boolean): LearnAction {
 const val DEFAULT_VOICE_KEYCODE = 320  // steering "voice" button on Leopard 3 (learnable)
 
 /**
- * Double-press shortcut while Local BYDMate is selected. The first press is never delayed:
- * Local starts immediately; a second DOWN edge inside this window is reinterpreted as a
- * one-shot Alice launch and the launcher tears Local down before taking the microphone.
+ * Double-press shortcut while Local BYDMate is selected. Hold the first press briefly instead
+ * of starting Local immediately. A second DOWN edge cancels the pending Local start and routes
+ * directly to Alice, so the two providers never compete for the microphone.
  */
-const val VOICE_DOUBLE_PRESS_WINDOW_MS = 350L
+const val VOICE_DOUBLE_PRESS_WINDOW_MS = 250L
 
 fun isVoiceDoublePress(previousDownMs: Long, nowMs: Long): Boolean =
     previousDownMs > 0L &&
