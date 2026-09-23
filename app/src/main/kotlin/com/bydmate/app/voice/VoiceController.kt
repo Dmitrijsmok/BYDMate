@@ -79,6 +79,9 @@ class VoiceController @Inject constructor(
 
     private val busy = AtomicBoolean(false)
     @Volatile private var sessionJob: Job? = null
+    private val externalAliceDuckLock = Any()
+    @Volatile private var externalAliceDuckSaved: Int? = null
+    private val externalAliceDuckGeneration = AtomicInteger(0)
     @Volatile private var warmupJob: Job? = null
     @Volatile private var routingJob: Job? = null
     @Volatile private var cancellableAskJob: Job? = null
@@ -96,13 +99,38 @@ class VoiceController @Inject constructor(
     fun sessionActive(): Boolean = listening.value || busy.get()
 
     /**
-     * External assistants such as Alice speak through STREAM_MUSIC on DiLink.
-     * Do not lower STREAM_MUSIC here: doing so also lowers Alice herself, which made every
-     * invocation start at volume index 4. Yandex manages its own audio focus/ducking.
+     * Field-proven Alice 4.8/5.3 behavior: physically duck STREAM_MUSIC for the whole external
+     * assistant lifecycle. The first acting duck owns the original volume; repeated triggers only
+     * refresh the safety timeout and never nest another physical volume reduction.
      */
-    fun beginExternalAssistantAudio() = Unit
+    fun beginExternalAssistantAudio() {
+        val saved = synchronized(externalAliceDuckLock) {
+            externalAliceDuckSaved ?: runCatching {
+                audioCapture.duckMusicForExternalAssistant()
+            }.getOrNull()?.also { externalAliceDuckSaved = it }
+        }
+        val generation = externalAliceDuckGeneration.incrementAndGet()
+        Log.i(TAG, "ALICE_EXTERNAL_DUCK begin saved=${saved} generation=${generation}")
+        scope.launch {
+            delay(EXTERNAL_ALICE_DUCK_TIMEOUT_MS)
+            if (externalAliceDuckGeneration.get() == generation) {
+                endExternalAliceDuck("safety_timeout")
+            }
+        }
+    }
 
-    fun endExternalAssistantAudio() = Unit
+    fun endExternalAssistantAudio() = endExternalAliceDuck("launcher_finish")
+
+    private fun endExternalAliceDuck(reason: String) {
+        val saved = synchronized(externalAliceDuckLock) {
+            val value = externalAliceDuckSaved
+            externalAliceDuckSaved = null
+            value
+        }
+        externalAliceDuckGeneration.incrementAndGet()
+        if (saved != null) runCatching { audioCapture.restoreMusic(saved) }
+        Log.i(TAG, "ALICE_EXTERNAL_DUCK end reason=${reason} restored=${saved != null}")
+    }
 
     /** Provider hand-off: Alice must never start while Local still owns AudioRecord/TTS.
      *  Returns true when there was local work to tear down, so launchers may allow a short
@@ -911,6 +939,7 @@ class VoiceController @Inject constructor(
     }
 
     companion object {
+        private const val EXTERNAL_ALICE_DUCK_TIMEOUT_MS = 60_000L
         private const val TAG = "VoiceController"
 
         // Dwell on a terminal state before auto-returning to Idle. Short on purpose —
