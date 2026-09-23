@@ -206,7 +206,11 @@ class AgentTools @Inject constructor(
     }
 
     internal var googleMapsForegroundCheck: (Long) -> Boolean = { sinceMs ->
-        RouteNavigatorUris.GOOGLE_MAPS_PACKAGE in foregroundPackagesSince(sinceMs)
+        val installed = RouteNavigatorDiscovery.packagesFor(
+            RouteNavigatorUris.GOOGLE_MAPS,
+            context.packageManager,
+        ).toSet()
+        foregroundPackagesSince(sinceMs).any { it in installed }
     }
 
     /** Test seam - poll interval for the navigate foreground verification. */
@@ -1884,7 +1888,11 @@ class AgentTools @Inject constructor(
                 label.contains(labelNeedle) ||
                     (labelNeedle == "youtube" && it.second.lowercase().contains("youtube")) ||
                     (labelNeedle == "google maps" &&
-                        it.second.lowercase().let { pkg -> "google" in pkg && "maps" in pkg })
+                        it.second.lowercase().let { pkg ->
+                            pkg in RouteNavigatorUris.GOOGLE_MAPS_PACKAGES ||
+                                ("maps" in pkg && ("google" in pkg || "revanced" in pkg)) ||
+                                pkg.endsWith(".android.apps.maps")
+                        })
             }
         }
         return when {
@@ -2677,9 +2685,9 @@ class AgentTools @Inject constructor(
             "яндекс навигатор" to listOf("ru.yandex.yandexnavi"),
             "яндекс карты" to YANDEX_MAPS_PACKAGES,
             "карты" to YANDEX_MAPS_PACKAGES,
-            "google maps" to listOf(RouteNavigatorUris.GOOGLE_MAPS_PACKAGE),
-            "гугл карты" to listOf(RouteNavigatorUris.GOOGLE_MAPS_PACKAGE),
-            "карты google" to listOf(RouteNavigatorUris.GOOGLE_MAPS_PACKAGE),
+            "google maps" to RouteNavigatorUris.GOOGLE_MAPS_PACKAGES,
+            "гугл карты" to RouteNavigatorUris.GOOGLE_MAPS_PACKAGES,
+            "карты google" to RouteNavigatorUris.GOOGLE_MAPS_PACKAGES,
             "музыка" to listOf("ru.yandex.music"),
             "яндекс музыка" to listOf("ru.yandex.music"),
             "камера" to listOf("com.byd.avc"),
