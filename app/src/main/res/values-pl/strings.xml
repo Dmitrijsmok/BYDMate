@@ -1286,6 +1286,8 @@
     <string name="settings_route_navigator_dgis">2GIS</string>
     <string name="settings_route_navigator_maps">Yandex Maps</string>
     <string name="settings_route_navigator_hint">Która aplikacja otwiera się dla tras i wyszukiwania na mapie</string>
+    <string name="settings_route_navigator_package_label">Pakiet aplikacji nawigacyjnej (opcjonalnie)</string>
+    <string name="settings_route_navigator_package_hint">Dla niestandardowej wersji wpisz dokładny package, np. app.revanced.android.apps.maps. Pozostaw puste, aby automatycznie wykryć zainstalowaną aplikację.</string>
     <string name="settings_agent_memory_title">Pamięć o kierowcy</string>
     <string name="settings_agent_memory_hint">Agent zapamiętuje imię i stałe preferencje, gdy mu o tym powiesz. Powiedz „zapomnij …”, aby usunąć jeden fakt</string>
     <string name="settings_agent_memory_empty">Na razie nic nie zapamiętano</string>
