@@ -880,6 +880,9 @@ class ActionDispatcher @Inject constructor(
         val payload = parsePayload(action.payload)
         val pkg = payload?.optString("packageName")?.takeIf(String::isNotBlank)
             ?: return DispatchResult(false, "packageName не задан")
+        if (!isApplicationPackagePresent(pkg)) {
+            return DispatchResult(false, "Приложение не установлено: $pkg")
+        }
 
         // Field-proven DiLink rule: do not reject an app just because
         // getLaunchIntentForPackage() is null. Vendor/ReVanced builds may still be installed and
@@ -1273,6 +1276,9 @@ class ActionDispatcher @Inject constructor(
     }
 
     private fun isPackageInstalled(pkg: String): Boolean =
+        context.packageManager.getLaunchIntentForPackage(pkg) != null
+
+    private fun isApplicationPackagePresent(pkg: String): Boolean =
         runCatching {
             context.packageManager.getApplicationInfo(pkg, 0)
             true
