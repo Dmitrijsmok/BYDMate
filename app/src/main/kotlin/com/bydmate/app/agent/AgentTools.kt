@@ -1902,14 +1902,14 @@ class AgentTools @Inject constructor(
         // selected default, while an explicit Waze/Google Maps request must stay explicit.
         // This is the Build 5.3 contract shared with Alice and avoids hard-coding Yandex here.
         val navigationTarget = navigationAppForName(name)
-        val (label, pkg) = if (navigationTarget != null) {
-            val resolved = RouteNavigatorResolver.selectedPackage(context, navigationTarget)
-                ?: return JSONObject().put(
-                    "error",
-                    "навигационное приложение не найдено: $name",
-                ).toString()
-            name to resolved
+        val semanticPackage = navigationTarget?.let {
+            runCatching { RouteNavigatorResolver.selectedPackage(context, it) }.getOrNull()
+        }
+        val (label, pkg) = if (semanticPackage != null) {
+            name to semanticPackage
         } else {
+            // Test/head-unit fallback for a launcher-visible app when PackageManager cannot
+            // identify the canonical/vendor package through getApplicationInfo().
             when (val r = resolveLauncherApp(name)) {
                 is Built.Error -> return JSONObject().put("error", r.message).toString()
                 is Built.Value -> r.value
