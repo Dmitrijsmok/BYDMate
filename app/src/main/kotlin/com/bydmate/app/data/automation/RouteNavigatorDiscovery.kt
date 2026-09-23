@@ -6,9 +6,9 @@ import com.bydmate.app.navdata.NavPackages
 import java.util.Locale
 
 /**
- * Discovers installed navigation apps by their launcher activities instead of relying only on
- * one hard-coded package name. BYD head units often ship store/vendor variants whose package
- * differs from the Play Store build.
+ * Discovers installed navigation apps without equating "installed" with
+ * PackageManager.getLaunchIntentForPackage(). On DiLink/vendor builds those are not equivalent:
+ * a package can own navigation deep links while exposing no ordinary launcher intent.
  */
 internal object RouteNavigatorDiscovery {
     private val ORDER = listOf(
@@ -26,21 +26,25 @@ internal object RouteNavigatorDiscovery {
         val id = RouteNavigatorUris.normalize(navigator)
         val packages = LinkedHashSet<String>()
 
-        when (id) {
-            RouteNavigatorUris.YANDEX -> packages.addAll(NavPackages.YANDEX_NAVI)
-            RouteNavigatorUris.DGIS -> packages += RouteNavigatorUris.DGIS_PACKAGE
-            RouteNavigatorUris.MAPS -> packages.addAll(NavPackages.YANDEX_MAPS)
-            RouteNavigatorUris.WAZE -> packages += RouteNavigatorUris.WAZE_PACKAGE
-            RouteNavigatorUris.GOOGLE_MAPS -> packages += RouteNavigatorUris.GOOGLE_MAPS_PACKAGE
-        }
+        canonicalPackages(id).filterTo(packages) { packageExists(pm, it) }
 
         launcherApps(pm).forEach { app ->
             if (matches(id, app.packageName, app.label)) packages += app.packageName
         }
 
-        return packages.filter { pkg ->
-            runCatching { pm.getLaunchIntentForPackage(pkg) != null }.getOrDefault(false)
-        }
+        return packages.toList()
+    }
+
+    internal fun packageExists(pm: PackageManager, packageName: String): Boolean =
+        runCatching { pm.getApplicationInfo(packageName, 0); true }.getOrDefault(false)
+
+    private fun canonicalPackages(id: String): List<String> = when (id) {
+        RouteNavigatorUris.YANDEX -> NavPackages.YANDEX_NAVI.toList()
+        RouteNavigatorUris.DGIS -> listOf(RouteNavigatorUris.DGIS_PACKAGE)
+        RouteNavigatorUris.MAPS -> NavPackages.YANDEX_MAPS.toList()
+        RouteNavigatorUris.WAZE -> listOf(RouteNavigatorUris.WAZE_PACKAGE)
+        RouteNavigatorUris.GOOGLE_MAPS -> RouteNavigatorUris.GOOGLE_MAPS_PACKAGES
+        else -> emptyList()
     }
 
     private fun launcherApps(pm: PackageManager): List<LauncherApp> {
@@ -72,9 +76,12 @@ internal object RouteNavigatorDiscovery {
             RouteNavigatorUris.WAZE ->
                 "waze" in pkg || label == "waze"
             RouteNavigatorUris.GOOGLE_MAPS ->
-                (pkg.contains("google") && pkg.contains("maps")) ||
+                pkg in RouteNavigatorUris.GOOGLE_MAPS_PACKAGES ||
+                    (pkg.contains("maps") && (pkg.contains("google") || pkg.contains("revanced"))) ||
+                    pkg.endsWith(".android.apps.maps") ||
                     label == "google maps" ||
-                    label == "карты google"
+                    label == "карты google" ||
+                    label == "гугл карты"
             else -> false
         }
     }
