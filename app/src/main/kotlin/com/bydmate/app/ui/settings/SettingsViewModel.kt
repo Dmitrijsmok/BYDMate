@@ -601,9 +601,14 @@ class SettingsViewModel @Inject constructor(
      */
     fun setDisableNativeAssistant(disabled: Boolean) {
         _uiState.update { it.copy(disableNativeAssistant = disabled) }
+        appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("alice_native_takeover", disabled)
+            .apply()
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, disabled.toString())
             helperClient.setAppHidden("com.byd.autovoice", disabled)
+            helperClient.setAppHidden("com.byd.vrassistant", disabled)
             // On DiLink 3 / Android 10 disabling the native assistant can leave the steering
             // voice-key accessibility binding stale. Re-assert our service immediately so the
             // user does not need to reboot the whole head unit.
