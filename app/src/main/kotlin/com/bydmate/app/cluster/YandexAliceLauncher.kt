@@ -110,6 +110,10 @@ internal class YandexAliceLauncher(
         AliceUiStep.DONE -> {
             pending = false
             listening = true
+            // Re-assert the physical media duck at the exact moment Alice starts listening.
+            // This catches media that began during Yandex UI warm-up; the controller call is
+            // idempotent when the earlier startAliceUi() duck already owns the saved volume.
+            voiceController().beginExternalAssistantAudio()
             generation++
             true
         }
