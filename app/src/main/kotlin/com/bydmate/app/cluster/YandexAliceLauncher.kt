@@ -110,6 +110,10 @@ internal class YandexAliceLauncher(
         AliceUiStep.DONE -> {
             pending = false
             listening = true
+            // Idempotent reassertion: if media started during the Yandex warm-up, acquire the
+            // field-proven physical duck now. If the startAliceUi() duck already owns the saved
+            // volume this only refreshes its safety timeout.
+            voiceController().beginExternalAssistantAudio()
             generation++
             true
         }
