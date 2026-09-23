@@ -1,0 +1,31 @@
+name: Build 64021 APK
+
+on:
+  push:
+    branches:
+      - fix/local-google-maps-64021
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+      - name: detekt
+        run: ./gradlew :app:detekt --stacktrace
+      - name: Build unsigned release APK
+        run: ./gradlew :app:assembleRelease -PallowUnsignedRelease --stacktrace
+      - uses: actions/upload-artifact@v7
+        with:
+          name: BYDMate-3.17.4-64021-unsigned
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 2
