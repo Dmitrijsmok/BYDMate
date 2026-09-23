@@ -38,7 +38,7 @@ android {
         // on DiLink Android 12 (requestLegacyExternalStorage works).
         // targetSdk 30+ would break listFiles() on /storage/emulated/0/energydata/
         targetSdk = 29
-        versionCode = 64021
+        versionCode = 64022
         versionName = "3.17.4"
         buildConfigField("String", "BUILD_ID", "\"$buildId\"")
 
