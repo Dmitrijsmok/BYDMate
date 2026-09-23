@@ -31,7 +31,7 @@ internal object RouteNavigatorDiscovery {
             RouteNavigatorUris.DGIS -> packages += RouteNavigatorUris.DGIS_PACKAGE
             RouteNavigatorUris.MAPS -> packages.addAll(NavPackages.YANDEX_MAPS)
             RouteNavigatorUris.WAZE -> packages += RouteNavigatorUris.WAZE_PACKAGE
-            RouteNavigatorUris.GOOGLE_MAPS -> packages += RouteNavigatorUris.GOOGLE_MAPS_PACKAGE
+            RouteNavigatorUris.GOOGLE_MAPS -> packages.addAll(RouteNavigatorUris.GOOGLE_MAPS_PACKAGES)
         }
 
         launcherApps(pm).forEach { app ->
@@ -72,9 +72,12 @@ internal object RouteNavigatorDiscovery {
             RouteNavigatorUris.WAZE ->
                 "waze" in pkg || label == "waze"
             RouteNavigatorUris.GOOGLE_MAPS ->
-                (pkg.contains("google") && pkg.contains("maps")) ||
+                pkg in RouteNavigatorUris.GOOGLE_MAPS_PACKAGES ||
+                    (pkg.contains("maps") && (pkg.contains("google") || pkg.contains("revanced"))) ||
+                    pkg.endsWith(".android.apps.maps") ||
                     label == "google maps" ||
-                    label == "карты google"
+                    label == "карты google" ||
+                    label == "гугл карты"
             else -> false
         }
     }
