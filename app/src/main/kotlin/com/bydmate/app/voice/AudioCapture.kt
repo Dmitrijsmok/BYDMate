@@ -128,20 +128,18 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
      *  was changed (so restoreMusic is a no-op and never bumps volume up unexpectedly). */
     // internal for direct unit tests
     internal fun duckMusic(): Int? = synchronized(duckLock) {
-        // DiLink 3 / ATTO 3 aliases the fallback assistant route closely enough to MUSIC that
-        // forcing MUSIC to index 1 also makes the local assistant's next spoken answer extremely
-        // quiet. Keep the user's volume untouched there and rely on transient audio focus while
-        // capture is active. Other BYD generations keep the author's explicit duck unchanged.
-        if (!SherpaTtsEngine.shouldUseBydVoiceStream(Build.FINGERPRINT.orEmpty())) {
-            Log.i(TAG, "duckMusic: DiLink3, leaving STREAM_MUSIC unchanged")
-            return null
-        }
         if (!audioManager.isMusicActive) return null
         val saved = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        // Near-zero, not 15%: DiLink's MUSIC scale is 0..39, so 15% (~index 5) is still clearly
-        // audible over the mic and over the agent's own replies (field defect APK 336). Index 1
-        // keeps playback alive (position keeps advancing) while being effectively silent.
-        val target = DUCK_VOLUME_INDEX
+        // DiLink 3 has no usable BYD stream 17, so Local TTS falls back to an accessibility route
+        // that aliases closely enough to STREAM_MUSIC that target=1 also makes the assistant
+        // effectively inaudible. Field-proven Alice ducking used target=4. Use that same mild
+        // target for Local on DiLink 3, while keeping the author's target=1 on cars with a
+        // separate BYD voice stream.
+        val target = if (SherpaTtsEngine.shouldUseBydVoiceStream(Build.FINGERPRINT.orEmpty())) {
+            DUCK_VOLUME_INDEX
+        } else {
+            EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX
+        }
         if (saved <= target) return null
         val applied = runCatching {
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
@@ -168,6 +166,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         duckDepth++
         pendingRestore = saved
         prefs.edit().putInt(KEY_PRE_DUCK_VOLUME, saved).apply()
+        Log.i(TAG, "duckExternalAlice: $saved -> $EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX")
         saved
     }
 
@@ -233,7 +232,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         val saved = prefs.getInt(KEY_PRE_DUCK_VOLUME, -1)
         if (saved < 0) return
         val cur = runCatching { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrNull()
-        if (cur != null && cur <= DUCK_VOLUME_INDEX) {
+        if (cur != null && cur <= maxOf(DUCK_VOLUME_INDEX, EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX)) {
             runCatching { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, saved, 0) }
             Log.i(TAG, "restoreStuckDuck: volume stuck at $cur, restored to $saved")
         } else {
