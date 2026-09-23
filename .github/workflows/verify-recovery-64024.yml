@@ -1,0 +1,55 @@
+name: Verify recovery 64024
+
+on:
+  push:
+    branches:
+      - recovery/alice-nav-audio-proven-baseline
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Verify recovery invariants
+        run: |
+          set -euo pipefail
+          grep -R 'versionCode = 64024' app/build.gradle.kts
+          grep -R 'versionName = "3.17.5"' app/build.gradle.kts
+          grep -R 'VOICE_DOUBLE_PRESS_WINDOW_MS = 250L' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt
+          grep -R 'ttsEngine.warmUp()' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
+          grep -R 'ttsEngine.startQueue()' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
+          grep -R 'EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX = 4' app/src/main/kotlin/com/bydmate/app/voice/AudioCapture.kt
+          grep -R 'duckMusicForExternalAssistant()' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
+          grep -R 'pkg == "com.byd.vrassistant"' app/src/main/kotlin/com/bydmate/app/helper/HelperDaemon.kt
+          grep -R 'ALICE4_5_VRASSISTANT_BLOCK startup=' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
+          grep -R 'ALICE4_5_VRASSISTANT_WINDOW_BLOCKED' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -R 'RouteNavigatorUris.WAZE_PACKAGE' app/src/main/kotlin/com/bydmate/app/data/automation/RouteNavigatorDiscovery.kt
+
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Android Lint
+        run: ./gradlew :app:lintDebug --stacktrace
+
+      - name: detekt
+        run: ./gradlew :app:detekt --stacktrace
+
+      - name: Build full debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: BYDMate-3.17.5-64024-recovery-full-debug
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 2
