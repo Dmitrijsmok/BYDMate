@@ -375,6 +375,7 @@ class VoiceController @Inject constructor(
             runCatching { showListeningOverlay(context.getString(R.string.voice_listening)) }
             var lastEventMs = System.currentTimeMillis()
             var wasAudible = false
+            var lateDuck: Int? = null
             try {
                 val pcm = audioCapture.captureSession(maxMs = Long.MAX_VALUE) // Wave P: no session cap; silence auto-stop below is the only auto-exit
                     .filter {
@@ -401,6 +402,12 @@ class VoiceController @Inject constructor(
                     when (ev) {
                         is ContinuousAsrEvent.SpeechStart -> {
                             lastEventMs = System.currentTimeMillis()
+                            // If media started after the continuous session opened, the initial
+                            // duck could not act. Re-check on real speech so loud music can never
+                            // remain over the microphone for the rest of the session.
+                            if (earlyDuck == null && lateDuck == null) {
+                                lateDuck = runCatching { audioCapture.duckMusic() }.getOrNull()
+                            }
                             // The live VAD now detects speech while a routing child is in
                             // flight; clobbering Thinking here would violate the busy-drop
                             // contract (no state change while an utterance is being routed).
@@ -483,6 +490,7 @@ class VoiceController @Inject constructor(
                 routingJob = null
                 cancellableAskJob = null
                 processingUtterance = false
+                runCatching { audioCapture.restoreMusic(lateDuck) }
                 runCatching { audioCapture.restoreMusic(earlyDuck) }
                 _listening.value = false
                 _state.value = VoiceUiState.Idle
