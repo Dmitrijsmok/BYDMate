@@ -321,6 +321,17 @@ class AgentToolsLaunchTest {
         assertEquals("com.google.android.youtube", payload.getString("packageName"))
     }
 
+    @Test fun launch_app_alias_tiktok_resolves_russian_spaced_name() = runTest {
+        val captured = slot<ActionDef>()
+        coEvery { dispatcher.dispatch(capture(captured), any()) } returns DispatchResult(true)
+        val fixture = listOf("TikTok" to "com.zhiliaoapp.musically")
+        val t = tools().apply { launcherAppsProvider = { fixture } }
+        val out = JSONObject(t.execute(AgentToolCall("1", "launch_app", """{"name":"тик ток"}""")))
+        assertTrue(out.getBoolean("ok"))
+        val payload = JSONObject(captured.captured.payload!!)
+        assertEquals("com.zhiliaoapp.musically", payload.getString("packageName"))
+    }
+
     // (d2) alias "видеорегистратор" has no candidate installed and no label match -> not-found error.
     @Test fun launch_app_alias_dashcam_not_installed_reports_not_found() = runTest {
         val t = tools().apply { launcherAppsProvider = { launcherFixture } }

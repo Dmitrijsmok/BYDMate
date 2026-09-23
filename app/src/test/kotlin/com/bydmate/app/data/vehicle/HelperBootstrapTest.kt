@@ -2,6 +2,7 @@ package com.bydmate.app.data.vehicle
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.bydmate.app.BuildConfig
 import com.bydmate.app.data.autoservice.AdbOnDeviceClient
 import com.bydmate.app.helper.HelperBinderHolder
 import kotlinx.coroutines.launch
@@ -90,12 +91,15 @@ class HelperBootstrapTest {
 
     /** Fakes the two methods ensureRunning exercises: isAlive() and daemonVersion().
      *  [version] defaults to null so stale/dead scenarios work without explicit setup. */
+    /** Fakes the daemon identity queried by ensureRunning(). */
     private open class FakeHelper(
         @Volatile var alive: Boolean,
         @Volatile var version: Long? = null,
+        @Volatile var buildId: String? = BuildConfig.BUILD_ID,
     ) : HelperClientImpl() {
         override suspend fun isAlive(): Boolean = alive
         override suspend fun daemonVersion(): Long? = version
+        override suspend fun daemonBuildId(): String? = buildId
     }
 
     /** Minimal IBinder carrying our daemon's descriptor — enough for the holder's accept
@@ -285,6 +289,28 @@ class HelperBootstrapTest {
         assertTrue(boot.ensureRunning())
         assertEquals("right version must not kill", 0, adb.killCalls)
         assertEquals("right version must not spawn", 0, adb.spawnCalls)
+    }
+
+    @Test
+    fun `same version with another build id is killed and respawned`() = runTest {
+        val adb = FakeAdb()
+        adb.processAlive = true
+        val helper = FakeHelper(
+            alive = true,
+            version = baselineVersion(),
+            buildId = "previous-apk-build",
+        )
+        adb.onSpawn = {
+            helper.alive = true
+            helper.version = baselineVersion()
+            helper.buildId = BuildConfig.BUILD_ID
+            true
+        }
+        val boot = HelperBootstrap(adb, helper, ctx())
+
+        assertTrue(boot.ensureRunning())
+        assertEquals("same version but different APK must kill stale daemon", 1, adb.killCalls)
+        assertEquals("same version but different APK must spawn fresh daemon", 1, adb.spawnCalls)
     }
 
     @Test

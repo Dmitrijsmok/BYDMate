@@ -52,6 +52,9 @@ import android.os.IBinder
  *   TX_GET_VERSION : (no args)
  *       -> reply: writeInt(status=0), writeInt(versionCode)  // BuildConfig.VERSION_CODE frozen at spawn time
  *       An old daemon without this handler makes transact return false → client treats it as null.
+ *   TX_GET_BUILD_ID : (no args)
+ *       -> reply: writeInt(status=0), writeString(buildId)  // exact APK build identity frozen at spawn time
+ *       Missing/mismatched buildId makes HelperBootstrap replace a same-version stale daemon.
  *   TX_GET_TOP_PACKAGE : (no args)
  *       -> reply: writeInt(status=0), writeString(packageName)  // "" when no top task
  *       An old daemon without this handler makes transact return false → client returns null.
@@ -446,6 +449,9 @@ object HelperBinderProtocol {
      * returns null and the toggle reports an unknown state instead of guessing.
      */
     val TX_GET_GLOBAL_SETTING: Int = IBinder.FIRST_CALL_TRANSACTION + 51  // 52
+
+    /** Exact APK build identity of the running detached daemon. */
+    val TX_GET_BUILD_ID: Int = IBinder.FIRST_CALL_TRANSACTION + 52  // 53
 
     /** Status codes of the TX_SPLIT37_* verbs. Distinct from the (status, value) autoservice
      *  convention: 2 says the firmware has no native split surface at all (methods absent on the

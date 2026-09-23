@@ -703,6 +703,12 @@ class TrackingService : Service(), LocationListener {
         // mic starts recording (field defect: first words swallowed). Fire-and-forget, gated on
         // the voice toggle so we don't load a 226 MiB model for drivers who never enabled voice.
         serviceScope.launch(Dispatchers.IO) {
+            val aliceEnabled = settingsRepository.getString(
+                SettingsRepository.KEY_ALICE_ENABLED, "false"
+            ) == "true"
+            getSharedPreferences("voice", Context.MODE_PRIVATE)
+                .edit().putBoolean(SettingsRepository.KEY_ALICE_ENABLED, aliceEnabled).apply()
+
             runCatching {
                 // A tripped guard means the last ASR model loads aborted this whole process
                 // from native code (corrupt .onnx -> SIGABRT, no Java exception): the files
@@ -776,12 +782,13 @@ class TrackingService : Service(), LocationListener {
         _isRunning.value = true
         ChainLog.append(this, "TrackingService fully started")
 
-        // Start Smart Home polling if configured
         serviceScope.launch {
-            val enabled = settingsRepository.getString(
-                com.bydmate.app.data.repository.SettingsRepository.KEY_ALICE_ENABLED, "false"
-            ) == "true"
-            if (enabled) alicePollingManager.start()
+            settingsRepository.observeString(SettingsRepository.KEY_ALICE_ENABLED).collect { value ->
+                val enabled = value == "true"
+                getSharedPreferences("voice", Context.MODE_PRIVATE)
+                    .edit().putBoolean(SettingsRepository.KEY_ALICE_ENABLED, enabled).apply()
+                if (enabled) alicePollingManager.start() else alicePollingManager.stop()
+            }
         }
 
         // v2.0: event-based sync on service start
@@ -1416,7 +1423,6 @@ class TrackingService : Service(), LocationListener {
                     _lastData.value = data
                     lastDataAtMs = System.currentTimeMillis()
                     blindSpotController.onPollSnapshot(data)
-                    alicePollingManager.latestData = data
                     // Cache for AutoserviceChargingDetector — avoids extra parsReader.fetch() inside runCatchUp.
                     autoserviceDetector.onSample(data)
                     // Roll the charge-start anchor forward while driving/parked so a

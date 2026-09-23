@@ -508,14 +508,21 @@
     <string name="place_edit_lon_label">Longitude</string>
     <string name="place_edit_radius_label">Radius, m</string>
     <string name="place_edit_error_min_radius">Minimum radius is 20 m</string>
-    <string name="welcome_step_indicator">Step %1$d of %2$d</string>
-    <string name="welcome_language_title">App language</string>
+    <string name="welcome_step_indicator">Step %1$d of 3</string>
+    <string name="welcome_model_step_title">Which BYD model do you have?</string>
+    <string name="welcome_model_step_description">This determines the trip data source.\nTitan 3 stores data in the BYD built-in database (energydata).\nSong and other models — only in DiPlus.</string>
+    <string name="welcome_model_song_label">Song / other</string>
+    <string name="welcome_model_change_later">You can change this later in settings.</string>
     <string name="welcome_next_button">Next</string>
     <string name="welcome_battery_section_title">Battery</string>
-    <string name="welcome_battery_capacity_hint">Check your car\'s specifications. Leopard 3: 72.9 kWh (BEV) or 31.8 kWh (PHEV)</string>
+    <string name="welcome_battery_capacity_hint">Leopard 3: 72.9 kWh (BEV) or 31.8 kWh (PHEV)</string>
     <string name="welcome_tariff_section_title">Tariffs</string>
     <string name="welcome_tariff_home_label">Home AC charge (%1$s/kWh)</string>
     <string name="welcome_tariff_dc_label">Fast DC charge (%1$s/kWh)</string>
+    <string name="welcome_tariff_cost_section_title">Trip cost calculation</string>
+    <string name="welcome_tariff_home_chip">Home</string>
+    <string name="welcome_tariff_custom_chip">Custom</string>
+    <string name="welcome_tariff_cost_note">Cost = consumption × tariff. You can change it later in settings.</string>
     <string name="welcome_autostart_step_title">Autostart on DiLink</string>
     <string name="welcome_autostart_step_description">To make BYDMate start automatically when the head unit turns on:</string>
     <string name="welcome_autostart_instruction_1">1. Tap the button on the right</string>
@@ -639,6 +646,7 @@
     <string name="settings_tariff_trip_custom_chip">Custom</string>
     <string name="settings_unit_km">km</string>
     <string name="settings_unit_miles">miles</string>
+    <string name="settings_lang_russian">Русский</string>
     <string name="settings_saved">Saved</string>
     <string name="settings_recalc_done">Recalculated: %1$d trips</string>
     <string name="settings_export_in_progress">Exporting...</string>
@@ -759,8 +767,6 @@
     <string name="settings_config_restore_confirm_body">All current data and settings will be replaced with the backup contents. This cannot be undone.</string>
     <string name="settings_config_restore_confirm_ok">Restore</string>
     <string name="settings_config_restore_confirm_cancel">Cancel</string>
-    <string name="settings_config_restore_pick_title">Choose a backup file</string>
-    <string name="settings_config_restore_pick_empty">No export files found in Download</string>
     <string name="settings_config_export_confirm_title">Export configuration?</string>
     <string name="settings_config_export_confirm_body">The backup contains your trip history with GPS routes and your API keys in plain text. The file is saved to the public Download folder. Keep it somewhere safe and do not share it.</string>
     <string name="settings_config_export_confirm_ok">Export</string>
@@ -1440,4 +1446,20 @@
     <string name="trips_temp_verdict_not_higher">In the cold the car does not use more than in the warm (difference %1$s%%). No winter penalty shows in your trips yet.</string>
     <string name="trips_temp_verdict_narrow">So far every trip was at %1$s…%2$s °C — there is no cold or heat to compare with yet.</string>
     <string name="trips_temp_verdict_none">Nothing to compare yet: trips in the cold and in the warm are both needed.</string>
+
+    <string name="settings_alice_provider_header">Voice assistant</string>
+    <string name="settings_voice_provider_label">Assistant</string>
+    <string name="settings_voice_provider_hint">Choose which voice assistant the steering-wheel button controls</string>
+    <string name="settings_voice_provider_local">BYDMate / TTS</string>
+    <string name="settings_alice_provider_title">Yandex Alice</string>
+    <string name="settings_alice_provider_desc">Use Alice instead of the built-in BYDMate voice assistant</string>
+    <string name="settings_alice_endpoint">Endpoint URL</string>
+    <string name="settings_alice_api_key">API Key</string>
+    <string name="settings_alice_autosave_hint">Endpoint and key are saved automatically</string>
+
+    <string name="settings_voice_app_matches_title">Voice command apps</string>
+    <string name="settings_voice_app_matches_desc">Shows which installed app BYDMate matched to each voice command.</string>
+    <string name="settings_voice_app_matches_button">Show</string>
+    <string name="settings_voice_app_matches_dialog_title">Application matches</string>
+    <string name="settings_voice_app_matches_not_found">Not found on this device</string>
 </resources>

@@ -197,6 +197,7 @@ class AgentOrchestrator @Inject constructor(
     ): AgentResult {
         val outcomes = mutableListOf<AgentToolOutcome>()
         val callCounts = mutableMapOf<String, Int>()
+        var lastTool: Pair<String, String>? = null
         var loopStrikes = 0
         repeat(MAX_ITERATIONS) {
             // Fresh chunker per LLM turn: a tool round's unterminated tail is discarded when
@@ -217,7 +218,7 @@ class AgentOrchestrator @Inject constructor(
                 }
             tracer.reply(reply)
             if (reply.toolCalls.isEmpty()) {
-                val answer = finalAnswer(reply)
+                val answer = terminalAgentAnswer(finalAnswer(reply), lastTool, outcomes)
                 if (answer.isEmpty()) return AgentResult.Error("Пустой ответ модели")
                 if (onSentence != null) chunker?.flush()?.let(onSentence)
                 messages += AgentMessage.Assistant(answer)
@@ -256,6 +257,7 @@ class AgentOrchestrator @Inject constructor(
                 val ok = runCatching { !JSONObject(res).has("error") }.getOrDefault(true)
                 tracer.tool(call, if (ok) "ok" else "error", nowMs() - toolStart, res)
                 outcomes += AgentToolOutcome(call.name, ok)
+                lastTool = call.name to res
                 messages += AgentMessage.Tool(call.id, res)
             }
         }
@@ -335,6 +337,11 @@ class AgentOrchestrator @Inject constructor(
             - Если параметра нет в ответе инструмента - он НЕИЗВЕСТЕН: так и скажи; не считай
               его нулём или выключенным.
             - Не выдумывай функции, которых нет среди инструментов: скажи прямо, что не умеешь.
+            - Настройки машины, экрана, Android, Wi-Fi, Bluetooth, звука и приложений открывай
+              через open_settings, а не через поиск launcher-приложения.
+            - Люк НЕ поддерживает произвольные проценты. Допустимы только: закрыть,
+              проветривание, наполовину и полностью. Если водитель просит другой процент,
+              не двигай люк и коротко назови доступные положения.
             - Помни контекст: "а теперь закрой" относится к предыдущей команде.
             - Если инструмент вернул error - коротко назови причину; не говори, что выполнил.
             - Вопросы про заряд до конца маршрута (хватит ли батареи, сколько останется на финише) - вызови get_route_info и отвечай по полю energy_estimate, сам арифметику не считай.
@@ -369,3 +376,36 @@ class AgentOrchestrator @Inject constructor(
         """.trimIndent()
     }
 }
+
+private val MUTATING_AGENT_TOOLS = setOf(
+    "vehicle_control", "media_volume", "run_automation", "add_charge",
+    "create_place", "navigate_to", "go_home", "play_music", "youtube",
+    "launch_app", "open_settings", "set_cluster_projection", "set_sentry",
+    "set_hotspot", "split_screen", "set_automation_enabled", "create_automation",
+)
+
+/** Provider occasionally returns an empty terminal message after a tool already succeeded.
+ * Keep that transport quirk outside AgentOrchestrator's control-flow complexity: a real side
+ * effect must never be reported as a failure. Read-only vehicle state gets a deterministic
+ * battery/range fallback for the same reason. */
+private fun terminalAgentAnswer(
+    modelAnswer: String,
+    lastTool: Pair<String, String>?,
+    outcomes: List<AgentToolOutcome>,
+): String {
+    if (modelAnswer.isNotEmpty()) return modelAnswer
+    if (lastTool == null || outcomes.isEmpty() || outcomes.any { !it.ok }) return ""
+    val (toolName, toolResult) = lastTool
+    if (toolName == "get_vehicle_state") {
+        val json = runCatching { JSONObject(toolResult) }.getOrNull() ?: return ""
+        val soc = json.optInt("soc_percent", -1).takeIf { it in 0..100 }
+        val range = json.optInt("range_km", -1).takeIf { it >= 0 }
+        return when {
+            soc != null && range != null -> "Заряд $soc%, запас примерно $range км."
+            soc != null -> "Заряд $soc%."
+            else -> ""
+        }
+    }
+    return if (toolName in MUTATING_AGENT_TOOLS) "Готово." else ""
+}
+

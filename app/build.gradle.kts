@@ -19,6 +19,14 @@ val keystoreProps = Properties().apply {
     if (keystorePropsFile.exists()) load(FileInputStream(keystorePropsFile))
 }
 
+// Exact APK identity carried into the detached helper daemon. versionCode alone is not enough:
+// upstream and fork-test APKs can share the same versionCode while carrying different helper code.
+val buildId = (
+    System.getenv("BYDMATE_BUILD_ID")
+        ?: System.getenv("GITHUB_SHA")
+        ?: "local-${System.currentTimeMillis()}"
+    ).take(64)
+
 android {
     namespace = "com.bydmate.app"
     compileSdk = 34
@@ -30,8 +38,9 @@ android {
         // on DiLink Android 12 (requestLegacyExternalStorage works).
         // targetSdk 30+ would break listFiles() on /storage/emulated/0/energydata/
         targetSdk = 29
-        versionCode = 479
-        versionName = "3.17.5"
+        versionCode = 64020
+        versionName = "3.17.4"
+        buildConfigField("String", "BUILD_ID", "\"$buildId\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

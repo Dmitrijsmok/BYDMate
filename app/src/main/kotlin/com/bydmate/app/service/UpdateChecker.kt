@@ -28,6 +28,7 @@ class UpdateChecker @Inject constructor(
         private const val KEY_LAST_CHECK = "last_check"
         private const val KEY_AUTO_CHECK = "auto_check_enabled"
         private const val KEY_LAST_SEEN_VERSION = "last_seen_version"
+        private const val KEY_LAST_SEEN_INSTALL_ID = "last_seen_install_id"
         private const val CHECK_INTERVAL_MS = 10 * 60 * 1000L // 10 minutes (protects only against repeated launches within one session)
 
         fun isAutoCheckEnabled(context: Context): Boolean =
@@ -46,6 +47,15 @@ class UpdateChecker @Inject constructor(
         fun setLastSeenVersion(context: Context, version: String) {
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit().putString(KEY_LAST_SEEN_VERSION, version).apply()
+        }
+
+        fun getLastSeenInstallId(context: Context): String? =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_LAST_SEEN_INSTALL_ID, null)
+
+        fun setLastSeenInstallId(context: Context, installId: String) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putString(KEY_LAST_SEEN_INSTALL_ID, installId).apply()
         }
     }
 

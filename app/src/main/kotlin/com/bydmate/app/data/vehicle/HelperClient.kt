@@ -336,6 +336,9 @@ interface HelperClient {
      */
     suspend fun daemonVersion(): Long?
 
+    /** Exact APK build identity; null against an old daemon or test double. */
+    suspend fun daemonBuildId(): String? = null
+
     /**
      * Tells the daemon this process now holds its Binder, so it stops re-announcing it by
      * broadcast (#64/#148). Returns the daemon's status (0 = registered), or null against a
@@ -767,6 +770,14 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
     override suspend fun daemonVersion(): Long? =
         transact(HelperBinderProtocol.TX_GET_VERSION) { }
             ?.let { (status, value) -> if (readAccepted(status)) value.toLong() else null }
+
+    override suspend fun daemonBuildId(): String? =
+        transactParsed(HelperBinderProtocol.TX_GET_BUILD_ID, { }) { reply ->
+            if (reply.dataAvail() < 4) return@transactParsed null
+            val status = reply.readInt()
+            if (!readAccepted(status)) return@transactParsed null
+            reply.readString()?.takeIf { it.isNotBlank() }
+        }
 
     override suspend fun registerClient(): Int? {
         val rc = transactParsed(HelperBinderProtocol.TX_REGISTER_CLIENT,

@@ -10,12 +10,16 @@ import com.bydmate.app.data.automation.VoiceFireResult
 import com.bydmate.app.R
 import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.data.local.entity.ActionDef
+import com.bydmate.app.data.remote.AliceApertureController
 import com.bydmate.app.ui.overlay.ListeningOverlay
 import com.bydmate.app.util.appLocalizedContext
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
@@ -64,8 +68,18 @@ class VoiceController @Inject constructor(
     private val _listening = MutableStateFlow(false)
     val listening: StateFlow<Boolean> = _listening.asStateFlow()
 
+    // Method injection keeps the constructor stable for the large JVM voice test suite while
+    // production can reuse Alice's proven closed-loop window positioning on DiLink 3.
+    private var apertureController: AliceApertureController? = null
+
+    @Inject
+    internal fun injectApertureController(controller: AliceApertureController) {
+        apertureController = controller
+    }
+
     private val busy = AtomicBoolean(false)
     @Volatile private var sessionJob: Job? = null
+    @Volatile private var warmupJob: Job? = null
     @Volatile private var routingJob: Job? = null
     @Volatile private var cancellableAskJob: Job? = null
     // Busy drops are Log.i-only by contract (no journal/earcon/state change), so tests have no
@@ -80,6 +94,31 @@ class VoiceController @Inject constructor(
      * Used by VoiceAutomationActions to gate speak/agent_query actions.
      */
     fun sessionActive(): Boolean = listening.value || busy.get()
+
+    /**
+     * External assistants such as Alice speak through STREAM_MUSIC on DiLink.
+     * Do not lower STREAM_MUSIC here: doing so also lowers Alice herself, which made every
+     * invocation start at volume index 4. Yandex manages its own audio focus/ducking.
+     */
+    fun beginExternalAssistantAudio() = Unit
+
+    fun endExternalAssistantAudio() = Unit
+
+    /** Provider hand-off: Alice must never start while Local still owns AudioRecord/TTS.
+     *  Returns true when there was local work to tear down, so launchers may allow a short
+     *  hardware-release grace before opening the external assistant. */
+    fun stopForExternalAssistant(): Boolean {
+        val wasActive = _listening.value || sessionJob?.isActive == true ||
+            warmupJob?.isActive == true || ttsEngine.speaking.value
+        warmupJob?.cancel()
+        warmupJob = null
+        if (_listening.value || sessionJob?.isActive == true) {
+            stopContinuousSession()
+        } else {
+            runCatching { ttsEngine.stop() }
+        }
+        return wasActive
+    }
 
     /** Test seams, same rationale as [lastSpeakingSeenMs]: deterministic await conditions
      *  instead of fixed sleeps, no public API surface added. */
@@ -227,41 +266,62 @@ class VoiceController @Inject constructor(
             return
         }
         if (continuousAsr.isReady() && currentLang() == VoiceLang.RU) {
-            startContinuousSession()
-        } else {
-            // GigaAM model missing (or non-RU language, which GigaAM does not support):
-            // preserve the degraded UX the legacy path produced — overlay + journal ERROR.
-            if (!busy.compareAndSet(false, true)) return
-            // A prior continuous-session hard stop (stopContinuousSession()) leaves stopRequested
-            // set; only startContinuousSession() used to clear it. Without this reset, announce()
-            // below would silently suppress this branch's overlay+speech forever for a user who
-            // can never start a continuous session again to reset the flag (I-1).
-            stopRequested.set(false)
-            // Two distinct causes share this branch (#87): the GigaAM model genuinely
-            // missing vs. a non-RU voice language (GigaAM is Russian-only) — the old
-            // single "model not loaded" text sent EN-locale users chasing a phantom
-            // download problem.
-            val langBlocked = continuousAsr.isReady() && currentLang() != VoiceLang.RU
-            val msg = context.getString(
-                if (langBlocked) R.string.voice_error_lang_not_ru
-                else R.string.voice_error_model_missing
-            )
-            _state.value = VoiceUiState.NotUnderstood("")
-            record(
-                VoiceJournalEntry.Route.NONE, "", "", VoiceJournalEntry.Outcome.ERROR,
-                msg,
-                "GigaAM ${if (langBlocked) "lang not supported" else "model not ready"} lang=${currentLang()}"
-            )
-            busy.set(false)
-            scheduleIdleReset()
-            scope.launch { announce("Голос", msg, msg) }
+            startLocalSessionWhenReady()
+            return
         }
+        reportVoiceUnavailable()
+    }
+
+    private fun startLocalSessionWhenReady() {
+        if (continuousAsr.isWarm()) {
+            startContinuousSession()
+            return
+        }
+        // Never show the listening cue before the native recognizer+VAD can actually consume
+        // microphone frames. The service normally pre-warms this path; this is the cold-start
+        // safety net after process restart/provider switching.
+        if (warmupJob?.isActive == true) return
+        warmupJob = scope.launch(Dispatchers.IO) {
+            continuousAsr.warmUp()
+            if (canStartAfterWarmup()) startContinuousSession()
+            warmupJob = null
+        }
+    }
+
+    private suspend fun canStartAfterWarmup(): Boolean {
+        if (!currentCoroutineContext().isActive) return false
+        if (!gate.isEnabled()) return false
+        if (currentLang() != VoiceLang.RU) return false
+        if (!continuousAsr.isWarm()) return false
+        return !_listening.value
+    }
+
+    private fun reportVoiceUnavailable() {
+        // GigaAM model missing (or non-RU language, which GigaAM does not support):
+        // preserve the degraded UX the legacy path produced — overlay + journal ERROR.
+        if (!busy.compareAndSet(false, true)) return
+        stopRequested.set(false)
+        val langBlocked = continuousAsr.isReady() && currentLang() != VoiceLang.RU
+        val msg = context.getString(
+            if (langBlocked) R.string.voice_error_lang_not_ru
+            else R.string.voice_error_model_missing
+        )
+        _state.value = VoiceUiState.NotUnderstood("")
+        record(
+            VoiceJournalEntry.Route.NONE, "", "", VoiceJournalEntry.Outcome.ERROR,
+            msg,
+            "GigaAM ${if (langBlocked) "lang not supported" else "model not ready"} lang=${currentLang()}"
+        )
+        busy.set(false)
+        scheduleIdleReset()
+        scope.launch { announce("Голос", msg, msg) }
     }
 
     /** Continuous PTT-toggled session (Wave B): one long-lived mic capture feeds VAD-segmented
      *  utterances into the shared NLU/agent router (routeUtterance), so a follow-up question from
-     *  the agent keeps listening for free — the loop just collects again. Auto-stops after
-     *  SILENCE_AUTOSTOP_MS of continuous silence (Wave P: no session cap). */
+     *  the agent keeps listening for free — the loop just collects again. The local BYDMate
+     *  assistant stays armed until the driver presses the PTT button again; silence never
+     *  auto-stops the session. Alice keeps its own lifecycle unchanged. */
     private fun startContinuousSession() {
         if (!busy.compareAndSet(false, true)) return
         ensureSupertonicStressDict()
@@ -317,8 +377,10 @@ class VoiceController @Inject constructor(
                             if (!processingUtterance) _state.value = VoiceUiState.Listening
                         }
                         is ContinuousAsrEvent.SilenceTick -> {
+                            // Keep the author's continuous-listening contract: silence only marks
+                            // the current timing point. The session is stopped explicitly by the
+                            // driver (second PTT press) or by a genuine capture/ASR failure.
                             lastEventMs = System.currentTimeMillis()
-                            if (ev.silentMs >= SILENCE_AUTOSTOP_MS && !processingUtterance) throw StopSession
                         }
                         is ContinuousAsrEvent.Utterance -> {
                             val decodeMs = System.currentTimeMillis() - lastEventMs
@@ -341,6 +403,10 @@ class VoiceController @Inject constructor(
                                 return@collect
                             }
                             processingUtterance = true
+                            // Paint the recognized phrase NOW, before any vehicle dispatch, network
+                            // call or LLM work. The driver can immediately see what GigaAM heard.
+                            runCatching { showHeardHook(ev.text) }
+                            cancelScheduledClear()
                             val job = launch(start = CoroutineStart.LAZY) {
                                 runCatching { updateListeningOverlay(context.getString(R.string.voice_thinking)) }
                                 try {
@@ -356,6 +422,10 @@ class VoiceController @Inject constructor(
                                         "Continuous session utterance failed: decodeMs=$decodeMs ${t.message}")
                                     announce("Голос", "Отказ: ${t.message ?: "внутренняя ошибка"}", "Ошибка")
                                 } finally {
+                                    // Do not let a following utterance supersede the previous
+                                    // answer before its queued TTS drains. Continuous listening
+                                    // stays ON; this only serializes conversational turns.
+                                    if (!stopRequested.get()) awaitTurnSpeechDrain()
                                     routingJob = null
                                     processingUtterance = false
                                     runCatching { updateListeningOverlay(context.getString(R.string.voice_listening)) }
@@ -368,9 +438,6 @@ class VoiceController @Inject constructor(
                         }
                     }
                 }
-            } catch (e: StopSession) {
-                // Expected silence auto-stop. Deferred PTT-stop after an in-flight utterance uses
-                // session cancellation from the routing child so the session finally still runs.
             } catch (t: Throwable) {
                 // A real coroutine cancellation (e.g. stopContinuousSession() cancelling sessionJob
                 // while idle) must propagate. Anything else is a genuine capture/ASR failure (e.g.
@@ -425,11 +492,9 @@ class VoiceController @Inject constructor(
      *  noteAction, announce — all unchanged). decodeMs is also logged for RTF measurement on
      *  the car, and threaded into the VoiceJournal detail for each utterance. */
     private suspend fun routeUtterance(transcript: String, decodeMs: Long) {
-        // Orb dialog: show "Ты: <phrase>" (clearing any prior answer) and cancel a pending clear so a
-        // fresh turn keeps the block visible. The pill has already flipped to "Думаю" at the call site.
-        showHeardHook(transcript)
+        // The transcript row is painted synchronously at the Utterance event before this routing
+        // coroutine starts; routing must never be what delays visible recognition feedback.
         val command = AgentNameMatcher.stripLeadingName(transcript, agentIdentity().name)
-        cancelScheduledClear()
         Log.i(TAG, "Continuous session utterance: decodeMs=$decodeMs")
 
         // Echo filter: only check if the transcript had no agent name prefix (if it did have the name,
@@ -446,9 +511,57 @@ class VoiceController @Inject constructor(
         // An unanswered clarifying question from the agent outranks NLU: the phrase
         // is the ANSWER ("водителя", "назови её Дом") and must reach ask() verbatim.
         val followUp = runCatching { agentOrchestrator.expectsFollowUp() }.getOrDefault(false)
-        val res = if (followUp) null else resolve(command, currentLang())
+        val lang = currentLang()
+        val res = if (followUp) null else resolve(command, lang)
+        val localReply = if (!followUp && res == null) {
+            LocalVehicleQuery.answer(command, lang, gate.vehicleSnapshot())
+        } else {
+            null
+        }
         _state.value = VoiceUiState.Thinking
-        if (res != null) apply(res, command, decodeMs) else agentFallback(command, decodeMs)
+        when {
+            res != null -> apply(res, command, decodeMs)
+            localReply != null -> {
+                earcon.ok()
+                _state.value = VoiceUiState.AgentAnswer(localReply.text)
+                record(
+                    VoiceJournalEntry.Route.NLU,
+                    command,
+                    withDecodeMs(command, decodeMs),
+                    VoiceJournalEntry.Outcome.OK,
+                    null,
+                    "Local vehicle query: kind=${localReply.kind} transcript=\"$command\"",
+                    answer = localReply.text,
+                )
+                announce("Голос", localReply.text, localReply.text)
+            }
+            else -> agentFallback(command, decodeMs)
+        }
+    }
+
+    /** Wait for the answer belonging to the current turn to actually start and drain.
+     *  speak()/SpeechQueue are fire-and-forget, so route completion alone is not playback completion. */
+    private suspend fun awaitTurnSpeechDrain() {
+        if (!gate.ttsEnabled()) return
+        val stamp = lastSpeakingSeenMs
+        if (stamp <= 0L) return
+
+        if (!ttsEngine.speaking.value) {
+            val age = System.currentTimeMillis() - stamp
+            if (age < TURN_TTS_START_GRACE_MS) {
+                val started = withTimeoutOrNull(TURN_TTS_START_GRACE_MS - age) {
+                    ttsEngine.speaking.first { it }
+                    true
+                } ?: false
+                if (!started) return
+            } else {
+                return
+            }
+        }
+
+        withTimeoutOrNull(TURN_TTS_DRAIN_TIMEOUT_MS) {
+            ttsEngine.speaking.first { !it }
+        }
     }
 
     /** Appends the continuous-session decode latency to a journal detail string; a no-op
@@ -503,7 +616,10 @@ class VoiceController @Inject constructor(
     private fun scheduleClear(text: String, spoken: Boolean) {
         clearJob?.cancel()
         clearJob = scope.launch {
-            ttsEngine.speaking.first { !it }   // wait out the spoken answer (immediate if TTS off)
+            // A broken/cold TTS engine must never pin the previous "Ты/Агент" block forever.
+            withTimeoutOrNull(DIALOG_TTS_WAIT_TIMEOUT_MS) {
+                ttsEngine.speaking.first { !it }
+            }
             delay(readingDwellMs(text, spoken))
             clearDialogHook()
         }
@@ -546,10 +662,11 @@ class VoiceController @Inject constructor(
         // failure so the announce never claims success for a half-done utterance (#98).
         var failReason: String? = null
         for (command in commands) {
-            val result = actionDispatcher.dispatch(
-                ActionDef(command = command, displayName = command, kind = "param"),
-                data = snapshot
-            )
+            val result = dispatchWindowPosition(apertureController, command, snapshot?.speed)
+                ?: actionDispatcher.dispatch(
+                    ActionDef(command = command, displayName = command, kind = "param"),
+                    data = snapshot
+                )
             if (!result.success) {
                 failReason = result.reason ?: transcript
                 break
@@ -678,6 +795,10 @@ class VoiceController @Inject constructor(
             announce("Голос", "Не понял", "Не понял")
             return
         }
+        // Regression guard from the fast Build 84/85 path: warm the local TTS engine while
+        // the external LLM is thinking. warmUp() is non-blocking and queues engine creation on
+        // Sherpa's worker, so the first streamed sentence no longer pays model-load latency.
+        if (gate.ttsEnabled()) runCatching { ttsEngine.warmUp() }
         val queue = if (gate.ttsEnabled()) runCatching { ttsEngine.startQueue() }.getOrNull() else null
         val streamed = StringBuilder()
         var queuedAny = false
@@ -761,26 +882,9 @@ class VoiceController @Inject constructor(
                 // Orb dialog: this branch does not go through announce(), so feed the orb here.
                 showAnswerHook(result.text)
                 scheduleClear(result.text, didSpeak)
-                // Wave P: a successful play_music closes the whole session after the reply -- the orb's
-                // presence ducks the very music the agent just started. Music only; every other tool
-                // keeps the dialogue open. Gated on sessionJob so the legacy single-shot path (which has
-                // no session to close) is untouched.
-                val closingJob = sessionJob
-                if (closingJob != null && result.tools.any { it.name == "play_music" && it.ok }) {
-                    scope.launch {
-                        // speak()/enqueue() returns before the TTS worker flips speaking=true, so
-                        // waiting for !speaking alone completes immediately and would cut the reply
-                        // before it starts. Wait (bounded) for playback to begin, then for it to
-                        // end; if it never begins (TTS off, synth failed), the grace elapses and
-                        // the session still closes.
-                        withTimeoutOrNull(SPEAK_START_GRACE_MS) { ttsEngine.speaking.first { it } }
-                        ttsEngine.speaking.first { !it }   // let the agent finish its own reply first
-                        // PTT restarting a session stops TTS -- the very signal this coroutine
-                        // waits for -- so only close the session this reply belongs to, never a
-                        // newer one the user has already started.
-                        if (sessionJob === closingJob) stopContinuousSession()
-                    }
-                }
+                // Local BYDMate remains a continuous assistant until the driver explicitly
+                // presses PTT again. Tool calls, including play_music, never auto-close the session.
+                // Alice has its own lifecycle and is intentionally unaffected by this contract.
             }
             AgentResult.Disabled -> {
                 earcon.fail(); _state.value = VoiceUiState.NotUnderstood(transcript)
@@ -816,24 +920,18 @@ class VoiceController @Inject constructor(
         // Wave D2: dwell before the orb dialog block ("Ты: …"/"Агент: …") is cleared, measured from
         // when the spoken answer finishes (or from when it is shown, if TTS is off).
         private const val DIALOG_CLEAR_MS = 6_000L
+        private const val DIALOG_TTS_WAIT_TIMEOUT_MS = 12_000L
 
         // Reading dwell for an answer nobody spoke aloud: rough Russian reading speed, ~1000
         // characters per minute, with a hard cap so the block never squats on the screen.
         private const val DIALOG_READ_MS_PER_CHAR = 60L
         private const val DIALOG_READ_MAX_MS = 30_000L
 
-        // Continuous session (Wave B): silence auto-stop. Wave P removed the hard session cap --
-        // long conversations must never be cut off; silence is the only automatic exit.
-        private const val SILENCE_AUTOSTOP_MS = 30_000L
-
-        // Wave P play_music auto-close: how long to wait for the reply's playback to actually
-        // begin (speaking=false -> true) before giving up and closing anyway. Covers offline
-        // synth latency and the online 2 s per-sentence timeout with margin.
-        private const val SPEAK_START_GRACE_MS = 5_000L
-
         // Anti-self-trigger TTS mute window grace period, applied after ttsEngine.speaking
         // transitions to false (see the speakingWatcher in startContinuousSession()).
         private const val TTS_MUTE_GRACE_MS = 500L
+        private const val TURN_TTS_START_GRACE_MS = 1_500L
+        private const val TURN_TTS_DRAIN_TIMEOUT_MS = 12_000L
 
         /** Pure so it is unit-testable without a real clock/session: whether capture should
          *  currently be muted -- either TTS is actively speaking right now, or we're still
@@ -843,6 +941,26 @@ class VoiceController @Inject constructor(
     }
 }
 
-/** Control-flow signal to auto-stop the continuous session on prolonged silence. A
- *  CancellationException so it tears down the collect chain (mic, VAD, recognizer) cleanly. */
-private object StopSession : CancellationException("voice-session-silence-timeout")
+private suspend fun dispatchWindowPosition(
+    controller: AliceApertureController?,
+    command: String,
+    speed: Int?,
+): com.bydmate.app.data.automation.DispatchResult? {
+    val requests = VoiceWindowPositionRouter.resolve(command) ?: return null
+    controller ?: return null
+    val results = coroutineScope {
+        requests.map { request ->
+            async { controller.positionWindow(request.action, request.target, speed) }
+        }.awaitAll()
+    }
+    val failed = results.firstOrNull { it.isFailure }
+    return if (failed == null) {
+        com.bydmate.app.data.automation.DispatchResult(true)
+    } else {
+        com.bydmate.app.data.automation.DispatchResult(
+            false,
+            failed.exceptionOrNull()?.message ?: "window_position_failed",
+        )
+    }
+}
+

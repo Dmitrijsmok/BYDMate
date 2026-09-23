@@ -356,6 +356,36 @@ class GigaAmModelManagerTest {
         assertFalse("after the APK update the model must read as not downloaded", manager(filesDir).isReady())
     }
 
+    @Test
+    fun `resumable archive reduces additional free-space requirement`() {
+        val half = GigaAmModelManager.MODEL_ARCHIVE_BYTES / 2
+        assertEquals(
+            GigaAmModelManager.REQUIRED_FREE_BYTES - half,
+            GigaAmModelManager.additionalRequiredFreeBytes(half),
+        )
+        assertEquals(
+            GigaAmModelManager.REQUIRED_FREE_BYTES - GigaAmModelManager.MODEL_ARCHIVE_BYTES,
+            GigaAmModelManager.additionalRequiredFreeBytes(GigaAmModelManager.MODEL_ARCHIVE_BYTES),
+        )
+    }
+
+    @Test
+    fun `range 416 at exact file length treats cached archive as complete`() {
+        assertTrue(
+            GigaAmModelManager.rangeAlreadyComplete(
+                1234L,
+                "bytes */1234",
+            )
+        )
+        assertFalse(
+            GigaAmModelManager.rangeAlreadyComplete(
+                1200L,
+                "bytes */1234",
+            )
+        )
+        assertFalse(GigaAmModelManager.rangeAlreadyComplete(1234L, null))
+    }
+
     // --- Phased progress: the unpack of a ~226 MiB archive must not look like a hang ---
 
     @Test

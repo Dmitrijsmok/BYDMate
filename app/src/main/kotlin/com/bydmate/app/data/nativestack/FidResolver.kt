@@ -193,6 +193,7 @@ object FidResolver {
         val constant = entries.associate { it.field to FidAddress(it.device, it.fid) }
         val candidates = LinkedHashMap<String, FidAddress>()
         for (entry in entries) {
+            if (!entry.resolveFromCatalog) continue
             val symbol = entry.symbol ?: continue
             val catalogFid = catalog.fidOf(symbol) ?: continue
             if (catalogFid == entry.fid) continue
