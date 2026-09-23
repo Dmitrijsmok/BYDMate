@@ -1171,7 +1171,13 @@ class ActionDispatcher @Inject constructor(
         Log.i(TAG, "navigate: app=$navigator mode=$mode uri=$uri")
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        RouteNavigatorUris.intentPackage(navigator)?.let(intent::setPackage)
+        if (RouteNavigatorUris.normalize(navigator) == RouteNavigatorUris.GOOGLE_MAPS) {
+            RouteNavigatorDiscovery.packagesFor(RouteNavigatorUris.GOOGLE_MAPS, context.packageManager)
+                .firstOrNull()
+                ?.let(intent::setPackage)
+        } else {
+            RouteNavigatorUris.intentPackage(navigator)?.let(intent::setPackage)
+        }
         val result = tryStartActivity(intent, label)
         Log.i(TAG, "navigate: intent sent label=$label ok=${result.success}")
         return if (result.success && fallbackReason != null) result.copy(reason = fallbackReason)
