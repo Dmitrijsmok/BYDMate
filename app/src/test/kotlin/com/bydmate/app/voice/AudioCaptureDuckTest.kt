@@ -66,44 +66,68 @@ class AudioCaptureDuckTest {
     }
 
     @Test
-    fun `shared assistant audio pauses once and resumes once after final owner exits`() {
+    fun `assistant audio owner is idempotent and never dispatches media pause`() {
         val audioManager = mockk<AudioManager>(relaxed = true)
-        every { audioManager.isMusicActive } returns true
+        every {
+            audioManager.requestAudioFocus(
+                any(),
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+            )
+        } returns AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         val capture = AudioCapture(audioManager, prefsMock().first)
 
-        capture.beginSharedAssistantAudio()
-        capture.beginSharedAssistantAudio()
+        capture.beginAssistantAudio(AssistantAudioOwner.ALICE)
+        capture.beginAssistantAudio(AssistantAudioOwner.ALICE)
 
-        // First owner emits one media-key pair (DOWN + UP); nested begin emits nothing else.
-        verify(exactly = 2) { audioManager.dispatchMediaKeyEvent(any()) }
+        assertEquals(setOf(AssistantAudioOwner.ALICE), capture.assistantAudioOwnersForTest())
+        verify(exactly = 2) {
+            audioManager.requestAudioFocus(
+                any(),
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+            )
+        }
+        verify(exactly = 0) { audioManager.dispatchMediaKeyEvent(any()) }
         verify(exactly = 0) { audioManager.setStreamVolume(any(), any(), any()) }
 
-        capture.endSharedAssistantAudio()
+        capture.endAssistantAudio(AssistantAudioOwner.ALICE)
+        assertEquals(emptySet<AssistantAudioOwner>(), capture.assistantAudioOwnersForTest())
+        verify(exactly = 1) { audioManager.abandonAudioFocus(any()) }
 
-        // One owner is still alive: no resume pair yet.
-        verify(exactly = 2) { audioManager.dispatchMediaKeyEvent(any()) }
-
-        capture.endSharedAssistantAudio()
-
-        // Final owner emits exactly one additional pair, the resume action.
-        verify(exactly = 4) { audioManager.dispatchMediaKeyEvent(any()) }
-
-        // Extra teardown is harmless: it must not keep toggling playback.
-        capture.endSharedAssistantAudio()
-        verify(exactly = 4) { audioManager.dispatchMediaKeyEvent(any()) }
+        // Extra teardown is harmless and cannot "resume" or otherwise toggle media.
+        capture.endAssistantAudio(AssistantAudioOwner.ALICE)
+        verify(exactly = 1) { audioManager.abandonAudioFocus(any()) }
+        verify(exactly = 0) { audioManager.dispatchMediaKeyEvent(any()) }
     }
 
     @Test
-    fun `shared assistant audio does not resume media it did not pause`() {
+    fun `local and Alice owners overlap without leaking focus`() {
         val audioManager = mockk<AudioManager>(relaxed = true)
-        every { audioManager.isMusicActive } returns false
+        every {
+            audioManager.requestAudioFocus(
+                any(),
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+            )
+        } returns AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         val capture = AudioCapture(audioManager, prefsMock().first)
 
-        capture.beginSharedAssistantAudio()
-        capture.endSharedAssistantAudio()
+        capture.beginAssistantAudio(AssistantAudioOwner.LOCAL)
+        capture.beginAssistantAudio(AssistantAudioOwner.ALICE)
+        assertEquals(
+            setOf(AssistantAudioOwner.LOCAL, AssistantAudioOwner.ALICE),
+            capture.assistantAudioOwnersForTest(),
+        )
 
+        capture.endAssistantAudio(AssistantAudioOwner.LOCAL)
+        assertEquals(setOf(AssistantAudioOwner.ALICE), capture.assistantAudioOwnersForTest())
+        verify(exactly = 0) { audioManager.abandonAudioFocus(any()) }
+
+        capture.endAssistantAudio(AssistantAudioOwner.ALICE)
+        assertEquals(emptySet<AssistantAudioOwner>(), capture.assistantAudioOwnersForTest())
+        verify(exactly = 1) { audioManager.abandonAudioFocus(any()) }
         verify(exactly = 0) { audioManager.dispatchMediaKeyEvent(any()) }
-        verify(exactly = 0) { audioManager.setStreamVolume(any(), any(), any()) }
     }
 
     @Test
