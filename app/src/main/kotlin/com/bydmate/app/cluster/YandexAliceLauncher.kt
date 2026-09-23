@@ -83,6 +83,12 @@ internal class YandexAliceLauncher(
         }
 
         if (pending && isAliceContextPackage(packageName)) advance()
+        if (listening) {
+            // Accessibility keeps producing events while Alice is open. Re-checking here lets
+            // us catch media that starts after Alice began listening; the controller call is
+            // idempotent once it owns a saved pre-duck volume.
+            voiceController().beginExternalAssistantAudio()
+        }
         if (leftYandexWhileListening(listening, event, packageName)) {
             handler.postDelayed({
                 val active = runCatching {
