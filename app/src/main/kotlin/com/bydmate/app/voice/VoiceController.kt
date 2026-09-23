@@ -11,6 +11,7 @@ import com.bydmate.app.R
 import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.data.local.entity.ActionDef
 import com.bydmate.app.data.remote.AliceApertureController
+import com.bydmate.app.data.remote.AliceAppResolver
 import com.bydmate.app.ui.overlay.ListeningOverlay
 import com.bydmate.app.util.appLocalizedContext
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -77,6 +78,18 @@ class VoiceController @Inject constructor(
         apertureController = controller
     }
 
+    // Explicit "open app" commands share Alice's dynamic package/label resolver, including
+    // ReVanced/MicroG and vendor APK variants.
+    private var appResolver: AliceAppResolver? = null
+
+    @Inject
+    internal fun injectAppResolver(resolver: AliceAppResolver) {
+        appResolver = resolver
+    }
+
+    private val externalAudioLock = Any()
+    private var externalAssistantDuck: Int? = null
+
     private val busy = AtomicBoolean(false)
     @Volatile private var sessionJob: Job? = null
     @Volatile private var warmupJob: Job? = null
@@ -96,13 +109,30 @@ class VoiceController @Inject constructor(
     fun sessionActive(): Boolean = listening.value || busy.get()
 
     /**
-     * External assistants such as Alice speak through STREAM_MUSIC on DiLink.
-     * Do not lower STREAM_MUSIC here: doing so also lowers Alice herself, which made every
-     * invocation start at volume index 4. Yandex manages its own audio focus/ducking.
+     * Yandex does not reliably duck DiLink media by audio focus. Hold one idempotent physical
+     * STREAM_MUSIC duck for the whole Alice listening/answer lifecycle. Duplicate accessibility
+     * triggers are harmless: only the first acting duck owns the saved volume.
      */
-    fun beginExternalAssistantAudio() = Unit
+    fun beginExternalAssistantAudio() = synchronized(externalAudioLock) {
+        if (externalAssistantDuck != null) return@synchronized
+        val saved = runCatching { audioCapture.duckMusicForExternalAssistant() }.getOrNull()
+        if (saved != null) {
+            externalAssistantDuck = saved
+            Log.i(TAG, "Alice media duck acquired: saved=$saved")
+        }
+    }
 
-    fun endExternalAssistantAudio() = Unit
+    fun endExternalAssistantAudio() {
+        val saved = synchronized(externalAudioLock) {
+            val value = externalAssistantDuck
+            externalAssistantDuck = null
+            value
+        }
+        if (saved != null) {
+            runCatching { audioCapture.restoreMusic(saved) }
+            Log.i(TAG, "Alice media duck released: restore=$saved")
+        }
+    }
 
     /** Provider hand-off: Alice must never start while Local still owns AudioRecord/TTS.
      *  Returns true when there was local work to tear down, so launchers may allow a short
@@ -513,7 +543,22 @@ class VoiceController @Inject constructor(
         val followUp = runCatching { agentOrchestrator.expectsFollowUp() }.getOrDefault(false)
         val lang = currentLang()
         val res = if (followUp) null else resolve(command, lang)
-        val localReply = if (!followUp && res == null) {
+        val localApp = if (!followUp && res == null) {
+            LocalAppLaunchQuery.target(command, lang)?.let { appName ->
+                val resolver = appResolver ?: AliceAppResolver(context)
+                val resolved = resolver.resolveText(appName)
+                resolved.exceptionOrNull()?.let {
+                    Log.i(TAG, "Local app resolve miss: app=$appName reason=${it.message}")
+                }
+                resolved.getOrNull()?.let { packageName ->
+                    Log.i(TAG, "Local app resolved: app=$appName package=$packageName")
+                    appName to packageName
+                }
+            }
+        } else {
+            null
+        }
+        val localReply = if (!followUp && res == null && localApp == null) {
             LocalVehicleQuery.answer(command, lang, gate.vehicleSnapshot())
         } else {
             null
@@ -521,6 +566,7 @@ class VoiceController @Inject constructor(
         _state.value = VoiceUiState.Thinking
         when {
             res != null -> apply(res, command, decodeMs)
+            localApp != null -> launchLocalApp(localApp.first, localApp.second, command, decodeMs)
             localReply != null -> {
                 earcon.ok()
                 _state.value = VoiceUiState.AgentAnswer(localReply.text)
@@ -536,6 +582,52 @@ class VoiceController @Inject constructor(
                 announce("Голос", localReply.text, localReply.text)
             }
             else -> agentFallback(command, decodeMs)
+        }
+    }
+
+    private suspend fun launchLocalApp(
+        appName: String,
+        packageName: String,
+        transcript: String,
+        decodeMs: Long?,
+    ) {
+        val result = actionDispatcher.dispatch(
+            ActionDef(
+                command = "",
+                displayName = "Запуск $appName",
+                kind = "app_launch",
+                payload = org.json.JSONObject().put("packageName", packageName).toString(),
+            ),
+            data = gate.vehicleSnapshot(),
+        )
+        if (result.success) {
+            earcon.ok()
+            val answer = "Открываю $appName."
+            _state.value = VoiceUiState.Done(transcript)
+            record(
+                VoiceJournalEntry.Route.NLU,
+                transcript,
+                withDecodeMs(transcript, decodeMs),
+                VoiceJournalEntry.Outcome.OK,
+                null,
+                "Local app launch: app=$appName package=$packageName transcript=\"$transcript\"",
+                answer = answer,
+            )
+            announce("Голос", answer, answer)
+            scope.launch { runCatching { agentOrchestrator.noteAction(transcript) } }
+        } else {
+            val reason = result.reason ?: "не получилось открыть $appName"
+            earcon.fail()
+            _state.value = VoiceUiState.Blocked(reason)
+            record(
+                VoiceJournalEntry.Route.NLU,
+                transcript,
+                withDecodeMs(transcript, decodeMs),
+                VoiceJournalEntry.Outcome.BLOCKED,
+                reason,
+                "Local app launch failed: app=$appName package=$packageName transcript=\"$transcript\"",
+            )
+            announce("Голос", "Не получилось открыть $appName", "Не получилось")
         }
     }
 
