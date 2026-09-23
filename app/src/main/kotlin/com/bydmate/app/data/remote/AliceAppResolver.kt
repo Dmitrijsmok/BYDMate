@@ -92,7 +92,11 @@ class AliceAppResolver @Inject constructor(
                 context.packageManager,
             ),
             labels = setOf("google maps", "карты google", "гугл карты"),
-            packageTokens = setOf("google.android.apps.maps"),
+            packageTokens = setOf(
+                "google.android.apps.maps",
+                "revanced.android.apps.maps",
+                "android.apps.maps",
+            ),
         )
         "app.dgis.open" -> AppTarget(
             packages = RouteNavigatorDiscovery.packagesFor(
@@ -154,11 +158,13 @@ class AliceAppResolver @Inject constructor(
         val selected = RouteNavigatorUris.normalize(
             prefs.getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null),
         )
+        val manual = prefs.getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, null)
+            ?.trim().orEmpty()
         val installed = RouteNavigatorDiscovery.installedIds(context.packageManager)
-        return (listOf(selected) + installed)
+        val auto = (listOf(selected) + installed)
             .distinct()
             .flatMap { RouteNavigatorDiscovery.packagesFor(it, context.packageManager) }
-            .distinct()
+        return (listOfNotNull(manual.takeIf(String::isNotBlank)) + auto).distinct()
     }
 
     private data class AppTarget(
