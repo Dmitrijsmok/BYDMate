@@ -20,7 +20,8 @@ object SentinelDecoder {
     const val FEATURE_LINK_ERROR = 0x0000FFFF
     private const val NOT_INITIALIZED_20BIT = 0x000FFFFF
     private const val WRONG_TRANSACT = -10013
-    private const val WRONG_DIRECTION = -10011
+    /** Public for guarded read-channel fallbacks: the feature exists, but this address is not readable here. */
+    const val WRONG_DIRECTION = -10011
 
     fun decodeInt(raw: Int): Int? = when (raw) {
         FEATURE_LINK_ERROR,

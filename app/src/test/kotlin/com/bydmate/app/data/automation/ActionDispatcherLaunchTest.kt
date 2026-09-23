@@ -64,11 +64,25 @@ class ActionDispatcherLaunchTest {
     @Test fun `app_launch goes through daemon am start when daemon launches it`() = runBlocking {
         every { packageManager.getLaunchIntentForPackage("com.example.app") } returns mockk<Intent>(relaxed = true)
         coEvery { helper.launchApp("com.example.app") } returns true
+        coEvery { helper.getTopTaskPackage() } returns "com.example.app"
         val result = dispatcher.dispatch(launchAction("com.example.app"), null)
         assertTrue(result.success)
         coVerify(exactly = 1) { helper.launchApp("com.example.app") }
-        // Daemon succeeded → no fallback startActivity.
         verify(exactly = 0) { context.startActivity(any()) }
+    }
+
+    @Test fun `app_launch falls back when daemon says success but app never reaches foreground`() = runBlocking {
+        val intent = mockk<Intent>(relaxed = true)
+        every { intent.addFlags(any()) } returns intent
+        every { packageManager.getLaunchIntentForPackage("com.example.app") } returns intent
+        coEvery { helper.launchApp("com.example.app") } returns true
+        coEvery { helper.getTopTaskPackage() } returns "com.yandex.browser"
+
+        val result = dispatcher.dispatch(launchAction("com.example.app"), null)
+
+        assertTrue(result.success)
+        coVerify(exactly = 1) { helper.launchApp("com.example.app") }
+        verify(exactly = 1) { context.startActivity(any()) }
     }
 
     @Test fun `app_launch reports not installed without calling daemon`() = runBlocking {

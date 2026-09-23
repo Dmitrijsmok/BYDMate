@@ -132,6 +132,23 @@ class CommandTranslatorTest {
         assertEquals(10, r?.value)
     }
 
+    @Test fun `arbitrary driver percentage maps to window_driver_pos`() {
+        val r = one("主驾打开37")
+        assertEquals("window_driver_pos", r?.actionName)
+        assertEquals(37, r?.value)
+    }
+
+    @Test fun `arbitrary rear-right percentage maps to window_rear_right_pos`() {
+        val r = one("后右打开65")
+        assertEquals("window_rear_right_pos", r?.actionName)
+        assertEquals(65, r?.value)
+    }
+
+    @Test fun `percentage endpoints keep dedicated open close commands`() {
+        assertEquals("window_driver_open", one("主驾打开100")?.actionName)
+        assertEquals("window_driver_close", one("主驾打开0")?.actionName)
+    }
+
     // ── Rear windows (aggregate) — fan-out to both open/close fids ────────────
     @Test fun `rear windows open fans out to both rear open fids`() {
         assertEquals(
@@ -325,30 +342,35 @@ class CommandTranslatorTest {
         assertTrue(onEntry.validated)
     }
 
-    // ── Temperature: dynamic parse over full 16..30 range ────────────────────
+    // ── Temperature: ATTO 3 numeric 18..32 with 17=LO and 33=HI sentinels ─────
     @Test fun `set temperature 24 maps to ac_temp_main val 24`() {
         val r = one("设置温度24")
         assertEquals("ac_temp_main", r?.actionName)
         assertEquals(24, r?.value)
     }
 
-    @Test fun `set temperature 16 maps to ac_temp_main val 16`() {
-        val r = one("设置温度16")
+    @Test fun `set temperature 17 maps to LO sentinel`() {
+        val r = one("设置温度17")
         assertEquals("ac_temp_main", r?.actionName)
-        assertEquals(16, r?.value)
+        assertEquals(17, r?.value)
     }
 
-    // Out-of-range request clamps into the validated 16..30 window.
-    @Test fun `set temperature 35 clamps to ac_temp_main val 30`() {
+    @Test fun `set temperature 32 stays numeric`() {
+        val r = one("设置温度32")
+        assertEquals("ac_temp_main", r?.actionName)
+        assertEquals(32, r?.value)
+    }
+
+    @Test fun `set temperature 35 clamps to HI sentinel`() {
         val r = one("设置温度35")
         assertEquals("ac_temp_main", r?.actionName)
-        assertEquals(30, r?.value)
+        assertEquals(33, r?.value)
     }
 
-    @Test fun `set temperature 5 clamps to ac_temp_main val 16`() {
+    @Test fun `set temperature 5 clamps to LO sentinel`() {
         val r = one("设置温度5")
         assertEquals("ac_temp_main", r?.actionName)
-        assertEquals(16, r?.value)
+        assertEquals(17, r?.value)
     }
 
     // ── Fan speed ── dynamic 风量<N> → ac_wind_level, clamped to 1..7 (#201) ──
@@ -378,6 +400,20 @@ class CommandTranslatorTest {
             assertEquals("action for $command", "ac_wind_mode", r?.actionName)
             assertEquals("value for $command", value, r?.value)
         }
+    }
+
+    @Test fun `extended airflow values use isolated allowlist action`() {
+        assertEquals("ac_wind_mode_ext", one("吹面吹脚除霜")?.actionName)
+        assertEquals(6, one("吹面吹脚除霜")?.value)
+        assertEquals("ac_wind_mode_ext", one("吹面除霜")?.actionName)
+        assertEquals(7, one("吹面除霜")?.value)
+    }
+
+    @Test fun `window stop commands use shared ctrl family value 3`() {
+        assertEquals("window_driver_ctrl", one("主驾停止")?.actionName)
+        assertEquals(3, one("主驾停止")?.value)
+        assertEquals("window_rear_right_ctrl", one("后右停止")?.actionName)
+        assertEquals(3, one("后右停止")?.value)
     }
 
     // 吹前挡 drives defrost_front_on on a different fid — the new 除霜 entry must not

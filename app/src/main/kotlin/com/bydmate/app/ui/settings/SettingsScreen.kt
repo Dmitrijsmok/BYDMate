@@ -119,12 +119,12 @@ import kotlinx.coroutines.flow.filterNotNull
 import com.bydmate.app.R
 import com.bydmate.app.agent.LlmAgentBackend
 import com.bydmate.app.data.remote.OpenRouterModel
+import com.bydmate.app.data.remote.VoiceAppMatch
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.ui.components.AppLaunchPickerDialog
 import com.bydmate.app.ui.components.MultiAppPickerDialog
 import com.bydmate.app.ui.components.bydSwitchColors
 import com.bydmate.app.ui.theme.*
-import com.bydmate.app.util.APP_LANGUAGES
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
@@ -139,7 +139,6 @@ import com.bydmate.app.split.Split37Engine
 import com.bydmate.app.split.SplitFreeformVerdict
 import com.bydmate.app.split.SplitRole
 import com.bydmate.app.split.applyPick
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -1906,67 +1905,17 @@ private fun ServiceSection(
         EntryPointAccessors.fromApplication(context.applicationContext, ClusterEntryPoint::class.java)
     }
 
-    // Own picker over Download/ instead of SAF: on some firmwares ACTION_OPEN_DOCUMENT hands
-    // back a URI without a read grant (#223). Non-null restoreCandidates = picker open.
-    var restoreTarget by remember { mutableStateOf<File?>(null) }
+    // SAF picker for restore — must be declared at composable top level
+    val restoreLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) viewModel.restoreConfig(uri)
+    }
+    var showRestoreConfirm by remember { mutableStateOf(false) }
     var showExportConfirm by remember { mutableStateOf(false) }
 
-    state.restoreCandidates?.let { files ->
-        AlertDialog(
-            onDismissRequest = { viewModel.closeRestorePicker() },
-            title = {
-                Text(
-                    stringResource(R.string.settings_config_restore_pick_title),
-                    color = TextPrimary,
-                )
-            },
-            text = {
-                if (files.isEmpty()) {
-                    Text(
-                        stringResource(R.string.settings_config_restore_pick_empty),
-                        color = TextSecondary,
-                    )
-                } else {
-                    val dateFormat = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        items(files) { file ->
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        viewModel.closeRestorePicker()
-                                        restoreTarget = file
-                                    }
-                                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                            ) {
-                                Text(file.name, color = TextPrimary, fontSize = 13.sp, maxLines = 1)
-                                Text(
-                                    dateFormat.format(Date(file.lastModified())),
-                                    color = TextSecondary,
-                                    fontSize = 12.sp,
-                                )
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { viewModel.closeRestorePicker() }) {
-                    Text(
-                        stringResource(R.string.settings_config_restore_confirm_cancel),
-                        color = TextSecondary,
-                    )
-                }
-            },
-            containerColor = CardSurfaceElevated,
-        )
-    }
-
     // Confirm dialog for destructive restore operation
-    restoreTarget?.let { target ->
+    if (showRestoreConfirm) {
         AlertDialog(
-            onDismissRequest = { restoreTarget = null },
+            onDismissRequest = { showRestoreConfirm = false },
             title = {
                 Text(
                     stringResource(R.string.settings_config_restore_confirm_title),
@@ -1981,8 +1930,8 @@ private fun ServiceSection(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    restoreTarget = null
-                    viewModel.restoreConfig(target)
+                    showRestoreConfirm = false
+                    restoreLauncher.launch(arrayOf("application/zip"))
                 }) {
                     Text(
                         stringResource(R.string.settings_config_restore_confirm_ok),
@@ -1991,7 +1940,7 @@ private fun ServiceSection(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { restoreTarget = null }) {
+                TextButton(onClick = { showRestoreConfirm = false }) {
                     Text(
                         stringResource(R.string.settings_config_restore_confirm_cancel),
                         color = TextSecondary,
@@ -2265,7 +2214,7 @@ private fun ServiceSection(
                 title = stringResource(R.string.settings_config_restore_button),
                 description = stringResource(R.string.settings_config_restore_desc),
                 buttonLabel = stringResource(R.string.settings_config_restore_button),
-                onClick = { viewModel.openRestorePicker() },
+                onClick = { showRestoreConfirm = true },
             )
             if (state.configStatus != null) {
                 SettingHint(
@@ -2427,6 +2376,55 @@ private fun AppSection(state: SettingsUiState, viewModel: SettingsViewModel) {
 }
 
 @Composable
+private fun VoiceAppMatchesDialog(
+    matches: List<VoiceAppMatch>,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_voice_app_matches_dialog_title)) },
+        text = {
+            LazyColumn(
+                modifier = Modifier.heightIn(max = 420.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(matches, key = { it.action }) { match ->
+                    Column {
+                        Text(
+                            text = match.name,
+                            color = TextPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        if (match.packageName != null) {
+                            Text(
+                                text = listOfNotNull(match.appLabel, match.packageName)
+                                    .distinct()
+                                    .joinToString(" · "),
+                                color = TextSecondary,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                            )
+                        } else {
+                            Text(
+                                text = stringResource(R.string.settings_voice_app_matches_not_found),
+                                color = TextMuted,
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(android.R.string.ok))
+            }
+        },
+    )
+}
+
+@Composable
 private fun VoiceSettingsContent(
     state: SettingsUiState,
     viewModel: SettingsViewModel,
@@ -2434,6 +2432,14 @@ private fun VoiceSettingsContent(
     onNavigateToAgentChat: () -> Unit,
 ) {
     val context = LocalContext.current
+    var showVoiceAppMatches by remember { mutableStateOf(false) }
+
+    if (showVoiceAppMatches) {
+        VoiceAppMatchesDialog(
+            matches = state.voiceAppMatches,
+            onDismiss = { showVoiceAppMatches = false },
+        )
+    }
 
     // Tracks which action requested the RECORD_AUDIO permission so the onResult
     // callback dispatches the right operation (ENABLE toggle).
@@ -2465,6 +2471,74 @@ private fun VoiceSettingsContent(
         ActivityResultContracts.RequestPermission()
     ) { granted -> contactsPermGranted = granted }
 
+    SectionHeader(text = stringResource(R.string.settings_alice_provider_header))
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            SettingChipRow(
+                title = stringResource(R.string.settings_voice_provider_label),
+                description = stringResource(R.string.settings_voice_provider_hint),
+                options = listOf(
+                    stringResource(R.string.settings_voice_provider_local),
+                    stringResource(R.string.settings_alice_provider_title),
+                ),
+                selectedIndex = if (state.aliceEnabled) 1 else 0,
+                onSelect = { viewModel.toggleAlice(it == 1) },
+            )
+            if (state.aliceEnabled) {
+                SettingDivider()
+                SettingsTextField(
+                    label = stringResource(R.string.settings_alice_endpoint),
+                    value = state.aliceEndpoint,
+                    onValueChange = { viewModel.updateAliceEndpoint(it) },
+                    keyboardType = KeyboardType.Uri,
+                )
+                SettingsTextField(
+                    label = stringResource(R.string.settings_alice_api_key),
+                    value = state.aliceApiKey,
+                    onValueChange = { viewModel.updateAliceApiKey(it) },
+                    keyboardType = KeyboardType.Password,
+                    secret = true,
+                )
+                SettingHint(stringResource(R.string.settings_alice_autosave_hint))
+            }
+        }
+    }
+
+    val routeNavigatorIds = state.routeNavigatorOptions.ifEmpty { listOf(state.routeNavigator) }
+    val routeNavigatorLabels = routeNavigatorIds.map { id ->
+        when (id) {
+            com.bydmate.app.data.automation.RouteNavigatorUris.DGIS ->
+                stringResource(R.string.settings_route_navigator_dgis)
+            com.bydmate.app.data.automation.RouteNavigatorUris.MAPS ->
+                stringResource(R.string.settings_route_navigator_maps)
+            com.bydmate.app.data.automation.RouteNavigatorUris.WAZE -> "Waze"
+            com.bydmate.app.data.automation.RouteNavigatorUris.GOOGLE_MAPS -> "Google Maps"
+            else -> stringResource(R.string.settings_route_navigator_yandex)
+        }
+    }
+    SettingChipRow(
+        title = stringResource(R.string.settings_route_navigator_label),
+        description = stringResource(R.string.settings_route_navigator_hint),
+        options = routeNavigatorLabels,
+        selectedIndex = routeNavigatorIds.indexOf(state.routeNavigator).coerceAtLeast(0),
+        onSelect = { viewModel.setRouteNavigator(routeNavigatorIds[it]) },
+    )
+    SettingActionRow(
+        title = stringResource(R.string.settings_voice_app_matches_title),
+        description = stringResource(R.string.settings_voice_app_matches_desc),
+        buttonLabel = stringResource(R.string.settings_voice_app_matches_button),
+        onClick = { showVoiceAppMatches = true },
+        enabled = true,
+    )
+
+    if (!state.aliceEnabled) {
     // --- Section 1: Агент (enable toggle, name, persona, gender, debug tools) ---
     SectionHeader(text = stringResource(R.string.settings_agent_section_header))
 
@@ -2521,24 +2595,6 @@ private fun VoiceSettingsContent(
                 ),
                 selectedIndex = genderIds.indexOf(state.agentGender).coerceAtLeast(0),
                 onSelect = { viewModel.setAgentGender(genderIds[it]) },
-            )
-            SettingDivider()
-            // #190/#200: the map app every route/search command opens (voice agent and automation).
-            val routeNavigatorIds = listOf(
-                com.bydmate.app.data.automation.RouteNavigatorUris.YANDEX,
-                com.bydmate.app.data.automation.RouteNavigatorUris.DGIS,
-                com.bydmate.app.data.automation.RouteNavigatorUris.MAPS,
-            )
-            SettingChipRow(
-                title = stringResource(R.string.settings_route_navigator_label),
-                description = stringResource(R.string.settings_route_navigator_hint),
-                options = listOf(
-                    stringResource(R.string.settings_route_navigator_yandex),
-                    stringResource(R.string.settings_route_navigator_dgis),
-                    stringResource(R.string.settings_route_navigator_maps),
-                ),
-                selectedIndex = routeNavigatorIds.indexOf(state.routeNavigator).coerceAtLeast(0),
-                onSelect = { viewModel.setRouteNavigator(routeNavigatorIds[it]) },
             )
         }
     }
@@ -2801,6 +2857,8 @@ private fun VoiceSettingsContent(
         }
     }
 
+    }
+
     // --- Section 5: Кнопка и микрофон ---
     SectionHeader(text = stringResource(R.string.settings_voice_button_mic_header))
 
@@ -2816,7 +2874,7 @@ private fun VoiceSettingsContent(
                 description = stringResource(R.string.settings_voice_enable_description),
                 checked = state.voiceEnabled,
                 onCheckedChange = { on ->
-                    if (on && !hasAudioPerm()) {
+                    if (on && !state.aliceEnabled && !hasAudioPerm()) {
                         pendingVoiceAction = "ENABLE"
                         audioPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
                     } else {
@@ -3083,17 +3141,7 @@ private fun SmartHomeSection(state: SettingsUiState, viewModel: SettingsViewMode
                 keyboardType = KeyboardType.Password,
                 secret = true
             )
-            SettingActionRow(
-                title = "Сохранить",
-                buttonLabel = "Сохранить",
-                onClick = { viewModel.saveAliceSettings() },
-                style = SettingButtonStyle.Primary,
-                enabled = state.aliceEndpoint.isNotBlank() && state.aliceApiKey.isNotBlank(),
-            )
-            state.aliceSaveStatus?.let {
-                Text(it, color = AccentGreen, fontSize = 12.sp)
-            }
-            SettingHint("Polling опрашивает Worker каждую секунду\nи выполняет команды через D+ API")
+            SettingHint("Worker передаёт команды в локальный BYDMate bridge")
         }
     }
 }
@@ -3106,8 +3154,11 @@ private fun LanguageBlock(
     // No Activity.recreate(): MainActivity listens to LocalePreferences,
     // mutates Resources.configuration in place, and re-provides
     // LocalConfiguration so every stringResource recomposes on next frame.
-    val langCodes = APP_LANGUAGES.map { it.first }
-    val langLabels = APP_LANGUAGES.map { it.second }
+    val langCodes = listOf("ru", "en", "zh", "pt", "pl", "be")
+    val langLabels = listOf(
+        stringResource(R.string.settings_lang_russian), "English", "简体中文", "Português",
+        "Polski", "Беларуская",
+    )
     SectionHeader(text = stringResource(R.string.settings_language_title))
     Card(
         shape = RoundedCornerShape(12.dp),

@@ -646,6 +646,12 @@ fun main(args: Array<String>) {
                     true
                 }.getOrElse { reply?.writeInt(-1); reply?.writeInt(0); true }
 
+                HelperBinderProtocol.TX_GET_BUILD_ID -> runCatching {
+                    // Distinguishes APKs that intentionally share versionCode (upstream vs fork test).
+                    reply?.writeInt(0); reply?.writeString(BuildConfig.BUILD_ID)
+                    true
+                }.getOrElse { reply?.writeInt(-1); reply?.writeString(""); true }
+
                 HelperBinderProtocol.TX_GET_TOP_PACKAGE -> runCatching {
                     val pkg = topTaskPackage() ?: ""
                     reply?.writeInt(0); reply?.writeString(pkg)

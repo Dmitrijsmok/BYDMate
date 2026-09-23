@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -27,6 +28,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
             MediaRecorder.AudioSource.DEFAULT,              // 0
         )
         internal const val DUCK_VOLUME_INDEX = 1
+        internal const val EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX = 4
         private const val TAG = "AudioCapture"
         // Pre-duck media volume survives process death here; restoreStuckDuck() reads it
         // at service start (stuck-quiet media after a crash / APK update mid session).
@@ -126,6 +128,14 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
      *  was changed (so restoreMusic is a no-op and never bumps volume up unexpectedly). */
     // internal for direct unit tests
     internal fun duckMusic(): Int? = synchronized(duckLock) {
+        // DiLink 3 / ATTO 3 aliases the fallback assistant route closely enough to MUSIC that
+        // forcing MUSIC to index 1 also makes the local assistant's next spoken answer extremely
+        // quiet. Keep the user's volume untouched there and rely on transient audio focus while
+        // capture is active. Other BYD generations keep the author's explicit duck unchanged.
+        if (!SherpaTtsEngine.shouldUseBydVoiceStream(Build.FINGERPRINT.orEmpty())) {
+            Log.i(TAG, "duckMusic: DiLink3, leaving STREAM_MUSIC unchanged")
+            return null
+        }
         if (!audioManager.isMusicActive) return null
         val saved = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
         // Near-zero, not 15%: DiLink's MUSIC scale is 0..39, so 15% (~index 5) is still clearly
@@ -142,6 +152,23 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         prefs.edit().putInt(KEY_PRE_DUCK_VOLUME, saved).apply()
         Log.i(TAG, "duckMusic: $saved -> $target")
         return saved
+    }
+
+    internal fun duckMusicForExternalAssistant(): Int? = synchronized(duckLock) {
+        if (!audioManager.isMusicActive) return null
+        val saved = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        if (saved <= EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX) return null
+        if (!runCatching {
+                audioManager.setStreamVolume(
+                    AudioManager.STREAM_MUSIC,
+                    EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX,
+                    0,
+                )
+            }.isSuccess) return null
+        duckDepth++
+        pendingRestore = saved
+        prefs.edit().putInt(KEY_PRE_DUCK_VOLUME, saved).apply()
+        saved
     }
 
     /** Restore the media volume captured by duckMusic(), or the explicit mid-session override. No-op if nothing was ducked. */

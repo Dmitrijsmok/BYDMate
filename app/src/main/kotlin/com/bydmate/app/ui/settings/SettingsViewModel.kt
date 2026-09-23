@@ -6,10 +6,13 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.FileProvider
 import android.os.Environment
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.ContextCompat
+import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import android.content.Intent
+import android.net.Uri
 import android.util.Log
 import android.os.SystemClock
 import com.bydmate.app.agent.AgentOrchestrator
@@ -31,6 +34,8 @@ import com.bydmate.app.data.remote.InsightsManager
 import com.bydmate.app.data.remote.LlmHttpException
 import com.bydmate.app.data.remote.OpenRouterClient
 import com.bydmate.app.data.remote.OpenRouterModel
+import com.bydmate.app.data.remote.AliceAppResolver
+import com.bydmate.app.data.remote.VoiceAppMatch
 import com.bydmate.app.data.local.dao.TariffPeriodDao
 import com.bydmate.app.data.local.entity.PlaceEntity
 import com.bydmate.app.data.local.entity.TariffPeriodEntity
@@ -43,7 +48,6 @@ import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.data.repository.TripRepository
 import com.bydmate.app.service.TrackingService
 import com.bydmate.app.service.UpdateChecker
-import com.bydmate.app.util.applyAppLanguage
 import com.bydmate.app.util.CrashLog
 import com.bydmate.app.util.appLocalizedContext
 import com.bydmate.app.R
@@ -63,7 +67,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -72,6 +75,7 @@ import com.bydmate.app.data.vehicle.DumpFidsResult
 import com.bydmate.app.data.vehicle.SeatChannel
 import com.bydmate.app.data.vehicle.SeatChannelStore
 import com.bydmate.app.service.BootReceiver
+import com.bydmate.app.ui.widget.WidgetController
 import com.bydmate.app.cluster.DEFAULT_VOICE_KEYCODE
 import com.bydmate.app.voice.AgentPersona
 import com.bydmate.app.voice.TtsGender
@@ -175,8 +179,6 @@ data class SettingsUiState(
     val webhookSaveStatus: String? = null,
     /** Status of the last config backup/restore operation. Red if starts with error prefix. */
     val configStatus: String? = null,
-    /** Backups offered by the restore picker, newest first. Null = picker closed. */
-    val restoreCandidates: List<File>? = null,
     /** Status of the last fid-catalog dump. Null = idle. Red if starts with error prefix. */
     val fidDumpStatus: String? = null,
     val mapTileSource: String = SettingsRepository.DEFAULT_MAP_TILE_SOURCE,
@@ -221,8 +223,12 @@ data class SettingsUiState(
     val agentName: String = "",
     val agentPersona: String = AgentPersona.NAVIGATOR.id,
     val agentGender: String = "m",
-    /** #190: which map app the navigate action opens — "yandex" (default) or "dgis". */
+    /** Navigator selected for voice/route actions. */
     val routeNavigator: String = com.bydmate.app.data.automation.RouteNavigatorUris.YANDEX,
+    /** Only navigator apps that currently expose a launcher activity on this head unit. */
+    val routeNavigatorOptions: List<String> = emptyList(),
+    /** Resolved voice-action -> installed launcher package diagnostics for the Settings UI. */
+    val voiceAppMatches: List<VoiceAppMatch> = emptyList(),
     /** Long-term facts the agent remembered about the driver (DriverMemory). */
     val agentMemoryFacts: List<String> = emptyList(),
     // Wave J: multi-provider LLM connections (OpenRouter / z.ai / custom)
@@ -321,12 +327,17 @@ class SettingsViewModel @Inject constructor(
     val agentPersona: StateFlow<String> = _agentPersona.asStateFlow()
 
     fun setAppLanguage(lang: String) {
-        applyAppLanguage(appContext, localePreferences, lang)
+        localePreferences.setLanguage(lang)
+        AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(lang))
         _appLanguage.value = lang
         // Auto-select CNY when switching to Chinese
         if (lang == "zh") {
             saveCurrency("CNY")
         }
+        // Force overlay teardown so the next attach picks up the new locale.
+        // applicationContext keeps a stale Configuration after setApplicationLocales,
+        // which leaves the floating widget rendering against the old language.
+        WidgetController.relocale(appContext)  // C-5: pass context from VM, not from widgetView
     }
 
     /** Forget the remembered seat write-channel; next seat command re-probes primary→fallback. */
@@ -440,6 +451,8 @@ class SettingsViewModel @Inject constructor(
             val aliceEndpoint = settingsRepository.getString(SettingsRepository.KEY_ALICE_ENDPOINT, "")
             val aliceApiKey = settingsRepository.getString(SettingsRepository.KEY_ALICE_API_KEY, "")
             val aliceEnabled = settingsRepository.getString(SettingsRepository.KEY_ALICE_ENABLED, "false") == "true"
+            appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                .edit().putBoolean(SettingsRepository.KEY_ALICE_ENABLED, aliceEnabled).apply()
 
             val abrpEnabled = settingsRepository.getString(SettingsRepository.KEY_ABRP_ENABLED, "false") == "true"
             val abrpApiKey = settingsRepository.getString(SettingsRepository.KEY_ABRP_API_KEY, "")
@@ -495,10 +508,22 @@ class SettingsViewModel @Inject constructor(
                 .getString("agent_persona", null) ?: AgentPersona.NAVIGATOR.id
             val agentGender = appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
                 .getString("agent_gender", "m") ?: "m"
-            val routeNavigator = com.bydmate.app.data.automation.RouteNavigatorUris.normalize(
-                appContext.getSharedPreferences(
-                    com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
-                ).getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null))
+            val routePrefs = appContext.getSharedPreferences(
+                com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
+            )
+            val savedRouteNavigator = com.bydmate.app.data.automation.RouteNavigatorUris.normalize(
+                routePrefs.getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null)
+            )
+            val routeNavigatorOptions = installedRouteNavigatorIds()
+            val voiceAppMatches = AliceAppResolver(appContext).diagnosticMatches()
+            val routeNavigator = if (
+                routeNavigatorOptions.isEmpty() || savedRouteNavigator in routeNavigatorOptions
+            ) savedRouteNavigator else routeNavigatorOptions.first()
+            if (routeNavigator != savedRouteNavigator) {
+                routePrefs.edit()
+                    .putString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, routeNavigator)
+                    .apply()
+            }
 
             // Wave J: multi-provider LLM connections
             val zaiApiKey = settingsRepository.getString(SettingsRepository.KEY_ZAI_API_KEY, "")
@@ -559,6 +584,8 @@ class SettingsViewModel @Inject constructor(
                     agentPersona = agentPersona,
                     agentGender = agentGender,
                     routeNavigator = routeNavigator,
+                    routeNavigatorOptions = routeNavigatorOptions,
+                    voiceAppMatches = voiceAppMatches,
                     agentMemoryFacts = driverMemory.facts(),
                     zaiApiKey = zaiApiKey,
                     customName = customName,
@@ -582,6 +609,12 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, disabled.toString())
             helperClient.setAppHidden("com.byd.autovoice", disabled)
+            // On DiLink 3 / Android 10 disabling the native assistant can leave the steering
+            // voice-key accessibility binding stale. Re-assert our service immediately so the
+            // user does not need to reboot the whole head unit.
+            if (disabled && _uiState.value.voiceEnabled) {
+                ensureVoiceKeyService("native-assistant-disabled")
+            }
         }
     }
 
@@ -1142,29 +1175,33 @@ class SettingsViewModel @Inject constructor(
 
     fun updateAliceEndpoint(value: String) {
         _uiState.update { it.copy(aliceEndpoint = value) }
+        viewModelScope.launch {
+            settingsRepository.setString(SettingsRepository.KEY_ALICE_ENDPOINT, value.trim())
+        }
     }
 
     fun updateAliceApiKey(value: String) {
         _uiState.update { it.copy(aliceApiKey = value) }
-    }
-
-    fun saveAliceSettings() {
-        val state = _uiState.value
         viewModelScope.launch {
-            settingsRepository.setString(SettingsRepository.KEY_ALICE_ENDPOINT, state.aliceEndpoint)
-            settingsRepository.setString(SettingsRepository.KEY_ALICE_API_KEY, state.aliceApiKey)
-            val enabled = state.aliceEndpoint.isNotBlank() && state.aliceApiKey.isNotBlank()
-            settingsRepository.setString(SettingsRepository.KEY_ALICE_ENABLED, enabled.toString())
-            _uiState.update { it.copy(aliceEnabled = enabled, aliceSaveStatus = appContext.getString(R.string.settings_saved)) }
-            delay(2000)
-            _uiState.update { it.copy(aliceSaveStatus = null) }
+            settingsRepository.setString(SettingsRepository.KEY_ALICE_API_KEY, value)
         }
     }
 
     fun toggleAlice(enabled: Boolean) {
+        if (enabled) voiceController.stopForExternalAssistant()
         _uiState.update { it.copy(aliceEnabled = enabled) }
+        appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+            .edit().putBoolean(SettingsRepository.KEY_ALICE_ENABLED, enabled).apply()
+        if (!enabled && _uiState.value.voiceEnabled) {
+            viewModelScope.launch(Dispatchers.IO) { runCatching { continuousAsr.warmUp() } }
+            runCatching { ttsEngine.warmUp() }
+        }
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_ALICE_ENABLED, enabled.toString())
+            if (_uiState.value.voiceEnabled) {
+                ensureVoiceKeyService(if (enabled) "alice-provider" else "local-provider")
+                // Warm-up already starts immediately above so a fast PTT press cannot outrun it.
+            }
         }
     }
 
@@ -1302,24 +1339,31 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(voiceEnabled = enabled) }
         viewModelScope.launch {
             settingsRepository.setVoiceEnabled(enabled)
-            // Mirror into "voice" SharedPreferences for SteeringWheelKeyService
             appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
                 .edit().putBoolean(SettingsRepository.KEY_VOICE_ENABLED, enabled).apply()
-            // Best-effort re-bind of the a11y key service (PTT is dead without it), same
-            // pattern as ClusterProjectionManager.enableStarControl: bootstrap the daemon
-            // FIRST — HelperClient only resolves an existing binder, so without ensureRunning()
-            // the call silently no-ops when the daemon is not up. Only needed on enable.
             if (enabled) {
-                if (helperBootstrap.ensureRunning()) {
-                    helperClient.enableAccessibilityService()
-                } else {
-                    Log.e(TAG, "helper daemon not running; cannot self-enable a11y for voice PTT")
-                }
-                // Pre-warm the recognizer so the first PTT after enabling voice doesn't pay the
-                // cold model-load cost (Task 5). No-op if the model isn't downloaded yet.
+                ensureVoiceKeyService("voice-enabled")
                 viewModelScope.launch(Dispatchers.IO) { runCatching { continuousAsr.warmUp() } }
             }
         }
+    }
+
+    private suspend fun ensureVoiceKeyService(reason: String) {
+        if (!helperBootstrap.ensureRunning()) {
+            Log.e(TAG, "$reason: helper daemon not running; cannot self-enable a11y for voice PTT")
+            return
+        }
+        if (!helperClient.enableAccessibilityService()) {
+            Log.e(TAG, "$reason: accessibility re-assert failed")
+            return
+        }
+        if (Build.VERSION.SDK_INT > 29) return
+        repeat(10) {
+            if (com.bydmate.app.cluster.SteeringWheelKeyService.isConnected) return
+            delay(250L)
+        }
+        Log.w(TAG, "$reason: a11y still unbound; invoking Android 10 self-recovery")
+        helperClient.recoverAccessibilityService()
     }
 
     fun setVoiceLanguage(lang: String) {
@@ -1374,7 +1418,10 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(ttsVoice = voiceId) }
         appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
             .edit().putString("tts_voice", voiceId).apply()
+        // reload() drops the previous model; immediately queue warmUp() behind that reload so
+        // switching Sofia/Dmitri does not make the next spoken answer pay the full model load.
         ttsEngine.reload()
+        ttsEngine.warmUp()
     }
 
     private val ttsDownloadJobs = mutableMapOf<String, Job>()
@@ -1594,6 +1641,9 @@ class SettingsViewModel @Inject constructor(
      * Persisted in the same SharedPreferences("voice") file as the other agent settings, which
      * is where [com.bydmate.app.data.automation.ActionDispatcher] reads it on every route.
      */
+    private fun installedRouteNavigatorIds(): List<String> =
+        com.bydmate.app.data.automation.RouteNavigatorDiscovery.installedIds(appContext.packageManager)
+
     fun setRouteNavigator(value: String) {
         val normalized = com.bydmate.app.data.automation.RouteNavigatorUris.normalize(value)
         _uiState.update { it.copy(routeNavigator = normalized) }
@@ -1860,6 +1910,43 @@ class SettingsViewModel @Inject constructor(
                         "chargerConnect=${live.chargerConnectState} " +
                         "connectIndicator=${live.chargeConnectIndicator}"
                 )
+            }
+
+            // Cabin temperature is optional across BYD generations. The normal snapshot only
+            // shows null after sentinel/range filtering, which is not enough to tell an unsupported
+            // channel from a decoder mismatch. Read this one fid raw for field diagnostics.
+            appendLine("--- cabin temperature probe ---")
+            try {
+                val primary = com.bydmate.app.data.nativestack.FidAddresses.of("insideTemp")
+                val alternate = com.bydmate.app.data.nativestack.FidAddresses.of("insideTempAlt")
+                val raw = helperClient.readBatch(
+                    listOf(
+                        com.bydmate.app.data.vehicle.BatchReadItem(5, primary.device, primary.fid),
+                        com.bydmate.app.data.vehicle.BatchReadItem(5, alternate.device, alternate.fid),
+                    )
+                )
+                val catalogFid = fidCatalogManager.catalog?.fidOf("Ac.AC_TEMP_INSIDE")
+                fun renderProbe(
+                    label: String,
+                    address: com.bydmate.app.data.nativestack.FidAddress,
+                    sample: Pair<Int, Int>?,
+                ) {
+                    if (sample == null) {
+                        appendLine(
+                            "$label dev=${address.device} fid=${address.fid} status=unavailable " +
+                                "catalog_fid=${catalogFid ?: "-"} decoded=${live?.insideTemp}"
+                        )
+                    } else {
+                        appendLine(
+                            "$label dev=${address.device} fid=${address.fid} status=${sample.first} " +
+                                "raw=${sample.second} catalog_fid=${catalogFid ?: "-"} decoded=${live?.insideTemp}"
+                        )
+                    }
+                }
+                renderProbe("insideTemp", primary, raw?.getOrNull(0))
+                renderProbe("insideTempAlt", alternate, raw?.getOrNull(1))
+            } catch (e: Exception) {
+                appendLine("error: ${e.message}")
             }
 
             // ICE-side addresses nothing in the app reads yet (#184). A DM-i owner sends this
@@ -2473,37 +2560,16 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** Export zips found in the public Download folder, newest first. */
-    /** Lists the backups off the main thread (a scan of the whole Download folder), then opens the picker. */
-    // Scan behind the picker: repeated taps don't start a second one, and a closed picker
-    // must not be reopened by a late result.
-    private var restoreScanJob: Job? = null
-
-    fun openRestorePicker() {
-        if (restoreScanJob?.isActive == true) return
-        restoreScanJob = viewModelScope.launch(Dispatchers.IO) {
-            val files = backupManager.listBackups()
-            ensureActive()
-            _uiState.update { it.copy(restoreCandidates = files) }
-        }
-    }
-
-    fun closeRestorePicker() {
-        restoreScanJob?.cancel()
-        _uiState.update { it.copy(restoreCandidates = null) }
-    }
-
     /**
      * Restore the full app state from a user-picked backup zip.
      * On success the process is immediately restarted so Room re-opens the replaced DB.
      * On failure configStatus is set to the error message.
      */
-    fun restoreConfig(file: File) {
-        restoreScanJob?.cancel()
+    fun restoreConfig(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(configStatus = appContext.getString(R.string.settings_export_in_progress)) }
             try {
-                backupManager.restore(file)
+                backupManager.restore(uri)
                 restartApp()
             } catch (e: Exception) {
                 _uiState.update {
