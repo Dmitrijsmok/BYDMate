@@ -5,13 +5,14 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import android.view.KeyEvent
 import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlin.concurrent.thread
+
+internal enum class AssistantAudioOwner { LOCAL, ALICE }
 
 @Suppress("TooManyFunctions") // Voice/audio transport intentionally stays cohesive here.
 class AudioCapture(private val audioManager: AudioManager, private val prefs: SharedPreferences) {
@@ -54,11 +55,17 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
     // user's latest level. Guarded by duckLock.
     private var pendingRestore: Int? = null
 
-    // DiLink 3 shared MUSIC-route pause ownership. begin/end may be nested because
-    // accessibility can re-enter while a voice hand-off is already active.
-    // Guarded by duckLock so a repeated begin cannot lose the obligation to resume media.
-    private var sharedAssistantPauseDepth = 0
-    private var sharedAssistantPausedByUs = false
+    // DiLink 3 assistant audio-focus owners. A set, not a depth counter: accessibility can
+    // legitimately re-enter the same Alice/local trigger several times, and duplicate begin()
+    // calls must never create an obligation for a matching number of end() calls.
+    // AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK asks the active media app to lower itself without
+    // changing STREAM_MUSIC, so BYDMate/Alice speech on the shared DiLink 3 route stays audible.
+    // Guarded by duckLock.
+    private val assistantAudioOwners = linkedSetOf<AssistantAudioOwner>()
+    private var assistantAudioFocusHeld = false
+    private val assistantFocusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        Log.i(TAG, "assistant audio focus change=$change")
+    }
 
     // Serializes duckMusic / restoreMusic / applyExplicitVolume / pendingRestoreVolume.
     // Without it, a session teardown racing an explicit volume command can interleave
@@ -94,12 +101,16 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         // Fix C — release the already-initialized AudioRecord and abandon focus if
         // requestAudioFocus or startRecording throw (otherwise both resources leak
         // because awaitClose has not been registered yet at this point).
+        // A DiLink 3 voice provider owns focus for the whole assistant session (see
+        // beginAssistantAudio). Other callers keep the legacy per-capture focus lifecycle.
+        val captureOwnsFocus = synchronized(duckLock) { assistantAudioOwners.isEmpty() }
+        var captureFocusHeld = false
         try {
-            audioManager.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            if (captureOwnsFocus) captureFocusHeld = requestDuckFocus()
             record.startRecording()
         } catch (t: Throwable) {
             runCatching { record.release() }
-            runCatching { audioManager.abandonAudioFocus(null) }
+            if (captureFocusHeld) abandonDuckFocus()
             restoreMusic(duckedFrom)
             close(t)
             return@callbackFlow
@@ -124,7 +135,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
             runCatching { record.release() }
             // Each cleanup step is independent: a throw in one must not skip the
             // volume restore below (otherwise media stays ducked at 15%).
-            runCatching { audioManager.abandonAudioFocus(null) }
+            if (captureFocusHeld) abandonDuckFocus()
             restoreMusic(duckedFrom)
             worker.interrupt()
         }
@@ -163,45 +174,59 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
     }
 
     /**
-     * DiLink 3 routes background media and assistant speech through the same effective MUSIC path.
-     * Volume ducking would also lower assistant speech, so the first active voice owner pauses
-     * media and the final owner resumes it. Nested/repeated begin/end calls are intentionally safe.
+     * Own DiLink 3 assistant audio focus without touching STREAM_MUSIC. Repeated begin() for the
+     * same owner is idempotent and simply re-asserts MAY_DUCK, which also handles media that
+     * starts after the voice session was already open. LOCAL and ALICE may briefly overlap during
+     * hand-off; focus is released only after the final distinct owner leaves.
      */
-    internal fun beginSharedAssistantAudio(): Unit = synchronized(duckLock) {
-        if (sharedAssistantPauseDepth == 0) {
-            sharedAssistantPausedByUs = audioManager.isMusicActive && runCatching {
-                dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
-                Log.i(TAG, "beginSharedAssistantAudio: MEDIA_PAUSE")
-                true
-            }.getOrDefault(false)
-        }
-        sharedAssistantPauseDepth++
-        Log.i(TAG, "beginSharedAssistantAudio: depth=$sharedAssistantPauseDepth paused=$sharedAssistantPausedByUs")
+    internal fun beginAssistantAudio(owner: AssistantAudioOwner): Unit = synchronized(duckLock) {
+        val added = assistantAudioOwners.add(owner)
+        val granted = requestDuckFocus()
+        assistantAudioFocusHeld = assistantAudioFocusHeld || granted
+        Log.i(
+            TAG,
+            "beginAssistantAudio: owner=$owner added=$added owners=$assistantAudioOwners focus=$granted",
+        )
     }
 
-    internal fun endSharedAssistantAudio(): Unit = synchronized(duckLock) {
-        if (sharedAssistantPauseDepth <= 0) {
-            Log.i(TAG, "endSharedAssistantAudio: no owner")
+    /** Re-assert MAY_DUCK for an already-active owner, e.g. when music started after PTT. */
+    internal fun refreshAssistantAudio(owner: AssistantAudioOwner): Unit = synchronized(duckLock) {
+        if (owner !in assistantAudioOwners) {
+            Log.i(TAG, "refreshAssistantAudio: owner=$owner absent owners=$assistantAudioOwners")
             return
         }
-        sharedAssistantPauseDepth--
-        if (sharedAssistantPauseDepth == 0) {
-            val resume = sharedAssistantPausedByUs
-            sharedAssistantPausedByUs = false
-            if (resume) {
-                runCatching {
-                    dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
-                    Log.i(TAG, "endSharedAssistantAudio: MEDIA_PLAY")
-                }
-            }
-        }
-        Log.i(TAG, "endSharedAssistantAudio: depth=$sharedAssistantPauseDepth")
+        val granted = requestDuckFocus()
+        assistantAudioFocusHeld = assistantAudioFocusHeld || granted
+        Log.i(TAG, "refreshAssistantAudio: owner=$owner owners=$assistantAudioOwners focus=$granted")
     }
 
-    private fun dispatchMediaKey(keyCode: Int) {
-        val now = android.os.SystemClock.uptimeMillis()
-        audioManager.dispatchMediaKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0))
-        audioManager.dispatchMediaKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0))
+    internal fun endAssistantAudio(owner: AssistantAudioOwner): Unit = synchronized(duckLock) {
+        val removed = assistantAudioOwners.remove(owner)
+        if (assistantAudioOwners.isEmpty() && assistantAudioFocusHeld) {
+            abandonDuckFocus()
+            assistantAudioFocusHeld = false
+        }
+        Log.i(
+            TAG,
+            "endAssistantAudio: owner=$owner removed=$removed owners=$assistantAudioOwners",
+        )
+    }
+
+    internal fun assistantAudioOwnersForTest(): Set<AssistantAudioOwner> = synchronized(duckLock) {
+        assistantAudioOwners.toSet()
+    }
+
+    private fun requestDuckFocus(): Boolean =
+        runCatching {
+            audioManager.requestAudioFocus(
+                assistantFocusListener,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+            ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        }.getOrDefault(false)
+
+    private fun abandonDuckFocus() {
+        runCatching { audioManager.abandonAudioFocus(assistantFocusListener) }
     }
 
     internal fun duckMusicForExternalAssistant(): Int? = synchronized(duckLock) {
