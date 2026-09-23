@@ -150,8 +150,13 @@ class SteeringWheelKeyService : AccessibilityService() {
         val voicePrefs = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
         val voiceEnabled = voicePrefs.getBoolean("voice_enabled", false)
         val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)
+        val nativeTakeover = voicePrefs.getBoolean("alice_native_takeover", false)
 
-        if (android.os.Build.VERSION.SDK_INT <= 29) {
+        if (android.os.Build.VERSION.SDK_INT <= 29 && event.keyCode in setOf(304, 327)) {
+            if (!nativeTakeover) {
+                Log.i(TAG, "DILINK3_MIC_PASS_THROUGH keyCode=${event.keyCode} action=${event.action}")
+                return null
+            }
             val diLink3Decision = diLink3VoiceDecision(event.keyCode, isDown, voiceEnabled)
             handleVoiceDecision(diLink3Decision, event)?.let { return it }
         }
@@ -227,6 +232,18 @@ class SteeringWheelKeyService : AccessibilityService() {
     // Single volatile read when the HUD feature is off - see NavA11yFeed.enabled.
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         NavA11yFeed.onEvent(this, event)
+        if (event != null) {
+            val eventPkg = event.packageName?.toString().orEmpty()
+            val nativeTakeover = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                .getBoolean("alice_native_takeover", false)
+            if (nativeTakeover &&
+                event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+                eventPkg == "com.byd.vrassistant"
+            ) {
+                val closed = performGlobalAction(GLOBAL_ACTION_BACK)
+                Log.w(TAG, "ALICE4_5_VRASSISTANT_WINDOW_BLOCKED back=$closed")
+            }
+        }
         aliceLauncher.onAccessibilityEvent(event)
         // Whoever just took the MAIN screen, reported the moment it happens: the blind-spot
         // window has to be gone before the native 360 view is drawn, and the UsageStats poll is
