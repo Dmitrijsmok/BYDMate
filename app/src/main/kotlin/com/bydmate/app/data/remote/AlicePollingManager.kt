@@ -26,6 +26,33 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
+data class AliceStateReportSnapshot(
+    val attemptedAtMs: Long = 0L,
+    val insideTemp: Int? = null,
+    val acTemp: Int? = null,
+    val exteriorTemp: Int? = null,
+    val httpCode: Int? = null,
+    val error: String? = null,
+)
+
+object AliceStateReportDiagnostics {
+    @Volatile var latest: AliceStateReportSnapshot = AliceStateReportSnapshot()
+        private set
+
+    fun attempt(data: DiParsData?) {
+        latest = AliceStateReportSnapshot(
+            attemptedAtMs = System.currentTimeMillis(),
+            insideTemp = data?.insideTemp,
+            acTemp = data?.acTemp,
+            exteriorTemp = data?.exteriorTemp,
+        )
+    }
+
+    fun result(code: Int?, error: String?) {
+        latest = latest.copy(httpCode = code, error = error)
+    }
+}
+
 @Singleton
 class AlicePollingManager @Inject constructor(
     private val settingsRepository: SettingsRepository,
@@ -279,12 +306,19 @@ class AlicePollingManager @Inject constructor(
             data.exteriorTemp?.let { put("exteriorTemp", it) }
         }
 
+        AliceStateReportDiagnostics.attempt(data)
         val request = Request.Builder()
             .url("$endpoint/api/state")
             .header("X-Api-Key", apiKey)
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        runCatching { client.newCall(request).execute().close() }
+        runCatching {
+            client.newCall(request).execute().use { response ->
+                AliceStateReportDiagnostics.result(response.code, null)
+            }
+        }.onFailure {
+            AliceStateReportDiagnostics.result(null, it.message ?: it::class.java.simpleName)
+        }
     }
 
     private fun ack(endpoint: String, apiKey: String, results: List<AckResult>) {
