@@ -39,6 +39,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
+@Suppress("LargeClass") // Keep the voice session state machine cohesive until recovery is field-validated.
 class VoiceController @Inject constructor(
     private val audioCapture: AudioCapture,
     private val actionDispatcher: ActionDispatcher,
