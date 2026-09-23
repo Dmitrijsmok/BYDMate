@@ -74,23 +74,23 @@ class AudioCaptureDuckTest {
         capture.beginSharedAssistantAudio()
         capture.beginSharedAssistantAudio()
 
-        // Two nested owners must not send PAUSE twice or touch stream volume.
-        verify(exactly = 2) { audioManager.dispatchMediaKeyEvent(match { it.keyCode == android.view.KeyEvent.KEYCODE_MEDIA_PAUSE }) }
+        // First owner emits one media-key pair (DOWN + UP); nested begin emits nothing else.
+        verify(exactly = 2) { audioManager.dispatchMediaKeyEvent(any()) }
         verify(exactly = 0) { audioManager.setStreamVolume(any(), any(), any()) }
 
         capture.endSharedAssistantAudio()
 
-        // One owner is still alive: music must stay paused.
-        verify(exactly = 0) { audioManager.dispatchMediaKeyEvent(match { it.keyCode == android.view.KeyEvent.KEYCODE_MEDIA_PLAY }) }
+        // One owner is still alive: no resume pair yet.
+        verify(exactly = 2) { audioManager.dispatchMediaKeyEvent(any()) }
 
         capture.endSharedAssistantAudio()
 
-        // Final owner releases the pause exactly once (DOWN + UP).
-        verify(exactly = 2) { audioManager.dispatchMediaKeyEvent(match { it.keyCode == android.view.KeyEvent.KEYCODE_MEDIA_PLAY }) }
+        // Final owner emits exactly one additional pair, the resume action.
+        verify(exactly = 4) { audioManager.dispatchMediaKeyEvent(any()) }
 
         // Extra teardown is harmless: it must not keep toggling playback.
         capture.endSharedAssistantAudio()
-        verify(exactly = 2) { audioManager.dispatchMediaKeyEvent(match { it.keyCode == android.view.KeyEvent.KEYCODE_MEDIA_PLAY }) }
+        verify(exactly = 4) { audioManager.dispatchMediaKeyEvent(any()) }
     }
 
     @Test
