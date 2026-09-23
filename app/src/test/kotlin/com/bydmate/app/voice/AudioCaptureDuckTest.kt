@@ -133,6 +133,17 @@ class AudioCaptureDuckTest {
     }
 
     @Test
+    fun `restoreStuckDuck also recovers an external assistant duck level`() {
+        val audioManager = mockk<AudioManager>(relaxed = true)
+        every { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) } returns
+            AudioCapture.EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX
+        val (prefs, editor) = prefsMock(pending = 12)
+        AudioCapture(audioManager, prefs).restoreStuckDuck()
+        verify(exactly = 1) { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 12, 0) }
+        verify(exactly = 1) { editor.remove(AudioCapture.KEY_PRE_DUCK_VOLUME) }
+    }
+
+    @Test
     fun `restoreStuckDuck keeps a user-raised volume but clears the marker`() {
         val audioManager = mockk<AudioManager>(relaxed = true)
         every { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) } returns 8
