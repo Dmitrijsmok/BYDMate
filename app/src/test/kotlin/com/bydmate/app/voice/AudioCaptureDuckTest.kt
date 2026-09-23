@@ -66,6 +66,52 @@ class AudioCaptureDuckTest {
     }
 
     @Test
+    fun `external Alice duck is idempotent and never walks volume down`() {
+        val audioManager = mockk<AudioManager>(relaxed = true)
+        var volume = 20
+        every { audioManager.isMusicActive } returns true
+        every { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) } answers { volume }
+        every {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, any(), 0)
+        } answers {
+            volume = secondArg<Int>()
+        }
+        val capture = AudioCapture(audioManager, prefsMock().first)
+
+        val first = capture.duckMusicForExternalAssistant()
+        val second = capture.duckMusicForExternalAssistant()
+
+        assertEquals(20, first)
+        assertNull(second)
+        assertEquals(AudioCapture.EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX, volume)
+        verify(exactly = 1) {
+            audioManager.setStreamVolume(
+                AudioManager.STREAM_MUSIC,
+                AudioCapture.EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX,
+                0,
+            )
+        }
+
+        capture.restoreMusic(first)
+        assertEquals(20, volume)
+    }
+
+    @Test
+    fun `restoreStuckDuck restores a process-death marker left at Alice target four`() {
+        val audioManager = mockk<AudioManager>(relaxed = true)
+        every { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) } returns
+            AudioCapture.EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX
+        val (prefs, editor) = prefsMock(pending = 18)
+
+        AudioCapture(audioManager, prefs).restoreStuckDuck()
+
+        verify(exactly = 1) {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 18, 0)
+        }
+        verify(exactly = 1) { editor.remove(AudioCapture.KEY_PRE_DUCK_VOLUME) }
+    }
+
+    @Test
     fun `restoreMusic restores the saved volume`() {
         val audioManager = mockk<AudioManager>()
         every { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 20, 0) } returns Unit
