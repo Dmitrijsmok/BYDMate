@@ -15,6 +15,7 @@ object RouteNavigatorUris {
     /** SharedPreferences file the voice/agent settings already live in. */
     const val PREFS_NAME = "voice"
     const val KEY_ROUTE_NAVIGATOR = "route_navigator"
+    const val KEY_ROUTE_NAVIGATOR_PACKAGE = "route_navigator_package"
 
     const val YANDEX = "yandex"
     const val DGIS = "dgis"
@@ -32,6 +33,11 @@ object RouteNavigatorUris {
     const val DGIS_PACKAGE = "ru.dublgis.dgismobile"
     const val WAZE_PACKAGE = "com.waze"
     const val GOOGLE_MAPS_PACKAGE = "com.google.android.apps.maps"
+    const val GOOGLE_MAPS_REVANCED_PACKAGE = "app.revanced.android.apps.maps"
+    val GOOGLE_MAPS_PACKAGES = listOf(
+        GOOGLE_MAPS_REVANCED_PACKAGE,
+        GOOGLE_MAPS_PACKAGE,
+    )
 
     /** Log/diagnostic names of the three deep links. */
     const val MODE_SEARCH = "search"
