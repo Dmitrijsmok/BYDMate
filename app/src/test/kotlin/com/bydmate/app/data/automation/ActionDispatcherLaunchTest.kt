@@ -5,6 +5,7 @@ import android.app.SearchManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.PackageManager.NameNotFoundException
 import android.net.Uri
 import android.provider.MediaStore
 import com.bydmate.app.cluster.ClusterVoiceControl
@@ -86,10 +87,31 @@ class ActionDispatcherLaunchTest {
     }
 
     @Test fun `app_launch reports not installed without calling daemon`() = runBlocking {
+        every { packageManager.getApplicationInfo("com.absent.app", 0) } throws
+            NameNotFoundException("com.absent.app")
         every { packageManager.getLaunchIntentForPackage("com.absent.app") } returns null
+
         val result = dispatcher.dispatch(launchAction("com.absent.app"), null)
+
         assertFalse(result.success)
         coVerify(exactly = 0) { helper.launchApp(any()) }
+    }
+
+    @Test fun `app_launch allows installed vendor package without standard launch intent`() = runBlocking {
+        every { packageManager.getApplicationInfo("app.revanced.android.apps.maps", 0) } returns
+            mockk(relaxed = true)
+        every { packageManager.getLaunchIntentForPackage("app.revanced.android.apps.maps") } returns null
+        coEvery { helper.launchApp("app.revanced.android.apps.maps") } returns true
+        coEvery { helper.getTopTaskPackage() } returns "app.revanced.android.apps.maps"
+
+        val result = dispatcher.dispatch(
+            launchAction("app.revanced.android.apps.maps"),
+            null,
+        )
+
+        assertTrue(result.success)
+        coVerify(exactly = 1) { helper.launchApp("app.revanced.android.apps.maps") }
+        verify(exactly = 0) { context.startActivity(any()) }
     }
 
     @Test fun `app_launch falls back to startActivity when daemon returns false`() = runBlocking {
