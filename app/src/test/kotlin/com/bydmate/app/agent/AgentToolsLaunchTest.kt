@@ -353,6 +353,28 @@ class AgentToolsLaunchTest {
         assertEquals("ru.yandex.yandexmaps.rustore", payload.getString("packageName"))
     }
 
+    @Test fun launch_app_alias_google_maps_resolves_package() = runTest {
+        val captured = slot<ActionDef>()
+        coEvery { dispatcher.dispatch(capture(captured), any()) } returns DispatchResult(true)
+        val fixture = listOf("Maps" to "com.google.android.apps.maps")
+        val t = tools().apply { launcherAppsProvider = { fixture } }
+        val out = JSONObject(t.execute(AgentToolCall("1", "launch_app", """{"name":"Google Maps"}""")))
+        assertTrue(out.getBoolean("ok"))
+        val payload = JSONObject(captured.captured.payload!!)
+        assertEquals("com.google.android.apps.maps", payload.getString("packageName"))
+    }
+
+    @Test fun launch_app_alias_google_maps_russian_resolves_package() = runTest {
+        val captured = slot<ActionDef>()
+        coEvery { dispatcher.dispatch(capture(captured), any()) } returns DispatchResult(true)
+        val fixture = listOf("Maps" to "com.google.android.apps.maps")
+        val t = tools().apply { launcherAppsProvider = { fixture } }
+        val out = JSONObject(t.execute(AgentToolCall("1", "launch_app", """{"name":"гугл карты"}""")))
+        assertTrue(out.getBoolean("ok"))
+        val payload = JSONObject(captured.captured.payload!!)
+        assertEquals("com.google.android.apps.maps", payload.getString("packageName"))
+    }
+
     // (f2) alias "телефон" points at the BYD bluetooth dialer, not at a label match.
     @Test fun launch_app_alias_phone_resolves_byd_dialer() = runTest {
         val captured = slot<ActionDef>()
