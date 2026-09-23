@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import com.bydmate.app.data.automation.RouteNavigatorDiscovery
 import com.bydmate.app.data.automation.RouteNavigatorUris
+import com.bydmate.app.data.automation.RouteNavigatorResolver
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -92,7 +93,11 @@ class AliceAppResolver @Inject constructor(
                 context.packageManager,
             ),
             labels = setOf("google maps", "карты google", "гугл карты"),
-            packageTokens = setOf("google.android.apps.maps"),
+            packageTokens = setOf(
+                "google.android.apps.maps",
+                "revanced.android.apps.maps",
+                "android.apps.maps",
+            ),
         )
         "app.dgis.open" -> AppTarget(
             packages = RouteNavigatorDiscovery.packagesFor(
@@ -113,7 +118,7 @@ class AliceAppResolver @Inject constructor(
     private fun resolveTarget(target: AppTarget): Result<String> {
         val pm = context.packageManager
         target.packages.firstOrNull {
-            runCatching { pm.getLaunchIntentForPackage(it) != null }.getOrDefault(false)
+            RouteNavigatorDiscovery.packageExists(pm, it)
         }?.let { return Result.success(it) }
 
         val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
@@ -154,11 +159,15 @@ class AliceAppResolver @Inject constructor(
         val selected = RouteNavigatorUris.normalize(
             prefs.getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null),
         )
+        val manual = prefs.getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, null)
+            ?.trim().orEmpty()
+        val selectedPackage = RouteNavigatorResolver.selectedPackage(context, selected)
         val installed = RouteNavigatorDiscovery.installedIds(context.packageManager)
-        return (listOf(selected) + installed)
-            .distinct()
             .flatMap { RouteNavigatorDiscovery.packagesFor(it, context.packageManager) }
-            .distinct()
+        return (listOfNotNull(
+            manual.takeIf(String::isNotBlank),
+            selectedPackage,
+        ) + installed).distinct()
     }
 
     private data class AppTarget(
