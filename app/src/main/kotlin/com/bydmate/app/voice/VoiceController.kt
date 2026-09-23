@@ -88,8 +88,6 @@ class VoiceController @Inject constructor(
         appResolver = resolver
     }
 
-    @Volatile private var externalAssistantMediaPaused = false
-
     private val busy = AtomicBoolean(false)
     @Volatile private var sessionJob: Job? = null
     @Volatile private var warmupJob: Job? = null
@@ -116,15 +114,14 @@ class VoiceController @Inject constructor(
      */
     fun beginExternalAssistantAudio() {
         if (!SherpaTtsEngine.shouldUseBydVoiceStream(Build.FINGERPRINT.orEmpty())) {
-            externalAssistantMediaPaused =
-                runCatching { audioCapture.pauseMusicForSharedAssistant() }.getOrDefault(false)
+            runCatching { audioCapture.beginSharedAssistantAudio() }
         }
     }
 
     fun endExternalAssistantAudio() {
-        val paused = externalAssistantMediaPaused
-        externalAssistantMediaPaused = false
-        runCatching { audioCapture.resumeMusicAfterSharedAssistant(paused) }
+        if (!SherpaTtsEngine.shouldUseBydVoiceStream(Build.FINGERPRINT.orEmpty())) {
+            runCatching { audioCapture.endSharedAssistantAudio() }
+        }
     }
 
     /** Provider hand-off: Alice must never start while Local still owns AudioRecord/TTS.
@@ -362,14 +359,13 @@ class VoiceController @Inject constructor(
         // Direct volume ducking would also make the assistant's answer quiet, so pause media for
         // the whole local voice session there. Other BYD generations keep the author's explicit
         // STREAM_MUSIC duck.
-        val mediaPausedForVoice =
-            if (!SherpaTtsEngine.shouldUseBydVoiceStream(Build.FINGERPRINT.orEmpty())) {
-                runCatching { audioCapture.pauseMusicForSharedAssistant() }.getOrDefault(false)
-            } else {
-                false
-            }
+        val sharedMusicRoute =
+            !SherpaTtsEngine.shouldUseBydVoiceStream(Build.FINGERPRINT.orEmpty())
+        if (sharedMusicRoute) {
+            runCatching { audioCapture.beginSharedAssistantAudio() }
+        }
         val earlyDuck =
-            if (mediaPausedForVoice) null
+            if (sharedMusicRoute) null
             else runCatching { audioCapture.duckMusic() }.getOrNull()
         sessionJob = scope.launch {
             val session = coroutineContext[Job]
@@ -485,7 +481,9 @@ class VoiceController @Inject constructor(
                 cancellableAskJob = null
                 processingUtterance = false
                 runCatching { audioCapture.restoreMusic(earlyDuck) }
-                runCatching { audioCapture.resumeMusicAfterSharedAssistant(mediaPausedForVoice) }
+                if (sharedMusicRoute) {
+                    runCatching { audioCapture.endSharedAssistantAudio() }
+                }
                 _listening.value = false
                 _state.value = VoiceUiState.Idle
                 // Distinct off-cue so the driver can tell session start (ok) and stop apart by ear.
