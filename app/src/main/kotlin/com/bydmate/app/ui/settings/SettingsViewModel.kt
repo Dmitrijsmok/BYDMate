@@ -225,6 +225,8 @@ data class SettingsUiState(
     val agentGender: String = "m",
     /** Navigator selected for voice/route actions. */
     val routeNavigator: String = com.bydmate.app.data.automation.RouteNavigatorUris.YANDEX,
+    /** Optional exact APK package overriding auto-discovery for the selected navigator. */
+    val routeNavigatorPackage: String = "",
     /** Only navigator apps that currently expose a launcher activity on this head unit. */
     val routeNavigatorOptions: List<String> = emptyList(),
     /** Resolved voice-action -> installed launcher package diagnostics for the Settings UI. */
@@ -509,7 +511,15 @@ class SettingsViewModel @Inject constructor(
             val savedRouteNavigator = com.bydmate.app.data.automation.RouteNavigatorUris.normalize(
                 routePrefs.getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null)
             )
-            val routeNavigatorOptions = installedRouteNavigatorIds()
+            val routeNavigatorPackage = routePrefs
+                .getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, "")
+                .orEmpty()
+            val manualPackageInstalled = routeNavigatorPackage.isNotBlank() &&
+                appContext.packageManager.getLaunchIntentForPackage(routeNavigatorPackage) != null
+            val routeNavigatorOptions = (
+                installedRouteNavigatorIds() +
+                    listOfNotNull(savedRouteNavigator.takeIf { manualPackageInstalled })
+                ).distinct()
             val voiceAppMatches = AliceAppResolver(appContext).diagnosticMatches()
             val routeNavigator = if (
                 routeNavigatorOptions.isEmpty() || savedRouteNavigator in routeNavigatorOptions
@@ -579,6 +589,7 @@ class SettingsViewModel @Inject constructor(
                     agentPersona = agentPersona,
                     agentGender = agentGender,
                     routeNavigator = routeNavigator,
+                    routeNavigatorPackage = routeNavigatorPackage,
                     routeNavigatorOptions = routeNavigatorOptions,
                     voiceAppMatches = voiceAppMatches,
                     agentMemoryFacts = driverMemory.facts(),
@@ -1646,6 +1657,18 @@ class SettingsViewModel @Inject constructor(
             com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
         ).edit()
             .putString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, normalized)
+            .apply()
+    }
+
+    fun setRouteNavigatorPackage(value: String) {
+        _uiState.update { it.copy(routeNavigatorPackage = value) }
+        appContext.getSharedPreferences(
+            com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
+        ).edit()
+            .putString(
+                com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE,
+                value.trim(),
+            )
             .apply()
     }
 
