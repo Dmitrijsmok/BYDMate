@@ -1949,6 +1949,21 @@ class SettingsViewModel @Inject constructor(
                 appendLine("error: ${e.message}")
             }
 
+            appendLine("--- alice state report ---")
+            try {
+                val report = com.bydmate.app.data.remote.AliceStateReportDiagnostics.latest
+                val ageS = if (report.attemptedAtMs > 0L)
+                    (System.currentTimeMillis() - report.attemptedAtMs) / 1000L
+                else null
+                appendLine(
+                    "age_s=${ageS ?: "-"} insideTemp=${report.insideTemp} acTemp=${report.acTemp} " +
+                        "exteriorTemp=${report.exteriorTemp} http=${report.httpCode ?: "-"} " +
+                        "error=${report.error ?: "-"}"
+                )
+            } catch (e: Exception) {
+                appendLine("error: ${e.message}")
+            }
+
             // ICE-side addresses nothing in the app reads yet (#184). A DM-i owner sends this
             // dump with the engine running and the raw words say which of them are live there.
             appendLine("--- hybrid probe ---")
