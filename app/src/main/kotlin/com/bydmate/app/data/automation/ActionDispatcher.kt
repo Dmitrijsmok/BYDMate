@@ -880,13 +880,10 @@ class ActionDispatcher @Inject constructor(
         val payload = parsePayload(action.payload)
         val pkg = payload?.optString("packageName")?.takeIf(String::isNotBlank)
             ?: return DispatchResult(false, "packageName не задан")
-        if (context.packageManager.getLaunchIntentForPackage(pkg) == null) {
-            return DispatchResult(false, "Приложение не установлено: $pkg")
-        }
-        // Try the shell-uid daemon first, but do not trust "am start" exit status alone.
-        // On DiLink 3 it may report success while the current Alice/browser task stays in front.
-        // Verify that the requested package actually becomes the top task; otherwise retry via
-        // the application's real launcher Intent.
+
+        // Field-proven DiLink rule: do not reject an app just because
+        // getLaunchIntentForPackage() is null. Vendor/ReVanced builds may still be installed and
+        // launchable through the privileged helper or an explicitly discovered launcher activity.
         if (helper.launchApp(pkg)) {
             repeat(8) {
                 if (helper.getTopTaskPackage() == pkg) {
@@ -897,9 +894,13 @@ class ActionDispatcher @Inject constructor(
             }
             Log.w(TAG, "app_launch daemon reported success but $pkg did not reach foreground; using launcher fallback")
         }
-        val intent = context.packageManager.getLaunchIntentForPackage(pkg)!!
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val result = tryStartActivity(intent, "app_launch:$pkg")
+
+        val intent = launcherIntentForPackage(pkg)
+            ?: return DispatchResult(false, "Приложение не установлено или не имеет запускаемой Activity: $pkg")
+        val result = tryStartActivity(
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            "app_launch:$pkg",
+        )
         if (result.success) maybeMinimize(payload)
         return result
     }
@@ -1051,7 +1052,12 @@ class ActionDispatcher @Inject constructor(
                 else -> return DispatchResult(false, "неизвестный shortcut: $shortcut")
             }
             val intent = Intent(intentAction)
-                .setPackage(NAVI_PACKAGE)
+                .apply {
+                    RouteNavigatorResolver.selectedPackage(
+                        context,
+                        RouteNavigatorUris.YANDEX,
+                    )?.let(::setPackage)
+                }
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             return tryStartActivity(intent, "navigate_shortcut:$shortcut")
         }
@@ -1148,11 +1154,12 @@ class ActionDispatcher @Inject constructor(
             RouteNavigatorUris.MODE_ROUTE, RouteNavigatorUris.mapsRoute(lat, lon), "navigate_maps:$lat,$lon")
     }
 
-    /** [startNavigate] for the Maps dialect: no package pin, no 2GIS fallback reason. */
+    /** [startNavigate] for the Maps dialect, pinned to the detected/manual package when known. */
     private fun startMapsIntent(mode: String, uri: String, label: String): DispatchResult {
         Log.i(TAG, "navigate app=maps kind=$mode uri=$uri")
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        RouteNavigatorResolver.selectedPackage(context, RouteNavigatorUris.MAPS)?.let(intent::setPackage)
         val result = tryStartActivity(intent, label)
         Log.i(TAG, "navigate app=maps intent sent label=$label ok=${result.success}" +
             (result.reason?.let { " reason=$it" } ?: ""))
@@ -1171,7 +1178,7 @@ class ActionDispatcher @Inject constructor(
         Log.i(TAG, "navigate: app=$navigator mode=$mode uri=$uri")
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        RouteNavigatorUris.intentPackage(navigator)?.let(intent::setPackage)
+        RouteNavigatorResolver.selectedPackage(context, navigator)?.let(intent::setPackage)
         val result = tryStartActivity(intent, label)
         Log.i(TAG, "navigate: intent sent label=$label ok=${result.success}")
         return if (result.success && fallbackReason != null) result.copy(reason = fallbackReason)
@@ -1266,7 +1273,23 @@ class ActionDispatcher @Inject constructor(
     }
 
     private fun isPackageInstalled(pkg: String): Boolean =
-        context.packageManager.getLaunchIntentForPackage(pkg) != null
+        runCatching {
+            context.packageManager.getApplicationInfo(pkg, 0)
+            true
+        }.getOrDefault(false)
+
+    private fun launcherIntentForPackage(pkg: String): Intent? {
+        context.packageManager.getLaunchIntentForPackage(pkg)?.let { return it }
+        val main = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val match = runCatching {
+            context.packageManager.queryIntentActivities(main, 0)
+                .firstOrNull { it.activityInfo?.packageName == pkg }
+        }.getOrNull() ?: return null
+        val activityName = match.activityInfo?.name ?: return null
+        return Intent(Intent.ACTION_MAIN)
+            .addCategory(Intent.CATEGORY_LAUNCHER)
+            .setClassName(pkg, activityName)
+    }
 
     private fun goHome(): DispatchResult {
         val home = Intent(Intent.ACTION_MAIN)
