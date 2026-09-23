@@ -1,7 +1,6 @@
 package com.bydmate.app.data.automation
 
 import android.content.Context
-import com.bydmate.app.navdata.NavPackages
 
 internal object RouteNavigatorResolver {
     fun resolve(
@@ -9,40 +8,54 @@ internal object RouteNavigatorResolver {
         isPackageInstalled: (String) -> Boolean,
         log: (String) -> Unit,
     ): Pair<String, String?> {
+        val prefs = context.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
         val chosen = RouteNavigatorUris.normalize(
-            context.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
-                .getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null),
+            prefs.getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null),
         )
-        log("navigate: navigator=$chosen")
+        val manualPackage = prefs.getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, null)
+            ?.trim().orEmpty()
+        log(
+            "navigate: navigator=$chosen" +
+                if (manualPackage.isNotBlank()) " package_override=$manualPackage" else ""
+        )
 
-        if (chosen == RouteNavigatorUris.DGIS &&
-            !isPackageInstalled(RouteNavigatorUris.DGIS_PACKAGE)
-        ) {
-            log("navigate: 2gis not installed, falling back to yandex")
-            return RouteNavigatorUris.YANDEX to "2ГИС не установлен, открыт Яндекс Навигатор"
+        // A manual package is authoritative. Do not second-guess it with
+        // getLaunchIntentForPackage(): that exact check caused false "not installed" verdicts
+        // on DiLink/vendor APKs. The real startActivity result is the source of truth.
+        if (manualPackage.isNotBlank()) return chosen to null
+
+        if (chosen == RouteNavigatorUris.YANDEX) return chosen to null
+        if (RouteNavigatorDiscovery.packagesFor(chosen, context.packageManager).isNotEmpty()) {
+            return chosen to null
         }
 
-        if (chosen == RouteNavigatorUris.MAPS &&
-            NavPackages.YANDEX_MAPS.none(isPackageInstalled)
-        ) {
-            log("navigate: yandex maps not installed, falling back to yandex")
-            return RouteNavigatorUris.YANDEX to "Яндекс Карты не установлены, открыт Яндекс Навигатор"
+        val reason = when (chosen) {
+            RouteNavigatorUris.DGIS -> "2ГИС не установлен, открыт Яндекс Навигатор"
+            RouteNavigatorUris.MAPS -> "Яндекс Карты не установлены, открыт Яндекс Навигатор"
+            RouteNavigatorUris.WAZE -> "Waze не установлен, открыт Яндекс Навигатор"
+            RouteNavigatorUris.GOOGLE_MAPS -> "Google Maps не установлен, открыт Яндекс Навигатор"
+            else -> "Навигатор не установлен, открыт Яндекс Навигатор"
         }
+        log("navigate: $chosen not detected, falling back to yandex")
+        return RouteNavigatorUris.YANDEX to reason
+    }
 
-        if (chosen == RouteNavigatorUris.WAZE &&
-            !isPackageInstalled(RouteNavigatorUris.WAZE_PACKAGE)
-        ) {
-            log("navigate: waze not installed, falling back to yandex")
-            return RouteNavigatorUris.YANDEX to "Waze не установлен, открыт Яндекс Навигатор"
-        }
+    /**
+     * Returns the actual APK package for the requested navigator when one is known.
+     * The manual override applies ONLY to the currently selected default navigator.
+     * Explicit per-command requests such as Google Maps must resolve their own package and
+     * must never be redirected into a manual/default Waze package.
+     */
+    fun selectedPackage(context: Context, navigator: String): String? {
+        val id = RouteNavigatorUris.normalize(navigator)
+        val prefs = context.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
+        val selected = RouteNavigatorUris.normalize(
+            prefs.getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null),
+        )
+        val manualPackage = prefs.getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, null)
+            ?.trim().orEmpty()
 
-        if (chosen == RouteNavigatorUris.GOOGLE_MAPS &&
-            !isPackageInstalled(RouteNavigatorUris.GOOGLE_MAPS_PACKAGE)
-        ) {
-            log("navigate: google maps not installed, falling back to yandex")
-            return RouteNavigatorUris.YANDEX to "Google Maps не установлен, открыт Яндекс Навигатор"
-        }
-
-        return chosen to null
+        if (id == selected && manualPackage.isNotBlank()) return manualPackage
+        return RouteNavigatorDiscovery.packagesFor(id, context.packageManager).firstOrNull()
     }
 }
