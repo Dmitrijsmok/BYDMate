@@ -1,0 +1,96 @@
+name: Build Signed Recovery 64024
+
+on:
+  push:
+    branches:
+      - recovery/alice-nav-audio-proven-baseline
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-signed-recovery-64024
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Verify recovery invariants
+        run: |
+          set -euo pipefail
+          grep -R 'versionCode = 64024' app/build.gradle.kts
+          grep -R 'VOICE_DOUBLE_PRESS_WINDOW_MS = 250L' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt
+          grep -R 'ttsEngine.warmUp()' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
+          grep -R 'ttsEngine.startQueue()' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
+          grep -R 'EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX = 4' app/src/main/kotlin/com/bydmate/app/voice/AudioCapture.kt
+          grep -R 'pkg == "com.byd.vrassistant"' app/src/main/kotlin/com/bydmate/app/helper/HelperDaemon.kt
+          grep -R 'ALICE4_5_VRASSISTANT_BLOCK startup=' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
+          grep -R 'ALICE4_5_VRASSISTANT_WINDOW_BLOCKED' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+
+      - name: detekt
+        run: ./gradlew :app:detekt --stacktrace
+
+      - name: Build full unoptimized APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Prepare stable signing key
+        env:
+          ALICE_SIGNING_KEYSTORE_B64: ${{ secrets.ALICE_SIGNING_KEYSTORE_B64 }}
+          ALICE_SIGNING_STORE_PASSWORD: ${{ secrets.ALICE_SIGNING_STORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$ALICE_SIGNING_KEYSTORE_B64"
+          test -n "$ALICE_SIGNING_STORE_PASSWORD"
+          printf '%s' "$ALICE_SIGNING_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/bydmate-alice-stable.jks"
+          keytool -list -v             -keystore "$RUNNER_TEMP/bydmate-alice-stable.jks"             -alias bydmate-alice             -storepass:env ALICE_SIGNING_STORE_PASSWORD             > "$RUNNER_TEMP/cert.txt"
+          grep -F 'SHA256: B8:39:BC:11:CF:AD:61:EC:6A:89:DE:10:DC:0E:5E:B7:4C:BA:25:C5:7D:A1:16:AD:E3:0B:F4:A8:9D:70:C0:54' "$RUNNER_TEMP/cert.txt"
+
+      - name: Sign and verify APK
+        env:
+          ALICE_SIGNING_STORE_PASSWORD: ${{ secrets.ALICE_SIGNING_STORE_PASSWORD }}
+          ALICE_SIGNING_KEY_PASSWORD: ${{ secrets.ALICE_SIGNING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS_VERSION="$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          ZIPALIGN="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/zipalign"
+          APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner"
+          INPUT_APK="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -1)"
+          KEYSTORE="$RUNNER_TEMP/bydmate-alice-stable.jks"
+          OUTPUT_APK="out/BYDMate-v3.17.5-64024-Recovery-Alice-Stable.apk"
+
+          mkdir -p out
+          cp "$INPUT_APK" "$RUNNER_TEMP/recovery-unsigned.apk"
+          zip -q -d "$RUNNER_TEMP/recovery-unsigned.apk"             'META-INF/*.SF' 'META-INF/*.RSA' 'META-INF/*.DSA' 'META-INF/*.EC' 'META-INF/MANIFEST.MF' || true
+
+          "$ZIPALIGN" -f -p 4 "$RUNNER_TEMP/recovery-unsigned.apk" "$RUNNER_TEMP/recovery-aligned.apk"
+
+          "$APKSIGNER" sign             --ks "$KEYSTORE"             --ks-key-alias bydmate-alice             --ks-pass env:ALICE_SIGNING_STORE_PASSWORD             --key-pass env:ALICE_SIGNING_KEY_PASSWORD             --out "$OUTPUT_APK"             "$RUNNER_TEMP/recovery-aligned.apk"
+
+          "$ZIPALIGN" -c -p 4 "$OUTPUT_APK"
+          "$APKSIGNER" verify --verbose --print-certs "$OUTPUT_APK" | tee "$RUNNER_TEMP/signature.txt"
+
+          EXPECTED='B839BC11CFAD61EC6A89DE10DC0E5EB74CBA25C57DA116ADE30BF4A89D70C054'
+          ACTUAL="$(awk -F': ' '/certificate SHA-256 digest:/{print toupper($NF); exit}' "$RUNNER_TEMP/signature.txt" | tr -d ':')"
+          SIGNER_COUNT="$(grep -c 'certificate SHA-256 digest:' "$RUNNER_TEMP/signature.txt")"
+          test "$ACTUAL" = "$EXPECTED"
+          test "$SIGNER_COUNT" -eq 1
+
+          sha256sum "$OUTPUT_APK" | tee out/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: BYDMate-3.17.5-64024-Recovery-Alice-Stable
+          path: |
+            out/BYDMate-v3.17.5-64024-Recovery-Alice-Stable.apk
+            out/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 3
