@@ -10,6 +10,7 @@ import com.bydmate.app.data.automation.ActionValidationError
 import com.bydmate.app.data.automation.AutomationEngine
 import com.bydmate.app.data.automation.ConfirmOverlayManager
 import com.bydmate.app.data.automation.DispatchResult
+import com.bydmate.app.data.automation.RouteNavigatorDiscovery
 import com.bydmate.app.data.automation.RouteNavigatorUris
 import com.bydmate.app.data.automation.PlaceGeometry
 import com.bydmate.app.data.automation.RuleDraftValidator
