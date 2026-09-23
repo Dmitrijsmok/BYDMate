@@ -192,7 +192,38 @@ class ActionDispatcherNavigateTest {
         assertEquals(null, res.reason)
         val intent = shadowOf(app).nextStartedActivity
         assertEquals("yandexmaps://maps.yandex.ru/?rtext=~57.0,36.0&rtt=auto", intent.dataString)
-        assertEquals(null, intent.`package`)
+        assertEquals("ru.yandex.yandexmaps", intent.`package`)
+    }
+
+    @Test fun explicit_google_maps_ignores_default_waze() = runTest {
+        selectNavigator(RouteNavigatorUris.WAZE)
+        installWaze()
+        installGoogleMaps()
+
+        val res = dispatcher.dispatch(
+            actionDef("""{"app":"google_maps","lat":57.0,"lon":36.0}"""),
+            null,
+        )
+        assertTrue(res.success)
+        val intent = shadowOf(app).nextStartedActivity
+        assertEquals("com.google.android.apps.maps", intent.`package`)
+        assertTrue(intent.dataString!!.contains("www.google.com/maps"))
+    }
+
+    @Test fun manual_package_overrides_selected_google_maps_variant() = runTest {
+        selectNavigator(RouteNavigatorUris.GOOGLE_MAPS)
+        installCustomGoogleMaps()
+        app.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, "app.revanced.android.apps.maps")
+            .commit()
+
+        val res = dispatcher.dispatch(actionDef("""{"lat":57.0,"lon":36.0}"""), null)
+        assertTrue(res.success)
+        assertEquals(
+            "app.revanced.android.apps.maps",
+            shadowOf(app).nextStartedActivity.`package`,
+        )
     }
 
     /** Maps chosen but absent: the action still works, through Yandex Navigator, and says why. */
@@ -310,6 +341,25 @@ class ActionDispatcherNavigateTest {
         )
         pm.addIntentFilterForActivity(
             android.content.ComponentName("com.google.android.apps.maps", "com.google.android.apps.maps.Main"),
+            android.content.IntentFilter(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+            },
+        )
+    }
+
+    private fun installCustomGoogleMaps() {
+        val pm = shadowOf(app.packageManager)
+        pm.addActivityIfNotPresent(
+            android.content.ComponentName(
+                "app.revanced.android.apps.maps",
+                "app.revanced.android.apps.maps.Main",
+            ),
+        )
+        pm.addIntentFilterForActivity(
+            android.content.ComponentName(
+                "app.revanced.android.apps.maps",
+                "app.revanced.android.apps.maps.Main",
+            ),
             android.content.IntentFilter(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_LAUNCHER)
             },
