@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlin.concurrent.thread
 
+@Suppress("TooManyFunctions") // Voice/audio transport intentionally stays cohesive here.
 class AudioCapture(private val audioManager: AudioManager, private val prefs: SharedPreferences) {
 
     companion object {
