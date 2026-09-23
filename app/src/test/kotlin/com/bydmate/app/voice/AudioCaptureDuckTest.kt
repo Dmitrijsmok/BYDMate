@@ -66,40 +66,44 @@ class AudioCaptureDuckTest {
     }
 
     @Test
-    fun `pauseMusicForSharedAssistant pauses active media without changing volume`() {
+    fun `shared assistant audio pauses once and resumes once after final owner exits`() {
         val audioManager = mockk<AudioManager>(relaxed = true)
         every { audioManager.isMusicActive } returns true
         val capture = AudioCapture(audioManager, prefsMock().first)
 
-        val paused = capture.pauseMusicForSharedAssistant()
+        capture.beginSharedAssistantAudio()
+        capture.beginSharedAssistantAudio()
 
-        assertEquals(true, paused)
-        verify(exactly = 2) { audioManager.dispatchMediaKeyEvent(any()) }
+        // Two nested owners must not send PAUSE twice or touch stream volume.
+        verify(exactly = 2) { audioManager.dispatchMediaKeyEvent(match { it.keyCode == android.view.KeyEvent.KEYCODE_MEDIA_PAUSE }) }
         verify(exactly = 0) { audioManager.setStreamVolume(any(), any(), any()) }
+
+        capture.endSharedAssistantAudio()
+
+        // One owner is still alive: music must stay paused.
+        verify(exactly = 0) { audioManager.dispatchMediaKeyEvent(match { it.keyCode == android.view.KeyEvent.KEYCODE_MEDIA_PLAY }) }
+
+        capture.endSharedAssistantAudio()
+
+        // Final owner releases the pause exactly once (DOWN + UP).
+        verify(exactly = 2) { audioManager.dispatchMediaKeyEvent(match { it.keyCode == android.view.KeyEvent.KEYCODE_MEDIA_PLAY }) }
+
+        // Extra teardown is harmless: it must not keep toggling playback.
+        capture.endSharedAssistantAudio()
+        verify(exactly = 2) { audioManager.dispatchMediaKeyEvent(match { it.keyCode == android.view.KeyEvent.KEYCODE_MEDIA_PLAY }) }
     }
 
     @Test
-    fun `pauseMusicForSharedAssistant is noop when media is inactive`() {
+    fun `shared assistant audio does not resume media it did not pause`() {
         val audioManager = mockk<AudioManager>(relaxed = true)
         every { audioManager.isMusicActive } returns false
         val capture = AudioCapture(audioManager, prefsMock().first)
 
-        val paused = capture.pauseMusicForSharedAssistant()
+        capture.beginSharedAssistantAudio()
+        capture.endSharedAssistantAudio()
 
-        assertEquals(false, paused)
         verify(exactly = 0) { audioManager.dispatchMediaKeyEvent(any()) }
-    }
-
-    @Test
-    fun `resumeMusicAfterSharedAssistant resumes only when we paused it`() {
-        val audioManager = mockk<AudioManager>(relaxed = true)
-        val capture = AudioCapture(audioManager, prefsMock().first)
-
-        capture.resumeMusicAfterSharedAssistant(false)
-        verify(exactly = 0) { audioManager.dispatchMediaKeyEvent(any()) }
-
-        capture.resumeMusicAfterSharedAssistant(true)
-        verify(exactly = 2) { audioManager.dispatchMediaKeyEvent(any()) }
+        verify(exactly = 0) { audioManager.setStreamVolume(any(), any(), any()) }
     }
 
     @Test
