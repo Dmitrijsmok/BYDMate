@@ -1867,6 +1867,7 @@ class AgentTools @Inject constructor(
     }
 
     /** Resolve a human app name to (label, packageName) via aliases + launcher labels. */
+    @Suppress("CyclomaticComplexMethod") // Package/label fallbacks deliberately share one ordered resolver.
     private suspend fun resolveLauncherApp(name: String): Built<Pair<String, String>> {
         val apps = runCatchingCancellable { launcherAppsProvider() }.getOrNull()
             ?: return Built.Error("список приложений недоступен")
