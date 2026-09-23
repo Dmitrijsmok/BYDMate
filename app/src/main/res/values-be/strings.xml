@@ -1286,6 +1286,8 @@
     <string name="settings_route_navigator_dgis">2ГІС</string>
     <string name="settings_route_navigator_maps">Яндэкс Карты</string>
     <string name="settings_route_navigator_hint">Якую праграму адкрываць для маршрутаў і пошуку на карце</string>
+    <string name="settings_route_navigator_package_label">Пакет навігатара (неабавязкова)</string>
+    <string name="settings_route_navigator_package_hint">Для нестандартнай зборкі ўкажы дакладны package, напрыклад app.revanced.android.apps.maps. Пакінь пустым для аўтаматычнага вызначэння ўсталяванай праграмы.</string>
     <string name="settings_agent_memory_title">Памяць пра кіроўцу</string>
     <string name="settings_agent_memory_hint">Агент запамінае імя і ўстойлівыя перавагі, калі вы яму пра гэта кажаце. Скажыце «забудзь …», каб прыбраць адзін факт</string>
     <string name="settings_agent_memory_empty">Пакуль нічога не запомнена</string>
