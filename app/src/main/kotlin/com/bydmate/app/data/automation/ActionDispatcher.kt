@@ -1052,12 +1052,12 @@ class ActionDispatcher @Inject constructor(
                 else -> return DispatchResult(false, "неизвестный shortcut: $shortcut")
             }
             val intent = Intent(intentAction)
-                .apply {
+                .setPackage(
                     RouteNavigatorResolver.selectedPackage(
                         context,
                         RouteNavigatorUris.YANDEX,
-                    )?.let(::setPackage)
-                }
+                    ) ?: NAVI_PACKAGE
+                )
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             return tryStartActivity(intent, "navigate_shortcut:$shortcut")
         }
