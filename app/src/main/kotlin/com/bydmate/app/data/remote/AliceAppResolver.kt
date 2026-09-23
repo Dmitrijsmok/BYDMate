@@ -92,7 +92,11 @@ class AliceAppResolver @Inject constructor(
                 context.packageManager,
             ),
             labels = setOf("google maps", "карты google", "гугл карты"),
-            packageTokens = setOf("google.android.apps.maps"),
+            packageTokens = setOf(
+                "google.android.apps.maps",
+                "revanced.android.apps.maps",
+                "android.apps.maps",
+            ),
         )
         "app.dgis.open" -> AppTarget(
             packages = RouteNavigatorDiscovery.packagesFor(
