@@ -2582,6 +2582,13 @@ private fun VoiceSettingsContent(
         selectedIndex = routeNavigatorIds.indexOf(state.routeNavigator).coerceAtLeast(0),
         onSelect = { viewModel.setRouteNavigator(routeNavigatorIds[it]) },
     )
+    SettingsTextField(
+        label = stringResource(R.string.settings_route_navigator_package_label),
+        value = state.routeNavigatorPackage,
+        onValueChange = viewModel::setRouteNavigatorPackage,
+        keyboardType = KeyboardType.Text,
+    )
+    SettingHint(stringResource(R.string.settings_route_navigator_package_hint))
     SettingActionRow(
         title = stringResource(R.string.settings_voice_app_matches_title),
         description = stringResource(R.string.settings_voice_app_matches_desc),
