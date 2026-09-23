@@ -11,6 +11,7 @@ import com.bydmate.app.data.automation.AutomationEngine
 import com.bydmate.app.data.automation.ConfirmOverlayManager
 import com.bydmate.app.data.automation.DispatchResult
 import com.bydmate.app.data.automation.RouteNavigatorUris
+import com.bydmate.app.data.automation.RouteNavigatorResolver
 import com.bydmate.app.data.automation.PlaceGeometry
 import com.bydmate.app.data.automation.RuleDraftValidator
 import com.bydmate.app.data.automation.TriggerValidationError
@@ -1896,15 +1897,47 @@ class AgentTools @Inject constructor(
         settingsSectionForName(name)?.let { section ->
             return openSettings(JSONObject().put("section", section))
         }
-        val (label, pkg) = when (val r = resolveLauncherApp(name)) {
-            is Built.Error -> return JSONObject().put("error", r.message).toString()
-            is Built.Value -> r.value
+
+        // Navigation names are semantic, not launcher labels. "Навигатор" means the user's
+        // selected default, while an explicit Waze/Google Maps request must stay explicit.
+        // This is the Build 5.3 contract shared with Alice and avoids hard-coding Yandex here.
+        val navigationTarget = navigationAppForName(name)
+        val (label, pkg) = if (navigationTarget != null) {
+            val resolved = RouteNavigatorResolver.selectedPackage(context, navigationTarget)
+                ?: return JSONObject().put(
+                    "error",
+                    "навигационное приложение не найдено: $name",
+                ).toString()
+            name to resolved
+        } else {
+            when (val r = resolveLauncherApp(name)) {
+                is Built.Error -> return JSONObject().put("error", r.message).toString()
+                is Built.Value -> r.value
+            }
         }
+
         val result = actionDispatcher.dispatch(
             ActionDef(command = "", displayName = "Запуск $label", kind = "app_launch",
                 payload = JSONObject().put("packageName", pkg).toString()), data = null)
         return if (result.success) JSONObject().put("ok", true).put("app", label).toString()
         else JSONObject().put("error", result.reason ?: "не получилось запустить $label").toString()
+    }
+
+    private fun navigationAppForName(name: String): String? {
+        val normalized = name.trim().lowercase().replace('ё', 'е')
+        return when (normalized) {
+            "навигатор", "навигация", "navigation", "navigator" ->
+                RouteNavigatorUris.normalize(
+                    context.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
+                        .getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null),
+                )
+            "waze", "вейз", "вэйз" -> RouteNavigatorUris.WAZE
+            "google maps", "гугл карты", "карты google" -> RouteNavigatorUris.GOOGLE_MAPS
+            "яндекс навигатор", "yandex navigator" -> RouteNavigatorUris.YANDEX
+            "яндекс карты", "yandex maps" -> RouteNavigatorUris.MAPS
+            "2gis", "2гис" -> RouteNavigatorUris.DGIS
+            else -> null
+        }
     }
 
     private suspend fun openSettings(args: JSONObject): String {
