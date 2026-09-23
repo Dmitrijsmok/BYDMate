@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.view.KeyEvent
 import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.channels.awaitClose
@@ -152,6 +153,35 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         prefs.edit().putInt(KEY_PRE_DUCK_VOLUME, saved).apply()
         Log.i(TAG, "duckMusic: $saved -> $target")
         return saved
+    }
+
+    /**
+     * DiLink 3 routes both background media and assistant speech through the same effective
+     * MUSIC path. Lowering STREAM_MUSIC therefore also lowers our/Alice's answer. Pause the
+     * active media session instead; the assistant keeps full speech volume and the microphone
+     * is no longer flooded by music. Returns true only when we actually paused active media.
+     */
+    internal fun pauseMusicForSharedAssistant(): Boolean {
+        if (!audioManager.isMusicActive) return false
+        return runCatching {
+            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
+            Log.i(TAG, "pauseMusicForSharedAssistant: MEDIA_PAUSE")
+            true
+        }.getOrDefault(false)
+    }
+
+    internal fun resumeMusicAfterSharedAssistant(wasPaused: Boolean) {
+        if (!wasPaused) return
+        runCatching {
+            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
+            Log.i(TAG, "resumeMusicAfterSharedAssistant: MEDIA_PLAY")
+        }
+    }
+
+    private fun dispatchMediaKey(keyCode: Int) {
+        val now = android.os.SystemClock.uptimeMillis()
+        audioManager.dispatchMediaKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0))
+        audioManager.dispatchMediaKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0))
     }
 
     internal fun duckMusicForExternalAssistant(): Int? = synchronized(duckLock) {
