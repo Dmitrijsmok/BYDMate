@@ -1050,8 +1050,13 @@ class ActionDispatcher @Inject constructor(
                 "work" -> "ru.yandex.yandexmaps.action.ROUTE_TO_WORK_SHORTCUT"
                 else -> return DispatchResult(false, "неизвестный shortcut: $shortcut")
             }
+            val yandexPackage = RouteNavigatorResolver.selectedPackage(
+                context,
+                RouteNavigatorUris.YANDEX,
+                ::isPackageInstalled,
+            ) ?: NAVI_PACKAGE
             val intent = Intent(intentAction)
-                .setPackage(NAVI_PACKAGE)
+                .setPackage(yandexPackage)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             return tryStartActivity(intent, "navigate_shortcut:$shortcut")
         }
@@ -1148,11 +1153,16 @@ class ActionDispatcher @Inject constructor(
             RouteNavigatorUris.MODE_ROUTE, RouteNavigatorUris.mapsRoute(lat, lon), "navigate_maps:$lat,$lon")
     }
 
-    /** [startNavigate] for the Maps dialect: no package pin, no 2GIS fallback reason. */
+    /** [startNavigate] for the Maps dialect. Pin the actual detected/manual package when known. */
     private fun startMapsIntent(mode: String, uri: String, label: String): DispatchResult {
         Log.i(TAG, "navigate app=maps kind=$mode uri=$uri")
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        RouteNavigatorResolver.selectedPackage(
+            context,
+            RouteNavigatorUris.MAPS,
+            ::isPackageInstalled,
+        )?.let(intent::setPackage)
         val result = tryStartActivity(intent, label)
         Log.i(TAG, "navigate app=maps intent sent label=$label ok=${result.success}" +
             (result.reason?.let { " reason=$it" } ?: ""))
@@ -1171,7 +1181,11 @@ class ActionDispatcher @Inject constructor(
         Log.i(TAG, "navigate: app=$navigator mode=$mode uri=$uri")
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        RouteNavigatorUris.intentPackage(navigator)?.let(intent::setPackage)
+        RouteNavigatorResolver.selectedPackage(
+            context,
+            navigator,
+            ::isPackageInstalled,
+        )?.let(intent::setPackage)
         val result = tryStartActivity(intent, label)
         Log.i(TAG, "navigate: intent sent label=$label ok=${result.success}")
         return if (result.success && fallbackReason != null) result.copy(reason = fallbackReason)
