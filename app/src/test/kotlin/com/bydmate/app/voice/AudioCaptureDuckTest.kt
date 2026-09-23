@@ -66,6 +66,43 @@ class AudioCaptureDuckTest {
     }
 
     @Test
+    fun `pauseMusicForSharedAssistant pauses active media without changing volume`() {
+        val audioManager = mockk<AudioManager>(relaxed = true)
+        every { audioManager.isMusicActive } returns true
+        val capture = AudioCapture(audioManager, prefsMock().first)
+
+        val paused = capture.pauseMusicForSharedAssistant()
+
+        assertEquals(true, paused)
+        verify(exactly = 2) { audioManager.dispatchMediaKeyEvent(any()) }
+        verify(exactly = 0) { audioManager.setStreamVolume(any(), any(), any()) }
+    }
+
+    @Test
+    fun `pauseMusicForSharedAssistant is noop when media is inactive`() {
+        val audioManager = mockk<AudioManager>(relaxed = true)
+        every { audioManager.isMusicActive } returns false
+        val capture = AudioCapture(audioManager, prefsMock().first)
+
+        val paused = capture.pauseMusicForSharedAssistant()
+
+        assertEquals(false, paused)
+        verify(exactly = 0) { audioManager.dispatchMediaKeyEvent(any()) }
+    }
+
+    @Test
+    fun `resumeMusicAfterSharedAssistant resumes only when we paused it`() {
+        val audioManager = mockk<AudioManager>(relaxed = true)
+        val capture = AudioCapture(audioManager, prefsMock().first)
+
+        capture.resumeMusicAfterSharedAssistant(false)
+        verify(exactly = 0) { audioManager.dispatchMediaKeyEvent(any()) }
+
+        capture.resumeMusicAfterSharedAssistant(true)
+        verify(exactly = 2) { audioManager.dispatchMediaKeyEvent(any()) }
+    }
+
+    @Test
     fun `restoreMusic restores the saved volume`() {
         val audioManager = mockk<AudioManager>()
         every { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 20, 0) } returns Unit
