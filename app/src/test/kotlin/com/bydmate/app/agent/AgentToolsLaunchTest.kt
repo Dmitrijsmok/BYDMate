@@ -364,6 +364,17 @@ class AgentToolsLaunchTest {
         assertEquals("com.google.android.apps.maps", payload.getString("packageName"))
     }
 
+    @Test fun launch_app_alias_google_maps_revanced_resolves_package() = runTest {
+        val captured = slot<ActionDef>()
+        coEvery { dispatcher.dispatch(capture(captured), any()) } returns DispatchResult(true)
+        val fixture = listOf("Maps" to "app.revanced.android.apps.maps")
+        val t = tools().apply { launcherAppsProvider = { fixture } }
+        val out = JSONObject(t.execute(AgentToolCall("1", "launch_app", """{"name":"Google Maps"}""")))
+        assertTrue(out.getBoolean("ok"))
+        val payload = JSONObject(captured.captured.payload!!)
+        assertEquals("app.revanced.android.apps.maps", payload.getString("packageName"))
+    }
+
     @Test fun launch_app_alias_google_maps_russian_resolves_package() = runTest {
         val captured = slot<ActionDef>()
         coEvery { dispatcher.dispatch(capture(captured), any()) } returns DispatchResult(true)
