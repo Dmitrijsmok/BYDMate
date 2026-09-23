@@ -5,7 +5,6 @@ import android.content.Context
 internal object RouteNavigatorResolver {
     fun resolve(
         context: Context,
-        isPackageInstalled: (String) -> Boolean,
         log: (String) -> Unit,
     ): Pair<String, String?> {
         val prefs = context.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
