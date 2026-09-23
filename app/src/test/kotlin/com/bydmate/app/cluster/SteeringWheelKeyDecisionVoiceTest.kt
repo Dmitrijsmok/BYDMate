@@ -45,11 +45,11 @@ class SteeringWheelKeyDecisionVoiceTest {
         assertEquals(VoiceKeyDecision.IGNORE, diLink3VoiceDecision(327, isDown = true, voiceEnabled = false))
     }
     @Test fun local_voice_second_press_within_window_is_double_press() {
-        assertTrue(isVoiceDoublePress(previousDownMs = 1_000L, nowMs = 1_350L))
+        assertTrue(isVoiceDoublePress(previousDownMs = 1_000L, nowMs = 1_250L))
     }
 
     @Test fun local_voice_press_after_window_is_normal_press() {
-        assertFalse(isVoiceDoublePress(previousDownMs = 1_000L, nowMs = 1_351L))
+        assertFalse(isVoiceDoublePress(previousDownMs = 1_000L, nowMs = 1_251L))
     }
 
     @Test fun first_local_voice_press_is_never_double_press() {
