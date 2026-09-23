@@ -37,7 +37,7 @@ internal object RouteNavigatorResolver {
         }
 
         if (chosen == RouteNavigatorUris.GOOGLE_MAPS &&
-            !isPackageInstalled(RouteNavigatorUris.GOOGLE_MAPS_PACKAGE)
+            RouteNavigatorDiscovery.packagesFor(RouteNavigatorUris.GOOGLE_MAPS, context.packageManager).isEmpty()
         ) {
             log("navigate: google maps not installed, falling back to yandex")
             return RouteNavigatorUris.YANDEX to "Google Maps не установлен, открыт Яндекс Навигатор"
