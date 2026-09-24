@@ -1226,6 +1226,24 @@ class SettingsViewModelTest {
         )
     }
 
+    @Test fun `switching navigator clears a manual package that belonged to the previous provider`() = runTest {
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.setRouteNavigatorPackage("com.waze")
+        vm.setRouteNavigator(RouteNavigatorUris.GOOGLE_MAPS)
+
+        assertEquals(RouteNavigatorUris.GOOGLE_MAPS, vm.uiState.value.routeNavigator)
+        assertEquals("", vm.uiState.value.routeNavigatorPackage)
+
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        assertEquals(
+            null,
+            ctx.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, null)
+        )
+    }
+
     /** The dump header must carry the choice: it is the only place a user log shows it. */
     @Test fun `the diagnostic header reports the chosen route navigator`() = runTest {
         val vm = buildViewModel()
