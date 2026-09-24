@@ -191,6 +191,32 @@ class AudioCaptureDuckTest {
         verify(exactly = 2) { editor.remove(AudioCapture.KEY_PRE_DUCK_VOLUME) }
     }
 
+    @Test fun `owned duck can lift for TTS then return to listening without losing restore target`() {
+        val audioManager = mockk<AudioManager>(relaxed = true)
+        var vol = 6
+        every { audioManager.isMusicActive } returns true
+        every { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) } answers { vol }
+        every { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, any(), 0) } answers {
+            vol = secondArg<Int>()
+        }
+        val capture = AudioCapture(audioManager, prefsMock().first)
+
+        val saved = capture.duckMusic()
+        assertEquals(1, vol)
+        assertEquals(6, capture.pendingRestoreVolume())
+
+        capture.setOwnedDuckLevel(AudioCapture.EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX)
+        assertEquals(4, vol)
+        assertEquals(6, capture.pendingRestoreVolume())
+
+        capture.setOwnedDuckLevel(AudioCapture.DUCK_VOLUME_INDEX)
+        assertEquals(1, vol)
+        assertEquals(6, capture.pendingRestoreVolume())
+
+        capture.restoreMusic(saved)
+        assertEquals(6, vol)
+    }
+
     @Test fun `explicit volume set during duck survives session restore`() {
         val audioManager = mockk<AudioManager>(relaxed = true)
         every { audioManager.isMusicActive } returns true
