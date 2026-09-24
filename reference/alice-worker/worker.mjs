@@ -84,10 +84,6 @@ const ALLOWED_ACTIONS = new Set([
   "fridge.heat_temperature",
 
   // Apps
-  "app.navigation.open",
-  "app.waze.open",
-  "app.yandex_navi.open",
-  "app.yandex_maps.open",
   "app.music.open",
   "app.youtube.open",
   "app.browser.open",
@@ -114,11 +110,6 @@ const ALLOWED_ACTIONS = new Set([
 
   // Navigation / projection. route/search/show are handled by the existing BYDMate
   // navigation engine directly, without an LLM.
-  "navigation.route",
-  "navigation.search",
-  "navigation.show",
-  "navigation.cluster_on",
-  "navigation.cluster_off",
 
   // Media
   "media.play",
@@ -403,6 +394,16 @@ function aperturePositionCommand(text) {
 function dialogCommandFor(utterance) {
   const normalized = normalizeAliceUtterance(utterance);
   if (!normalized) return null;
+
+  // 64024 field decision: navigation through the Alice/BYDMate bridge is disabled.
+  // Local BYDMate navigation remains available. Returning a marker here prevents the
+  // old route/app parser from enqueueing a command that the car cannot reliably execute.
+  if (containsAny(normalized, [
+    "маршрут", "навигац", "навигатор", "яндекс карты", "google maps", "гугл карты",
+    "waze", "вейз", "вэйз", "2гис", "2gis", "найди на карте", "покажи на карте",
+  ])) {
+    return { disabledNavigation: true };
+  }
 
   const aperture = aperturePositionCommand(normalized);
   if (aperture) return aperture;
@@ -1358,12 +1359,6 @@ function yandexDevices() {
 
     // Applications
     appDevice(
-      DEVICE.waze,
-      "Навигация",
-      "Открыть навигацию на экране автомобиля"
-    ),
-
-    appDevice(
       DEVICE.music,
       "Яндекс Музыка",
       "Открыть Яндекс Музыку"
@@ -1427,17 +1422,6 @@ function yandexDevices() {
       DEVICE.tiktok,
       "TikTok",
       "Открыть приложение TikTok"
-    ),
-
-    // Navigation projection
-    baseDevice(
-      DEVICE.clusterNavigation,
-      "Навигатор на приборке",
-      "Проекция выбранного навигатора на приборную панель",
-      "devices.types.switch",
-      [
-        onOffCapability(false),
-      ]
     ),
 
     // Media controls
@@ -1593,15 +1577,6 @@ function fanModeFromLevel(
 }
 
 const APP_ACTIONS = {
-  [DEVICE.waze]:
-    "app.navigation.open",
-
-  [DEVICE.yandexNavi]:
-    "app.yandex_navi.open",
-
-  [DEVICE.yandexMaps]:
-    "app.yandex_maps.open",
-
   [DEVICE.music]:
     "app.music.open",
 
@@ -1727,8 +1702,6 @@ function isActionOnlyDevice(
       DEVICE.ambientLight ||
     id ===
       DEVICE.sunshade ||
-    id ===
-      DEVICE.clusterNavigation ||
     id ===
       DEVICE.media ||
     id ===
@@ -3848,6 +3821,16 @@ export default {
       }
 
       const routed = dialogCommandFor(utterance);
+
+      if (routed?.disabledNavigation) {
+        return json({
+          version,
+          response: {
+            text: "Навигация через BYDMate для Алисы временно отключена.",
+            end_session: true,
+          },
+        });
+      }
 
       if (!routed) {
         return json({
