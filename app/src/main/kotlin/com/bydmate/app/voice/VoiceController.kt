@@ -227,6 +227,7 @@ class VoiceController @Inject constructor(
             // never get stamped at all, since speaking never reads true on any frame. Only
             // stamp when speak() actually enqueued playback -- see lastSpeakingSeenMs above.
             val phrase = agentIdentity().persona.spokenPhrase(spoken)
+            runCatching { audioCapture.exposeOwnedDuckForReply() }
             if (runCatching { ttsEngine.speak(phrase) }.getOrDefault(false)) {
                 echoFilter.noteSpoken(phrase)
                 lastSpeakingSeenMs = System.currentTimeMillis()
@@ -440,11 +441,6 @@ class VoiceController @Inject constructor(
                                 droppedWhileBusy++
                                 return@collect
                             }
-                            // Field-verified on ATTO 3 / DiLink 3: listening at MUSIC index 1
-                            // is excellent for ASR, but Local TTS uses the same fallback stream and
-                            // becomes effectively inaudible if we keep index 1 during the reply.
-                            // Keep duck ownership, only expose the saved user level while routing/TTS.
-                            runCatching { audioCapture.exposeOwnedDuckForReply() }
                             processingUtterance = true
                             // Paint the recognized phrase NOW, before any vehicle dispatch, network
                             // call or LLM work. The driver can immediately see what GigaAM heard.
@@ -928,6 +924,7 @@ class VoiceController @Inject constructor(
                     // non-suspend, so it must check for itself (the TTS queue is already
                     // superseded by tts.stop(), but the orb dialog repaint is not).
                     if (stopRequested.get() || askJob.isCancelled) return@ask
+                    if (queue != null) runCatching { audioCapture.exposeOwnedDuckForReply() }
                     if (queue != null && runCatching { queue.enqueue(sentence) }.getOrDefault(false)) {
                         echoFilter.noteSpoken(sentence)
                         queuedAny = true
@@ -985,6 +982,7 @@ class VoiceController @Inject constructor(
                 if (!queuedAny && gate.ttsEnabled()) {
                     // See announce() for why this is stamped at call time, not only per-frame,
                     // and only when speak() actually enqueued playback.
+                    runCatching { audioCapture.exposeOwnedDuckForReply() }
                     if (runCatching { ttsEngine.speak(result.text) }.getOrDefault(false)) {
                         echoFilter.noteSpoken(result.text)
                         lastSpeakingSeenMs = System.currentTimeMillis()
