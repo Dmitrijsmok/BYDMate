@@ -292,6 +292,26 @@ class AudioCaptureDuckTest {
         assertEquals(10, volume)
     }
 
+    @Test fun `local reply never rises above the user pre-duck volume`() {
+        val audioManager = mockk<AudioManager>(relaxed = true)
+        var volume = 3
+        every { audioManager.isMusicActive } returns true
+        every { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) } answers { volume }
+        every { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, any(), 0) } answers {
+            volume = secondArg<Int>()
+        }
+        val capture = AudioCapture(audioManager, prefsMock().first)
+
+        val saved = capture.duckMusic()
+        assertEquals(AudioCapture.DUCK_VOLUME_INDEX, volume)
+
+        capture.exposeOwnedDuckForReply()
+        assertEquals(3, volume)
+
+        capture.restoreMusic(saved)
+        assertEquals(3, volume)
+    }
+
     @Test fun `reply level helpers do nothing without an active local duck`() {
         val audioManager = mockk<AudioManager>(relaxed = true)
         val capture = AudioCapture(audioManager, prefsMock().first)
