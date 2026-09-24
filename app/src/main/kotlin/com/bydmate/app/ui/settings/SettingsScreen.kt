@@ -2582,6 +2582,16 @@ private fun VoiceSettingsContent(
         selectedIndex = routeNavigatorIds.indexOf(state.routeNavigator).coerceAtLeast(0),
         onSelect = { viewModel.setRouteNavigator(routeNavigatorIds[it]) },
     )
+    SettingHint(
+        if (state.routeNavigatorResolvedPackage.isNotBlank()) {
+            stringResource(
+                R.string.settings_route_navigator_resolved,
+                state.routeNavigatorResolvedPackage,
+            )
+        } else {
+            stringResource(R.string.settings_route_navigator_resolved_missing)
+        }
+    )
     SettingsTextField(
         label = stringResource(R.string.settings_route_navigator_package_label),
         value = state.routeNavigatorPackage,
