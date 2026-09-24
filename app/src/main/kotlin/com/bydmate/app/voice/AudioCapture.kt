@@ -162,7 +162,34 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         duckDepth++
         pendingRestore = saved
         prefs.edit().putInt(KEY_PRE_DUCK_VOLUME, saved).apply()
+        Log.i(TAG, "duckExternalAlice: $saved -> $EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX")
         saved
+    }
+
+    /**
+     * Adjust the physical MUSIC level while an existing duck already owns the restore target.
+     * This never creates another duck depth and never changes the original volume to restore.
+     *
+     * DiLink 3 routes Local TTS through the same effective MUSIC path as background media:
+     * listen at index 1, speak at index 4, then return to 1 on the next SpeechStart.
+     */
+    internal fun setOwnedDuckLevel(level: Int): Boolean = synchronized(duckLock) {
+        val restore = pendingRestore ?: return false
+        if (duckDepth <= 0) return false
+        val target = level.coerceAtLeast(0).coerceAtMost(restore)
+        val current = runCatching {
+            audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        }.getOrNull()
+        if (current == target) return true
+        val applied = runCatching {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+        }.isSuccess
+        Log.i(TAG, "ownedDuckLevel: $current -> $target restore=$restore applied=$applied")
+        applied
+    }
+
+    internal fun hasOwnedDuck(): Boolean = synchronized(duckLock) {
+        duckDepth > 0 && pendingRestore != null
     }
 
     /** Restore the media volume captured by duckMusic(), or the explicit mid-session override. No-op if nothing was ducked. */
