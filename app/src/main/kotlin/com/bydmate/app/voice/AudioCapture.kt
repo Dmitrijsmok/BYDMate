@@ -162,7 +162,6 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         duckDepth++
         pendingRestore = saved
         prefs.edit().putInt(KEY_PRE_DUCK_VOLUME, saved).apply()
-        Log.i(TAG, "duckExternalAlice: $saved -> $EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX")
         saved
     }
 

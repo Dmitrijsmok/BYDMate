@@ -35,7 +35,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -90,7 +89,6 @@ class VoiceController @Inject constructor(
 
     private val externalAudioLock = Any()
     private var externalAssistantDuck: Int? = null
-    private val externalAssistantDuckGeneration = AtomicInteger(0)
 
     private val busy = AtomicBoolean(false)
     @Volatile private var sessionJob: Job? = null
@@ -111,42 +109,29 @@ class VoiceController @Inject constructor(
     fun sessionActive(): Boolean = listening.value || busy.get()
 
     /**
-     * Field-proven Alice 4.8/5.3 lifecycle: one physical duck to index 4, idempotent re-entry,
-     * generation-based safety timeout, exact restore on every exit path.
+     * Yandex does not reliably duck DiLink media by audio focus. Hold one idempotent physical
+     * STREAM_MUSIC duck for the whole Alice listening/answer lifecycle. Duplicate accessibility
+     * triggers are harmless: only the first acting duck owns the saved volume.
      */
-    fun beginExternalAssistantAudio() {
-        var acquired = false
-        val saved = synchronized(externalAudioLock) {
-            externalAssistantDuck ?: runCatching {
-                audioCapture.duckMusicForExternalAssistant()
-            }.getOrNull()?.also {
-                externalAssistantDuck = it
-                acquired = true
-            }
-        }
-        if (!acquired) {
-            Log.i(TAG, "ALICE_EXTERNAL_DUCK reassert saved=${saved}")
-            return
-        }
-        val generation = externalAssistantDuckGeneration.incrementAndGet()
-        Log.i(TAG, "ALICE_EXTERNAL_DUCK begin saved=${saved} generation=${generation}")
-        scope.launch {
-            delay(EXTERNAL_ASSISTANT_DUCK_TIMEOUT_MS)
-            if (externalAssistantDuckGeneration.get() == generation) {
-                endExternalAssistantAudio("safety_timeout")
-            }
+    fun beginExternalAssistantAudio() = synchronized(externalAudioLock) {
+        if (externalAssistantDuck != null) return@synchronized
+        val saved = runCatching { audioCapture.duckMusicForExternalAssistant() }.getOrNull()
+        if (saved != null) {
+            externalAssistantDuck = saved
+            Log.i(TAG, "Alice media duck acquired: saved=$saved")
         }
     }
 
-    fun endExternalAssistantAudio(reason: String = "lifecycle_end") {
+    fun endExternalAssistantAudio() {
         val saved = synchronized(externalAudioLock) {
             val value = externalAssistantDuck
             externalAssistantDuck = null
             value
         }
-        externalAssistantDuckGeneration.incrementAndGet()
-        if (saved != null) runCatching { audioCapture.restoreMusic(saved) }
-        Log.i(TAG, "ALICE_EXTERNAL_DUCK end reason=${reason} restored=${saved != null}")
+        if (saved != null) {
+            runCatching { audioCapture.restoreMusic(saved) }
+            Log.i(TAG, "Alice media duck released: restore=$saved")
+        }
     }
 
     /**
@@ -1068,7 +1053,6 @@ class VoiceController @Inject constructor(
         private const val TTS_MUTE_GRACE_MS = 500L
         private const val TURN_TTS_START_GRACE_MS = 1_500L
         private const val TURN_TTS_DRAIN_TIMEOUT_MS = 12_000L
-        private const val EXTERNAL_ASSISTANT_DUCK_TIMEOUT_MS = 60_000L
 
         /** Pure so it is unit-testable without a real clock/session: whether capture should
          *  currently be muted -- either TTS is actively speaking right now, or we're still

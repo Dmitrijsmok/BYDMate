@@ -273,8 +273,6 @@ class SteeringWheelKeyService : AccessibilityService() {
         cancelPendingLocalVoice()
         lastLocalVoiceDownMs = 0L
         lastLocalVoiceKeyCode = -1
-        // Field-proven Alice 4.8 lifecycle restores the saved media volume on Accessibility unbind.
-        aliceLauncher.destroy()
         instance = null
         isConnected = false
         Log.d(TAG, "unbound; star key filter inactive")

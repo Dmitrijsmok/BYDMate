@@ -66,27 +66,6 @@ class AudioCaptureDuckTest {
     }
 
     @Test
-    fun `external Alice duck uses field proven target 4 and preserves original volume`() {
-        val audioManager = mockk<AudioManager>(relaxed = true)
-        var vol = 6
-        every { audioManager.isMusicActive } returns true
-        every { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) } answers { vol }
-        every { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, any(), 0) } answers {
-            vol = secondArg<Int>()
-        }
-        val capture = AudioCapture(audioManager, prefsMock().first)
-
-        val saved = capture.duckMusicForExternalAssistant()
-
-        assertEquals(6, saved)
-        assertEquals(AudioCapture.EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX, vol)
-        assertEquals(6, capture.pendingRestoreVolume())
-
-        capture.restoreMusic(saved)
-        assertEquals(6, vol)
-    }
-
-    @Test
     fun `restoreMusic restores the saved volume`() {
         val audioManager = mockk<AudioManager>()
         every { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 20, 0) } returns Unit

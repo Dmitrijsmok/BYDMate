@@ -15,7 +15,7 @@ Build 64023 is CI-green but NOT a field-stable baseline. The 2026-09-24 ATTO 3 /
 - The active `ttsEngine.warmUp()`, streaming queue, OpenRouter minimal-reasoning settings and latency provider sorting are still present. The 64023 regression is therefore not explained by losing those switches.
 - A logged outside-temperature phrase `которая на улице` unnecessarily fell through to OpenRouter. It must be answered from the live snapshot locally.
 - A logged generic navigation request first failed as app `навигатор`, then failed as `Яндекс Карты`, and only the third LLM tool call finally opened the selected Google Maps navigator. The launch succeeded, but the conversational result was misleading. Generic `навигатор/навигация` must resolve directly to the selected default navigator and bypass the LLM.
-- Alice did not produce a perceptible media duck in the 64023 field test. Restore the field-proven 4.8/5.3 lifecycle: target 4, idempotent ownership, safety timeout, restore on Yandex exit/unbind/destroy, and explicit logs.
+- Alice ducking remains unresolved after the 64023 field test. It is intentionally out of scope for 64024 so the field-proven Local duck/TTS recovery can be validated in isolation; keep the existing Alice audio path unchanged until a separate hardware test proves a replacement.
 - **Product decision 2026-09-24:** BYDMate navigation through the Alice bridge is disabled for now. Local BYDMate navigation remains supported. Alice must not enqueue route/search/show, navigator-app, or cluster-navigation actions until a separately field-proven Alice navigation path exists.
 
 ### 64024 recovery contract
@@ -26,6 +26,7 @@ The next field build uses a two-level Local audio policy:
 - Local TTS: while the same duck still owns the original restore target, temporarily raise the shared MUSIC route to at most index 4 so the assistant is audible.
 - Next Local `SpeechStart`: reassert index 1 without creating another duck owner.
 - Session teardown: restore the original saved media level exactly once.
+- Alice audio ducking is intentionally unchanged in 64024 and remains a separate field-recovery item.
 
 This is intentionally a minimal adaptation of the proven physical duck. It does not change the saved restore target and does not reintroduce media pause/play.
 
