@@ -177,11 +177,6 @@ class AliceAppResolver @Inject constructor(
         private val diagnosticActions = listOf(
             "YouTube" to "app.youtube.open",
             "Яндекс Музыка" to "app.music.open",
-            "Waze" to "app.waze.open",
-            "Яндекс Навигатор" to "app.yandex_navi.open",
-            "Яндекс Карты" to "app.yandex_maps.open",
-            "Google Maps" to "app.google_maps.open",
-            "2GIS" to "app.dgis.open",
             "Браузер" to "app.browser.open",
             "ABRP" to "app.abrp.open",
             "TikTok" to "app.tiktok.open",
