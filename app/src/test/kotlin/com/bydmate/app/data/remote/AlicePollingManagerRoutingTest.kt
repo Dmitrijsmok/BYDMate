@@ -20,6 +20,17 @@ class AlicePollingManagerRoutingTest {
     }
 
     @Test
+    fun `alice navigation actions are disabled and never tunnel through agent query`() {
+        assertTrue(AliceLocalCommandRouter.isNavigationAction("navigation.route"))
+        assertTrue(AliceLocalCommandRouter.isNavigationAction("navigation.search"))
+        assertTrue(AliceLocalCommandRouter.isNavigationAction("app.navigation.open"))
+        assertTrue(AliceLocalCommandRouter.isNavigationAction("app.google_maps.open"))
+        assertTrue(AliceLocalCommandRouter.isNavigationAction("app.waze.open"))
+        assertFalse(AliceLocalCommandRouter.isAutomotiveAgentQuery("построй маршрут до дома"))
+        assertFalse(AliceLocalCommandRouter.isAutomotiveAgentQuery("открой навигатор"))
+    }
+
+    @Test
     fun `delegated vehicle commands stay deterministic`() {
         assertEquals("前备箱打开", AliceLocalCommandRouter.directVehicleCommand("открой передний багажник"))
         assertEquals("前备箱关闭", AliceLocalCommandRouter.directVehicleCommand("закрой frunk"))
