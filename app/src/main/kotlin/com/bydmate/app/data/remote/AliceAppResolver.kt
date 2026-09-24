@@ -75,7 +75,7 @@ class AliceAppResolver @Inject constructor(
                 RouteNavigatorUris.YANDEX,
                 context.packageManager,
             ),
-            labels = setOf("яндекс навигатор", "yandex navigator", "навигатор"),
+            labels = setOf("яндекс навигатор", "yandex navigator"),
             packageTokens = setOf("yandexnavi"),
         )
         "app.yandex_maps.open" -> AppTarget(
@@ -295,7 +295,9 @@ class AliceAppResolver @Inject constructor(
             "музыка" to "app.music.open",
             "яндекс навигатор" to "app.yandex_navi.open",
             "yandex navigator" to "app.yandex_navi.open",
-            "навигатор" to "app.yandex_navi.open",
+            "навигатор" to "app.navigation.open",
+            "навигация" to "app.navigation.open",
+            "navigation" to "app.navigation.open",
             "яндекс карты" to "app.yandex_maps.open",
             "yandex maps" to "app.yandex_maps.open",
             "waze" to "app.waze.open",
