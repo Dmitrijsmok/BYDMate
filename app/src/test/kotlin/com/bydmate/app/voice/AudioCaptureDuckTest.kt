@@ -269,6 +269,41 @@ class AudioCaptureDuckTest {
         assertEquals(5, vol)
     }
 
+    @Test fun `local reply raises owned duck to reply level then returns to listening level`() {
+        val audioManager = mockk<AudioManager>(relaxed = true)
+        var volume = 10
+        every { audioManager.isMusicActive } returns true
+        every { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) } answers { volume }
+        every { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, any(), 0) } answers {
+            volume = secondArg<Int>()
+        }
+        val capture = AudioCapture(audioManager, prefsMock().first)
+
+        val saved = capture.duckMusic()
+        assertEquals(AudioCapture.DUCK_VOLUME_INDEX, volume)
+
+        capture.exposeOwnedDuckForReply()
+        assertEquals(AudioCapture.LOCAL_REPLY_DUCK_VOLUME_INDEX, volume)
+
+        capture.reapplyOwnedDuckForListening()
+        assertEquals(AudioCapture.DUCK_VOLUME_INDEX, volume)
+
+        capture.restoreMusic(saved)
+        assertEquals(10, volume)
+    }
+
+    @Test fun `reply level helpers do nothing without an active local duck`() {
+        val audioManager = mockk<AudioManager>(relaxed = true)
+        val capture = AudioCapture(audioManager, prefsMock().first)
+
+        capture.exposeOwnedDuckForReply()
+        capture.reapplyOwnedDuckForListening()
+
+        verify(exactly = 0) {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, any(), any())
+        }
+    }
+
     @Test fun `marker survives when the physical restore fails`() {
         val audioManager = mockk<AudioManager>(relaxed = true)
         every { audioManager.isMusicActive } returns true
