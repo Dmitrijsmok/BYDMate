@@ -80,17 +80,26 @@ class AliceApertureController @Inject constructor(
             channel.read,
             WaitSpec(target, opening, 12_000L, 40L, 1),
         )
-        val final = stopWindow(channel)
-        return if (reached != null && final != null && near(final, target, 6)) {
+        val stopped = stopWindow(channel)
+        if (!stopped.commandAccepted) return failure("window_stop_failed")
+
+        // On ATTO 3 the percentage readback can lag or jump after the STOP write. Once the
+        // controller actually observed the requested threshold and STOP was accepted, reporting
+        // window_position_miss is a false negative even though the pane visibly moved correctly.
+        // A late final sample may also be the first one that reflects the target.
+        return if (
+            reached != null ||
+            stopped.finalPosition?.let { near(it, target, 6) } == true
+        ) {
             Result.success(Unit)
         } else {
             failure("window_position_miss")
         }
     }
 
-    private suspend fun stopWindow(channel: WindowChannel): Int? {
+    private suspend fun stopWindow(channel: WindowChannel): StopOutcome {
         val firstStop = vehicleApi.dispatch(channel.stop)
-        if (firstStop.isFailure) return null
+        if (firstStop.isFailure) return StopOutcome(commandAccepted = false, finalPosition = null)
         delay(120L)
         val first = channel.read()
         delay(120L)
@@ -99,7 +108,7 @@ class AliceApertureController @Inject constructor(
             vehicleApi.dispatch(channel.stop)
         }
         delay(180L)
-        return channel.read()
+        return StopOutcome(commandAccepted = true, finalPosition = channel.read())
     }
 
     private suspend fun waitForTarget(
@@ -147,6 +156,11 @@ class AliceApertureController @Inject constructor(
         val stop: String,
         val read: suspend () -> Int?,
         val write: suspend (Int) -> Result<Unit>,
+    )
+
+    private data class StopOutcome(
+        val commandAccepted: Boolean,
+        val finalPosition: Int?,
     )
 
     companion object {
