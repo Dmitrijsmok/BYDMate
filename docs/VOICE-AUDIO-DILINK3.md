@@ -44,7 +44,7 @@ Keeping `STREAM_MUSIC = 1` during TTS therefore makes the assistant nearly inaud
 The build 64024 contract is two-level ducking:
 
 - listening: `DUCK_VOLUME_INDEX = 1`
-- Local spoken reply: `LOCAL_REPLY_DUCK_VOLUME_INDEX = 4`
+- Local spoken reply: at most `LOCAL_REPLY_DUCK_VOLUME_INDEX = 4`, but never above the user's pre-duck/explicitly selected media level
 - after the reply drains and continuous listening resumes: return to index 1
 - when the Local session ends: restore the exact pre-duck user volume
 
