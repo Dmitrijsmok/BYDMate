@@ -110,30 +110,14 @@ class VoiceController @Inject constructor(
     fun sessionActive(): Boolean = listening.value || busy.get()
 
     /**
-     * Yandex does not reliably duck DiLink media by audio focus. Hold one idempotent physical
-     * STREAM_MUSIC duck for the whole Alice listening/answer lifecycle. Duplicate accessibility
-     * triggers are harmless: only the first acting duck owns the saved volume.
+     * Field test 64023 on ATTO 3 / DiLink 3: Alice did not reliably duck media. Alice speech
+     * shares the media path, so forcing STREAM_MUSIC down can attenuate Alice itself. Keep the
+     * external-assistant hook intentionally neutral until a Yandex-specific focus/stream path is
+     * proven on-car. Local BYDMate ducking remains independent and field-verified.
      */
-    fun beginExternalAssistantAudio() = synchronized(externalAudioLock) {
-        if (externalAssistantDuck != null) return@synchronized
-        val saved = runCatching { audioCapture.duckMusicForExternalAssistant() }.getOrNull()
-        if (saved != null) {
-            externalAssistantDuck = saved
-            Log.i(TAG, "Alice media duck acquired: saved=$saved")
-        }
-    }
+    fun beginExternalAssistantAudio() = Unit
 
-    fun endExternalAssistantAudio() {
-        val saved = synchronized(externalAudioLock) {
-            val value = externalAssistantDuck
-            externalAssistantDuck = null
-            value
-        }
-        if (saved != null) {
-            runCatching { audioCapture.restoreMusic(saved) }
-            Log.i(TAG, "Alice media duck released: restore=$saved")
-        }
-    }
+    fun endExternalAssistantAudio() = Unit
 
     /** Provider hand-off: Alice must never start while Local still owns AudioRecord/TTS.
      *  Returns true when there was local work to tear down, so launchers may allow a short
