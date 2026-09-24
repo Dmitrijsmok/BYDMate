@@ -20,6 +20,35 @@ class AlicePollingManagerRoutingTest {
     }
 
     @Test
+    fun `all historical Alice navigation actions are disabled`() {
+        listOf(
+            "navigation.route",
+            "navigation.search",
+            "navigation.show",
+            "navigation.cluster_on",
+            "navigation.cluster_off",
+            "app.navigation.open",
+            "app.waze.open",
+            "app.yandex_navi.open",
+            "app.yandex_maps.open",
+            "app.google_maps.open",
+            "app.dgis.open",
+        ).forEach { action ->
+            assertTrue("must reject stale Alice navigation action: $action",
+                AliceLocalCommandRouter.isNavigationAction(action))
+        }
+        assertFalse(AliceLocalCommandRouter.isNavigationAction("app.youtube.open"))
+    }
+
+    @Test
+    fun `navigation prompts are rejected before automotive agent fallback`() {
+        assertTrue(AliceLocalCommandRouter.isNavigationText("построй маршрут до аэропорта"))
+        assertTrue(AliceLocalCommandRouter.isNavigationText("открой Google Maps"))
+        assertTrue(AliceLocalCommandRouter.isNavigationText("запусти Яндекс Навигатор"))
+        assertFalse(AliceLocalCommandRouter.isNavigationText("какой сейчас заряд батареи"))
+    }
+
+    @Test
     fun `delegated vehicle commands stay deterministic`() {
         assertEquals("前备箱打开", AliceLocalCommandRouter.directVehicleCommand("открой передний багажник"))
         assertEquals("前备箱关闭", AliceLocalCommandRouter.directVehicleCommand("закрой frunk"))
