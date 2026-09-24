@@ -84,10 +84,6 @@ const ALLOWED_ACTIONS = new Set([
   "fridge.heat_temperature",
 
   // Apps
-  "app.navigation.open",
-  "app.waze.open",
-  "app.yandex_navi.open",
-  "app.yandex_maps.open",
   "app.music.open",
   "app.youtube.open",
   "app.browser.open",
@@ -114,11 +110,6 @@ const ALLOWED_ACTIONS = new Set([
 
   // Navigation / projection. route/search/show are handled by the existing BYDMate
   // navigation engine directly, without an LLM.
-  "navigation.route",
-  "navigation.search",
-  "navigation.show",
-  "navigation.cluster_on",
-  "navigation.cluster_off",
 
   // Media
   "media.play",
@@ -432,77 +423,15 @@ function dialogCommandFor(utterance) {
     return { action: "app.youtube.open" };
   }
 
-  const nav = extractNavigationApp(normalized);
-  const routeVerb =
-    containsAny(nav.text, ["маршрут", "дорог"]) ||
-    nav.text.startsWith("поех") ||
-    nav.text.startsWith("вези ") ||
-    nav.text.startsWith("веди ") ||
-    nav.text.startsWith("езжай ");
-
-  if (routeVerb && nav.text.includes("домой")) {
-    return {
-      action: "navigation.route",
-      text: JSON.stringify({ destination: "Дом", go: nav.text.startsWith("поех") || nav.text.startsWith("вези ") || nav.text.startsWith("веди ") || nav.text.startsWith("езжай "), app: nav.app }),
-    };
-  }
-
-  if (routeVerb && nav.text.includes("на работу")) {
-    return {
-      action: "navigation.route",
-      text: JSON.stringify({ destination: "Работа", go: nav.text.startsWith("поех") || nav.text.startsWith("вези ") || nav.text.startsWith("веди ") || nav.text.startsWith("езжай "), app: nav.app }),
-    };
-  }
-
-  let destination = afterFirstPrefix(nav.text, [
-    "построй маршрут ", "проложи маршрут ", "построить маршрут ", "проложить маршрут ",
-    "маршрут ", "построй дорогу ", "проложи дорогу ", "дорогу ",
-  ]);
-  if (destination !== null) {
-    destination = stripDestinationPrep(destination);
-    if (destination) {
-      return {
-        action: "navigation.route",
-        text: JSON.stringify({ destination, go: false, app: nav.app }),
-      };
-    }
-  }
-
-  destination = afterFirstPrefix(nav.text, [
-    "поехали ", "поедем ", "вези ", "веди ", "езжай ",
-  ]);
-  if (destination !== null) {
-    destination = stripDestinationPrep(destination);
-    if (destination) {
-      return {
-        action: "navigation.route",
-        text: JSON.stringify({ destination, go: true, app: nav.app }),
-      };
-    }
-  }
-
-  let target = afterFirstPrefix(nav.text, [
-    "покажи на карте где находится ", "покажи на карте ", "где находится ",
-  ]);
-  if (target !== null && target) {
-    return {
-      action: "navigation.show",
-      text: JSON.stringify({ destination: target, app: nav.app }),
-    };
-  }
-
-  let search = afterFirstPrefix(nav.text, [
-    "найди на карте ", "поищи на карте ", "найти на карте ", "найди рядом ", "поищи рядом ",
-  ]);
-  if (search === null && nav.text.startsWith("найди ")) {
-    const maybe = nav.text.slice("найди ".length).trim();
-    if (containsAny(maybe, MAP_SEARCH_MARKERS) || nav.text.includes("ближайш")) search = maybe;
-  }
-  if (search !== null && search) {
-    return {
-      action: "navigation.search",
-      text: JSON.stringify({ query: search, app: nav.app }),
-    };
+  // Navigation is intentionally not bridged through Alice on DiLink 3. Field testing showed
+  // that Alice does not reliably hand these commands to the BYDMate bridge or duck media.
+  // Returning null ends the BYDMate dialog path and lets Yandex handle any native navigation.
+  if (containsAny(normalized, [
+    "навигац", "навигатор", "маршрут", "на карте", "waze", "вейз", "вэйз",
+    "яндекс карты", "yandex maps", "google maps", "гугл карты", "карты google",
+    "2гис", "2gis", "поехали ", "поедем ", "вези ", "веди ", "езжай ",
+  ])) {
+    return null;
   }
 
   const appName = afterFirstPrefix(normalized, [
@@ -895,7 +824,7 @@ function baseDevice(
     device_info: {
       manufacturer: "BYDMate",
       model: name,
-      sw_version: "5.12",
+      sw_version: "5.13",
     },
   };
 }
@@ -1488,7 +1417,13 @@ function yandexDevices() {
 
 function exposedYandexDevices(env) {
   const mode = String(env.ALICE_SMART_HOME_CARDS || "full").trim().toLowerCase();
-  const all = yandexDevices();
+  const navigationIds = new Set([
+    DEVICE.waze,
+    DEVICE.yandexNavi,
+    DEVICE.yandexMaps,
+    DEVICE.clusterNavigation,
+  ]);
+  const all = yandexDevices().filter((device) => !navigationIds.has(device.id));
 
   if (mode === "legacy" || mode === "full") return all;
   if (mode === "none" || mode === "off" || mode === "dialogs") return [];
@@ -1593,15 +1528,6 @@ function fanModeFromLevel(
 }
 
 const APP_ACTIONS = {
-  [DEVICE.waze]:
-    "app.navigation.open",
-
-  [DEVICE.yandexNavi]:
-    "app.yandex_navi.open",
-
-  [DEVICE.yandexMaps]:
-    "app.yandex_maps.open",
-
   [DEVICE.music]:
     "app.music.open",
 
@@ -3402,7 +3328,7 @@ function dashboard() {
   name="viewport"
   content="width=device-width,initial-scale=1"
 >
-<title>BYDmate Alice Bridge 5.12</title>
+<title>BYDmate Alice Bridge 5.13</title>
 <style>
 body{
   font-family:sans-serif;
@@ -3449,7 +3375,7 @@ small{
 </head>
 <body>
 
-<h2>BYDmate Alice Bridge 5.12</h2>
+<h2>BYDmate Alice Bridge 5.13</h2>
 
 <input
   id="key"
@@ -3517,16 +3443,8 @@ Fresh air
 <section>
 <h3>Apps</h3>
 
-<button onclick="send('app.navigation.open')">
-Navigation
-</button>
-
 <button onclick="send('app.tiktok.open')">
 TikTok
-</button>
-
-<button onclick="send('app.yandex_navi.open')">
-Yandex Navi
 </button>
 
 <button onclick="send('app.car_settings.open')">
@@ -3770,7 +3688,7 @@ export default {
         service:
           "bydmate-alice",
         bridge:
-          "5.12",
+          "5.13",
         devices:
           exposedYandexDevices(env).length,
         actions:
@@ -4566,7 +4484,7 @@ export default {
 
       return json({
         bridge:
-          "5.12",
+          "5.13",
 
         allowed_actions:
           Array.from(
