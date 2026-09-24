@@ -69,16 +69,26 @@ fun learnDecision(keyCode: Int, isDown: Boolean): LearnAction {
 const val DEFAULT_VOICE_KEYCODE = 320  // steering "voice" button on Leopard 3 (learnable)
 
 /**
- * Double-press shortcut while Local BYDMate is selected. The first press is held for this short
- * decision window instead of starting Local immediately. A second DOWN edge cancels the pending
- * Local launch and goes straight to Alice, so the two providers never fight for the microphone.
+ * Double-press shortcut while Local BYDMate is selected.
+ *
+ * Local starts immediately on the first DOWN edge so the microphone never misses the first word.
+ * A second real press inside this window hands the session to Alice; the launcher first tears
+ * Local AudioRecord/TTS down, so the providers still never own the microphone together.
  */
-const val VOICE_DOUBLE_PRESS_WINDOW_MS = 250L
+const val VOICE_DOUBLE_PRESS_WINDOW_MS = 650L
+
+/** DiLink 3 may surface two voice-key aliases for one physical press. */
+const val VOICE_ALIAS_DEDUP_WINDOW_MS = 90L
 
 fun isVoiceDoublePress(previousDownMs: Long, nowMs: Long): Boolean =
     previousDownMs > 0L &&
         nowMs >= previousDownMs &&
         nowMs - previousDownMs <= VOICE_DOUBLE_PRESS_WINDOW_MS
+
+fun isVoiceAliasDuplicate(previousDownMs: Long, nowMs: Long): Boolean =
+    previousDownMs > 0L &&
+        nowMs >= previousDownMs &&
+        nowMs - previousDownMs <= VOICE_ALIAS_DEDUP_WINDOW_MS
 
 
 enum class VoiceKeyDecision { TRIGGER, CONSUME, IGNORE }

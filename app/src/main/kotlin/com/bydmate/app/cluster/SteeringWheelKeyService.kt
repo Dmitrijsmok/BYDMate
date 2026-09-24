@@ -5,8 +5,6 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
-import android.os.Handler
-import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
@@ -47,19 +45,16 @@ internal fun voicePressRoute(
 ): VoicePressRoute = when {
     repeatCount != 0 -> VoicePressRoute.NONE
     aliceContextActive -> VoicePressRoute.ALICE
-    keyCode == previous.keyCode && isVoiceDoublePress(previous.downMs, nowMs) ->
-        VoicePressRoute.ALICE
+    isVoiceAliasDuplicate(previous.downMs, nowMs) -> VoicePressRoute.NONE
+    isVoiceDoublePress(previous.downMs, nowMs) -> VoicePressRoute.ALICE
     else -> VoicePressRoute.LOCAL
 }
 
-@Suppress("TooManyFunctions") // Voice scheduling helpers keep the key-event lifecycle in one service.
 class SteeringWheelKeyService : AccessibilityService() {
 
     private var cachedEntryPoint: ClusterEntryPoint? = null
     private var lastLocalVoiceDownMs = 0L
     private var lastLocalVoiceKeyCode = -1
-    private val voiceHandler = Handler(Looper.getMainLooper())
-    private var pendingLocalVoice: Runnable? = null
     private val aliceLauncher by lazy { YandexAliceLauncher(this) { entryPoint().voiceController() } }
     private val prefs: SharedPreferences by lazy {
         applicationContext.getSharedPreferences(ClusterProjectionManager.PREFS_NAME, Context.MODE_PRIVATE)
@@ -183,7 +178,6 @@ class SteeringWheelKeyService : AccessibilityService() {
                 )
             ) {
                 VoicePressRoute.ALICE -> {
-                    cancelPendingLocalVoice()
                     lastLocalVoiceDownMs = 0L
                     lastLocalVoiceKeyCode = -1
                     // The launcher tears Local AudioRecord/TTS down before Alice takes the mic.
@@ -192,7 +186,8 @@ class SteeringWheelKeyService : AccessibilityService() {
                 VoicePressRoute.LOCAL -> {
                     lastLocalVoiceDownMs = now
                     lastLocalVoiceKeyCode = event.keyCode
-                    scheduleLocalVoice(event.keyCode, now)
+                    // Immediate capture: the old 250 ms arbitration clipped the first words.
+                    entryPoint().voiceController().onPttPressed()
                 }
                 VoicePressRoute.NONE -> Unit
             }
@@ -200,27 +195,6 @@ class SteeringWheelKeyService : AccessibilityService() {
         }
         VoiceKeyDecision.CONSUME -> true
         VoiceKeyDecision.IGNORE -> null
-    }
-
-    private fun scheduleLocalVoice(keyCode: Int, downMs: Long) {
-        // A second physical event with a different alias code can be emitted by some DiLink 3
-        // firmwares for the same steering-wheel press. Do not create a second pending Local job.
-        if (pendingLocalVoice != null) return
-        val task = Runnable {
-            pendingLocalVoice = null
-            if (lastLocalVoiceKeyCode == keyCode && lastLocalVoiceDownMs == downMs) {
-                lastLocalVoiceDownMs = 0L
-                lastLocalVoiceKeyCode = -1
-                entryPoint().voiceController().onPttPressed()
-            }
-        }
-        pendingLocalVoice = task
-        voiceHandler.postDelayed(task, VOICE_DOUBLE_PRESS_WINDOW_MS)
-    }
-
-    private fun cancelPendingLocalVoice() {
-        pendingLocalVoice?.let(voiceHandler::removeCallbacks)
-        pendingLocalVoice = null
     }
 
     private fun entryPoint(): ClusterEntryPoint =
@@ -270,9 +244,9 @@ class SteeringWheelKeyService : AccessibilityService() {
     override fun onInterrupt() { /* no-op */ }
 
     override fun onUnbind(intent: Intent?): Boolean {
-        cancelPendingLocalVoice()
         lastLocalVoiceDownMs = 0L
         lastLocalVoiceKeyCode = -1
+        aliceLauncher.destroy()
         instance = null
         isConnected = false
         Log.d(TAG, "unbound; star key filter inactive")
@@ -280,8 +254,6 @@ class SteeringWheelKeyService : AccessibilityService() {
     }
 
     override fun onDestroy() {
-        cancelPendingLocalVoice()
-        voiceHandler.removeCallbacksAndMessages(null)
         aliceLauncher.destroy()
         instance = null
         isConnected = false

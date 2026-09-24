@@ -178,6 +178,7 @@ class SherpaTtsEngine(
                         stillCurrent = { generation.get() == myGen },
                     ).also { Log.i(TAG, "synth done: samples=${it?.size} generation ok=${generation.get() == myGen}") }
                     if (samples != null && samples.isNotEmpty() && generation.get() == myGen) {
+                        val outputSamples = dilink3OutputSamples(samples, Build.FINGERPRINT)
                         // Only a complete, still-current sentence goes into the cache: accumulateSentence
                         // returns null when superseded, and a partial buffer would be replayed forever.
                         if (cached == null && cacheKey != null) pcmCache[cacheKey] = samples.copyOf()
@@ -192,11 +193,11 @@ class SherpaTtsEngine(
                         // doc. The track buffer holds only a fraction of a sentence, so the write
                         // blocks for nearly the whole playback duration.
                         val written = writeSentence(
-                            samples = samples,
+                            samples = outputSamples,
                             write = { out.write(it, 0, it.size, AudioTrack.WRITE_BLOCKING) },
                             publish = {
-                                pendingTarget = PendingTarget(myGen, trackFramesWritten + samples.size)
-                                stampAudibleClock(samples.size, engine.sampleRate())
+                                pendingTarget = PendingTarget(myGen, trackFramesWritten + outputSamples.size)
+                                stampAudibleClock(outputSamples.size, engine.sampleRate())
                             },
                             stillCurrent = { generation.get() == myGen },
                             retract = { pendingTarget = null; audibleUntilMs = 0L },
@@ -282,7 +283,8 @@ class SherpaTtsEngine(
      *  The drain wait continues on the worker thread after the caller unblocks. */
     override fun playPcm(samples: FloatArray, sampleRate: Int): Boolean {
         if (samples.isEmpty()) return false
-        Log.i(TAG, "playPcm: samples=${samples.size} rate=$sampleRate")
+        val outputSamples = dilink3OutputSamples(samples, Build.FINGERPRINT)
+        Log.i(TAG, "playPcm: samples=${outputSamples.size} rate=$sampleRate")
         val myGen = generation.incrementAndGet()
         val requestedRate = rate()  // frozen once; both worker and caller use this snapshot, no race
         val writeOutcome = CompletableFuture<Boolean>()
@@ -315,14 +317,14 @@ class SherpaTtsEngine(
                     if (generation.get() == myGen) {
                         // Same publish-before-write ordering as speak()/enqueue() -- see writeSentence's doc.
                         val written = writeSentence(
-                            samples = samples,
+                            samples = outputSamples,
                             write = { out.write(it, 0, it.size, AudioTrack.WRITE_BLOCKING) },
                             publish = {
-                                pendingTarget = PendingTarget(myGen, trackFramesWritten + samples.size)
+                                pendingTarget = PendingTarget(myGen, trackFramesWritten + outputSamples.size)
                                 // effectiveSampleRate falls back to sampleRate on HAL rejection,
                                 // so stamp accuracy is correct there. If HAL silently plays at a
                                 // different speed, stamp may expire early -- accepted trade-off.
-                                stampAudibleClock(samples.size, effectiveSampleRate)
+                                stampAudibleClock(outputSamples.size, effectiveSampleRate)
                             },
                             stillCurrent = { generation.get() == myGen },
                             retract = { pendingTarget = null; audibleUntilMs = 0L },
@@ -333,8 +335,8 @@ class SherpaTtsEngine(
                         }
                     }
                     val interrupted = generation.get() != myGen
-                    val outcome = playbackOutcome(framesWritten.toInt(), samples.size, interrupted)
-                    if (!outcome) Log.w(TAG, "playPcm failed: short write $framesWritten of ${samples.size}")
+                    val outcome = playbackOutcome(framesWritten.toInt(), outputSamples.size, interrupted)
+                    if (!outcome) Log.w(TAG, "playPcm failed: short write $framesWritten of ${outputSamples.size}")
                     // Signal the outcome to the calling thread BEFORE the drain wait so TtsRouter
                     // can decide immediately whether to fall back; drain continues here in background.
                     writeOutcome.complete(outcome)
@@ -364,7 +366,7 @@ class SherpaTtsEngine(
         // writeWaitBoundMs is pessimistic: speedup (e.g. 2.0x) does NOT shorten the bound;
         // slowdown (0.5x) lengthens it proportionally. If PlaybackParams are rejected by the
         // HAL, actual playback runs at 1.0x and the bound must cover that full duration.
-        val timeoutMs = writeWaitBoundMs(samples.size, sampleRate, requestedRate)
+        val timeoutMs = writeWaitBoundMs(outputSamples.size, sampleRate, requestedRate)
         return try {
             writeOutcome.get(timeoutMs, TimeUnit.MILLISECONDS)
         } catch (e: TimeoutException) {
@@ -493,6 +495,7 @@ class SherpaTtsEngine(
                     )
                     Log.i(TAG, "synth done (queued): samples=${samples?.size} generation ok=${generation.get() == myGen}")
                     if (samples != null && samples.isNotEmpty() && generation.get() == myGen) {
+                        val outputSamples = dilink3OutputSamples(samples, Build.FINGERPRINT)
                         // Same underrun-disable guard as speak(): start the track only with the
                         // sentence in hand. The first sentence of a queue synthesizes for seconds
                         // while an already-started track would starve ACTIVE and get disabled;
@@ -501,12 +504,12 @@ class SherpaTtsEngine(
                         // See the speak() comment: publish before the blocking write, same
                         // ordering fix for queued sentences.
                         val written = writeSentence(
-                            samples = samples,
+                            samples = outputSamples,
                             write = { out.write(it, 0, it.size, AudioTrack.WRITE_BLOCKING) },
                             publish = {
                                 pendingTarget =
-                                    PendingTarget(myGen, trackFramesWritten + samples.size)
-                                stampAudibleClock(samples.size, engine.sampleRate())
+                                    PendingTarget(myGen, trackFramesWritten + outputSamples.size)
+                                stampAudibleClock(outputSamples.size, engine.sampleRate())
                             },
                             stillCurrent = { generation.get() == myGen },
                             retract = { pendingTarget = null; audibleUntilMs = 0L },
@@ -696,6 +699,24 @@ class SherpaTtsEngine(
          *  pure so field fingerprints can be pinned by unit tests without Android audio APIs. */
         internal fun shouldUseBydVoiceStream(fingerprint: String): Boolean =
             !fingerprint.contains("DiLink3", ignoreCase = true)
+
+        /** Boost only DiLink3 fallback PCM, without increasing the background MUSIC stream. */
+        internal fun dilink3OutputSamples(
+            samples: FloatArray,
+            fingerprint: String,
+            targetPeak: Float = 0.92f,
+            maxGain: Float = 4.0f,
+        ): FloatArray {
+            if (!fingerprint.contains("DiLink3", ignoreCase = true) || samples.isEmpty()) return samples
+            var peak = 0f
+            for (sample in samples) peak = maxOf(peak, kotlin.math.abs(sample))
+            if (peak <= 0f || peak >= targetPeak) return samples
+            val gain = (targetPeak / peak).coerceAtMost(maxGain).coerceAtLeast(1f)
+            if (gain <= 1f) return samples
+            return FloatArray(samples.size) { index ->
+                (samples[index] * gain).coerceIn(-1f, 1f)
+            }
+        }
 
         // The track buffer holds this many seconds of audio so a whole sentence's blocking write
         // returns while the sentence is still playing -- the worker then synthesizes the NEXT

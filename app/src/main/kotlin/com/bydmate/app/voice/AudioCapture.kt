@@ -149,9 +149,14 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
     }
 
     internal fun duckMusicForExternalAssistant(): Int? = synchronized(duckLock) {
-        if (!audioManager.isMusicActive) return null
+        // Yandex focus changes can report isMusicActive=false while media is still audible.
+        // Use the real stream level for external-assistant ducking and keep active only for logs.
+        val active = audioManager.isMusicActive
         val saved = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        if (saved <= EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX) return null
+        if (saved <= EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX) {
+            Log.i(TAG, "duckExternalAlice: active=$active unchanged=$saved")
+            return null
+        }
         if (!runCatching {
                 audioManager.setStreamVolume(
                     AudioManager.STREAM_MUSIC,
@@ -162,6 +167,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         duckDepth++
         pendingRestore = saved
         prefs.edit().putInt(KEY_PRE_DUCK_VOLUME, saved).apply()
+        Log.i(TAG, "duckExternalAlice: active=$active $saved -> $EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX")
         saved
     }
 
