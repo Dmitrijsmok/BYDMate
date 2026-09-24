@@ -88,8 +88,12 @@ class AliceApertureController @Inject constructor(
         // window_position_miss is a false negative even though the pane visibly moved correctly.
         // A late final sample may also be the first one that reflects the target.
         return if (
-            reached != null ||
-            stopped.finalPosition?.let { near(it, target, 6) } == true
+            windowMoveSucceeded(
+                reached = reached,
+                stopAccepted = stopped.commandAccepted,
+                finalPosition = stopped.finalPosition,
+                target = target,
+            )
         ) {
             Result.success(Unit)
         } else {
@@ -169,6 +173,18 @@ class AliceApertureController @Inject constructor(
         private const val SUNROOF_HALF = "天窗打开50"
         private const val SUNROOF_CLOSE = "天窗打开0"
     }
+}
+
+
+internal fun windowMoveSucceeded(
+    reached: Int?,
+    stopAccepted: Boolean,
+    finalPosition: Int?,
+    target: Int,
+): Boolean {
+    if (!stopAccepted) return false
+    if (reached != null) return true
+    return finalPosition?.let { near(it, target, 6) } == true
 }
 
 private data class WaitSpec(
