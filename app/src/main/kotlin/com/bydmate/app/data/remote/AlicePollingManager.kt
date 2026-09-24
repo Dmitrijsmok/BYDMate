@@ -299,6 +299,9 @@ private suspend fun executeAutomotiveAgentQuery(
 ): Result<Unit> {
     val prompt = AliceLocalCommandRouter.commandText(json)
     if (prompt.isEmpty()) return Result.failure(IllegalArgumentException("missing_agent_query"))
+    if (AliceLocalCommandRouter.isNavigationText(prompt)) {
+        return Result.failure(UnsupportedOperationException("alice_navigation_disabled"))
+    }
     if (!AliceLocalCommandRouter.isAutomotiveAgentQuery(prompt)) {
         return Result.failure(IllegalArgumentException("agent_query_outside_automotive_domain"))
     }
