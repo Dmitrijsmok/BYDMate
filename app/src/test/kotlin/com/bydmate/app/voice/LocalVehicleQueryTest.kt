@@ -28,6 +28,13 @@ class LocalVehicleQueryTest {
         )
     }
 
+    @Test fun outside_temperature_field_asr_variant_stays_local() {
+        assertEquals(
+            LocalVehicleQuery.Reply("outside_temp", "Снаружи 10 градусов."),
+            LocalVehicleQuery.answer("которая на улице", VoiceLang.RU, diParsData(exteriorTemp = 10)),
+        )
+    }
+
     @Test fun temperature_in_car_phrase_is_cabin_query() {
         assertEquals(
             LocalVehicleQuery.Reply("inside_temp", "В салоне 24 градусов."),
