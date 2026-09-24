@@ -86,6 +86,30 @@ class AudioCaptureDuckTest {
         assertEquals(6, vol)
     }
     @Test
+    fun `external Alice duck can be physically reasserted after Yandex raises the stream`() {
+        val audioManager = mockk<AudioManager>(relaxed = true)
+        var vol = 6
+        every { audioManager.isMusicActive } returns true
+        every { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) } answers { vol }
+        every { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, any(), 0) } answers {
+            vol = secondArg<Int>()
+        }
+        val capture = AudioCapture(audioManager, prefsMock().first)
+
+        val saved = capture.duckMusicForExternalAssistant()
+        assertEquals(AudioCapture.EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX, vol)
+
+        // Simulate Yandex/DiLink restoring the physical MUSIC level during its focus transition.
+        vol = 6
+        assertTrue(capture.setOwnedDuckLevel(AudioCapture.EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX))
+        assertEquals(AudioCapture.EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX, vol)
+        assertEquals(6, capture.pendingRestoreVolume())
+
+        capture.restoreMusic(saved)
+        assertEquals(6, vol)
+    }
+
+    @Test
     fun `restoreMusic restores the saved volume`() {
         val audioManager = mockk<AudioManager>()
         every { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 20, 0) } returns Unit
