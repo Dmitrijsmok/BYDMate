@@ -178,7 +178,7 @@ class SherpaTtsEngine(
                         stillCurrent = { generation.get() == myGen },
                     ).also { Log.i(TAG, "synth done: samples=${it?.size} generation ok=${generation.get() == myGen}") }
                     if (samples != null && samples.isNotEmpty() && generation.get() == myGen) {
-                        val outputSamples = dilink3OutputSamples(samples, Build.FINGERPRINT)
+                        val outputSamples = dilink3OutputSamples(samples, Build.FINGERPRINT.orEmpty())
                         // Only a complete, still-current sentence goes into the cache: accumulateSentence
                         // returns null when superseded, and a partial buffer would be replayed forever.
                         if (cached == null && cacheKey != null) pcmCache[cacheKey] = samples.copyOf()
@@ -283,7 +283,7 @@ class SherpaTtsEngine(
      *  The drain wait continues on the worker thread after the caller unblocks. */
     override fun playPcm(samples: FloatArray, sampleRate: Int): Boolean {
         if (samples.isEmpty()) return false
-        val outputSamples = dilink3OutputSamples(samples, Build.FINGERPRINT)
+        val outputSamples = dilink3OutputSamples(samples, Build.FINGERPRINT.orEmpty())
         Log.i(TAG, "playPcm: samples=${outputSamples.size} rate=$sampleRate")
         val myGen = generation.incrementAndGet()
         val requestedRate = rate()  // frozen once; both worker and caller use this snapshot, no race
@@ -495,7 +495,7 @@ class SherpaTtsEngine(
                     )
                     Log.i(TAG, "synth done (queued): samples=${samples?.size} generation ok=${generation.get() == myGen}")
                     if (samples != null && samples.isNotEmpty() && generation.get() == myGen) {
-                        val outputSamples = dilink3OutputSamples(samples, Build.FINGERPRINT)
+                        val outputSamples = dilink3OutputSamples(samples, Build.FINGERPRINT.orEmpty())
                         // Same underrun-disable guard as speak(): start the track only with the
                         // sentence in hand. The first sentence of a queue synthesizes for seconds
                         // while an already-started track would starve ACTIVE and get disabled;
