@@ -1572,4 +1572,6 @@
     <string name="welcome_language_title">应用语言</string>
     <string name="settings_config_restore_pick_title">选择备份文件</string>
     <string name="settings_config_restore_pick_empty">Download 中未找到导出文件</string>
+    <string name="settings_route_navigator_resolved">正在使用的软件包：%1$s</string>
+    <string name="settings_route_navigator_resolved_missing">未找到所选导航应用的已安装软件包</string>
 </resources>

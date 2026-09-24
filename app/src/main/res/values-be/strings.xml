@@ -1610,4 +1610,6 @@
     <string name="welcome_language_title">Мова праграмы</string>
     <string name="settings_config_restore_pick_title">Выберыце файл бэкапа</string>
     <string name="settings_config_restore_pick_empty">Файлаў экспарту ў Download не знойдзена</string>
+    <string name="settings_route_navigator_resolved">Выкарыстоўваецца пакет: %1$s</string>
+    <string name="settings_route_navigator_resolved_missing">Усталяваны пакет для выбранага навігатара не знойдзены</string>
 </resources>

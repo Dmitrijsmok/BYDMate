@@ -1610,4 +1610,6 @@
     <string name="welcome_language_title">Język aplikacji</string>
     <string name="settings_config_restore_pick_title">Wybierz plik kopii</string>
     <string name="settings_config_restore_pick_empty">Nie znaleziono plików eksportu w Download</string>
+    <string name="settings_route_navigator_resolved">Używany pakiet: %1$s</string>
+    <string name="settings_route_navigator_resolved_missing">Nie znaleziono zainstalowanego pakietu dla wybranej nawigacji</string>
 </resources>

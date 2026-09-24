@@ -1458,4 +1458,6 @@
     <string name="welcome_language_title">App language</string>
     <string name="settings_config_restore_pick_title">Choose a backup file</string>
     <string name="settings_config_restore_pick_empty">No export files found in Download</string>
+    <string name="settings_route_navigator_resolved">Package in use: %1$s</string>
+    <string name="settings_route_navigator_resolved_missing">No installed package found for the selected navigator</string>
 </resources>

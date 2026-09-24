@@ -1454,4 +1454,6 @@
     <string name="welcome_language_title">Idioma do aplicativo</string>
     <string name="settings_config_restore_pick_title">Escolha um arquivo de backup</string>
     <string name="settings_config_restore_pick_empty">Nenhum arquivo de exportação encontrado em Download</string>
+    <string name="settings_route_navigator_resolved">Pacote em uso: %1$s</string>
+    <string name="settings_route_navigator_resolved_missing">Nenhum pacote instalado foi encontrado para o navegador selecionado</string>
 </resources>
