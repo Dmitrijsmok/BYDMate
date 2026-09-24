@@ -22,10 +22,17 @@ class AliceAppActionDispatcher @Inject constructor(
 
     suspend fun dispatch(json: JSONObject, data: DiParsData?): Result<Unit>? {
         val action = json.optString("action").trim().lowercase()
+        if (action in BLOCKED_NAVIGATION_ACTIONS) {
+            return Result.failure(UnsupportedOperationException("alice_navigation_disabled"))
+        }
+
         if (action == "app.launch") {
             val query = json.optString("text").trim()
                 .ifEmpty { json.optString("query").trim() }
             if (query.isEmpty()) return Result.failure(IllegalArgumentException("missing_app_name"))
+            if (isNavigationAppQuery(query)) {
+                return Result.failure(UnsupportedOperationException("alice_navigation_disabled"))
+            }
             return launch(appResolver.resolveText(query), data)
         }
 
@@ -86,6 +93,44 @@ class AliceAppActionDispatcher @Inject constructor(
     private fun com.bydmate.app.data.automation.DispatchResult.asResult(): Result<Unit> =
         if (success) Result.success(Unit)
         else Result.failure(IllegalStateException(reason ?: "dispatch_failed"))
+
+    private fun isNavigationAppQuery(value: String): Boolean {
+        val normalized = value.trim().lowercase().replace('ё', 'е')
+        return NAVIGATION_APP_MARKERS.any { marker ->
+            normalized == marker || normalized.contains(marker)
+        }
+    }
+
+    companion object {
+        private val BLOCKED_NAVIGATION_ACTIONS = setOf(
+            "app.navigation.open",
+            "app.waze.open",
+            "app.yandex_navi.open",
+            "app.yandex_maps.open",
+            "app.google_maps.open",
+            "app.dgis.open",
+            "navigation.cluster_on",
+            "navigation.cluster_off",
+        )
+
+        private val NAVIGATION_APP_MARKERS = setOf(
+            "навигатор",
+            "navigation",
+            "waze",
+            "вейз",
+            "вэйз",
+            "яндекс навигатор",
+            "yandex navigator",
+            "яндекс карты",
+            "yandex maps",
+            "google maps",
+            "гугл карты",
+            "карты google",
+            "2гис",
+            "2gis",
+            "2 gis",
+        )
+    }
 }
 
 private fun aliceVolumeAction(value: String): ActionDef =
