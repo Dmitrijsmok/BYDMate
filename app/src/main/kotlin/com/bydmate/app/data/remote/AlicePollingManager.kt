@@ -129,9 +129,15 @@ class AlicePollingManager @Inject constructor(
 
     private suspend fun execute(json: JSONObject, action: String): Result<Unit> {
         when {
-            action == "vehicle.command" -> return executeVehicleText(json)
             AliceLocalCommandRouter.isNavigationAction(action) ->
                 return Result.failure(IllegalArgumentException("alice_navigation_disabled"))
+            aliceVehicleControlPaused(action) ->
+                // 64026 safety pause: a command that sat in the worker queue while Alice was
+                // disconnected must never wake up later and move the car. We ACK these as failed
+                // without touching VehicleApi/ActionDispatcher. Re-enable only after the bridge
+                // has an explicit turn/session TTL contract.
+                return Result.failure(IllegalStateException("alice_vehicle_control_paused"))
+            action == "vehicle.command" -> return executeVehicleText(json)
             action == "agent.query" -> return executeAutomotiveAgentQuery(
                 json = json,
                 dispatcher = actionDispatcher,
@@ -271,6 +277,25 @@ class AlicePollingManager @Inject constructor(
         "window.rear_right.position",
     )
 }
+
+
+internal fun aliceVehicleControlPaused(action: String): Boolean {
+    val normalized = action.trim().lowercase()
+    if (normalized == "vehicle.command" || normalized == "agent.query") return true
+    return PAUSED_ALICE_VEHICLE_PREFIXES.any(normalized::startsWith)
+}
+
+private val PAUSED_ALICE_VEHICLE_PREFIXES = listOf(
+    "climate.",
+    "seat.",
+    "light.",
+    "window.",
+    "doors.",
+    "trunk.",
+    "sunroof.",
+    "sunshade.",
+    "fridge.",
+)
 
 private suspend fun dispatchAliceVehicleCommands(
     commands: List<String>,
