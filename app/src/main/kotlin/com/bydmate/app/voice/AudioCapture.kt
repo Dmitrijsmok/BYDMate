@@ -156,7 +156,13 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
      */
     internal fun exposeOwnedDuckForReply(): Unit = synchronized(duckLock) {
         if (duckDepth <= 0) return
-        val target = LOCAL_REPLY_DUCK_VOLUME_INDEX
+        // Never make media louder than the level the user had before ducking (or explicitly
+        // selected while the session was live). On a low-volume drive, "reply duck = 4"
+        // must not become an accidental volume boost.
+        val target = minOf(
+            pendingRestore ?: LOCAL_REPLY_DUCK_VOLUME_INDEX,
+            LOCAL_REPLY_DUCK_VOLUME_INDEX,
+        )
         runCatching {
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
         }.onSuccess {
