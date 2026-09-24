@@ -125,7 +125,18 @@ class VoiceController @Inject constructor(
             }
         }
         if (!acquired) {
-            Log.i(TAG, "ALICE_EXTERNAL_DUCK reassert saved=$saved")
+            // 64025 only reasserted ownership in memory. Yandex/DiLink can raise STREAM_MUSIC
+            // again during its own focus/UI transition, so the music stayed loud even though
+            // BYDMate still believed it owned the duck. Re-apply the physical level on every
+            // confirmed Alice accessibility event without stacking another restore depth.
+            val applied = if (saved != null) {
+                runCatching {
+                    audioCapture.setOwnedDuckLevel(AudioCapture.EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX)
+                }.getOrDefault(false)
+            } else {
+                false
+            }
+            Log.i(TAG, "ALICE_EXTERNAL_DUCK reassert saved=$saved applied=$applied")
             return
         }
         val generation = externalAssistantDuckGeneration.incrementAndGet()
