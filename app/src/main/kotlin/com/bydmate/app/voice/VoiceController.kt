@@ -88,9 +88,6 @@ class VoiceController @Inject constructor(
         appResolver = resolver
     }
 
-    private val externalAudioLock = Any()
-    private var externalAssistantDuck: Int? = null
-
     private val busy = AtomicBoolean(false)
     @Volatile private var sessionJob: Job? = null
     @Volatile private var warmupJob: Job? = null
