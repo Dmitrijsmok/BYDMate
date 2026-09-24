@@ -55,14 +55,6 @@ class AlicePollingManager @Inject constructor(
     var latestData: DiParsData? = null
         private set
 
-    // Method injection avoids changing the constructor used by existing JVM tests.
-    private var agentTools: AgentTools? = null
-
-    @Inject
-    internal fun injectAgentTools(tools: AgentTools) {
-        agentTools = tools
-    }
-
     fun start() {
         if (pollingJob?.isActive == true) return
         val owner = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -139,7 +131,8 @@ class AlicePollingManager @Inject constructor(
     private suspend fun execute(json: JSONObject, action: String): Result<Unit> {
         when {
             action == "vehicle.command" -> return executeVehicleText(json)
-            AliceLocalCommandRouter.isNavigationAction(action) -> return executeNavigationText(action, json)
+            AliceLocalCommandRouter.isNavigationAction(action) ->
+                return Result.failure(UnsupportedOperationException("alice_navigation_disabled"))
             action == "agent.query" -> return executeAutomotiveAgentQuery(
                 json = json,
                 dispatcher = actionDispatcher,
@@ -218,44 +211,6 @@ class AlicePollingManager @Inject constructor(
 
             ParseResult.Unrecognized ->
                 Result.failure(IllegalArgumentException("unsupported_vehicle_command"))
-        }
-    }
-
-    private suspend fun executeNavigationText(action: String, json: JSONObject): Result<Unit> {
-        val raw = AliceLocalCommandRouter.commandText(json)
-        if (raw.isEmpty()) return Result.failure(IllegalArgumentException("missing_navigation_payload"))
-
-        val payload = runCatching { JSONObject(raw) }.getOrNull()
-        val text = when (action) {
-            "navigation.search" -> payload?.optString("query").orEmpty().ifBlank { raw }
-            else -> payload?.optString("destination").orEmpty().ifBlank { raw }
-        }.trim()
-        if (text.isEmpty()) return Result.failure(IllegalArgumentException("missing_navigation_target"))
-
-        val app = payload?.optString("app").orEmpty().trim()
-        val tools = agentTools
-            ?: return Result.failure(IllegalStateException("navigation_tools_unavailable"))
-
-        val response = when (action) {
-            "navigation.route" -> tools.navigateDirect(
-                destination = text,
-                go = payload?.optBoolean("go", false) ?: false,
-                app = app,
-            )
-            "navigation.search" -> tools.searchMapDirect(text, app)
-            "navigation.show" -> tools.showPointDirect(text, app)
-            else -> return Result.failure(IllegalArgumentException("unsupported_navigation_action"))
-        }
-
-        val result = runCatching { JSONObject(response) }.getOrNull()
-        return if (result?.optBoolean("ok", false) == true) {
-            Result.success(Unit)
-        } else {
-            Result.failure(
-                IllegalStateException(
-                    result?.optString("error")?.takeIf { it.isNotBlank() } ?: "navigation_failed"
-                )
-            )
         }
     }
 
