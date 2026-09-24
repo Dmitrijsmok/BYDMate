@@ -7,10 +7,29 @@ import org.json.JSONObject
  * calls an LLM; execution remains in AlicePollingManager/ActionDispatcher where safety gates live.
  */
 object AliceLocalCommandRouter {
-    private val navigationTextActions = setOf(
+    // Alice navigation is intentionally disabled on DiLink 3 after the 64023 field test.
+    // Keep every historical action here so commands cached by an older Worker are rejected
+    // instead of unexpectedly opening a navigator after an APK/Worker update.
+    private val navigationActions = setOf(
         "navigation.route",
         "navigation.search",
         "navigation.show",
+        "navigation.cluster_on",
+        "navigation.cluster_off",
+        "app.navigation.open",
+        "app.waze.open",
+        "app.yandex_navi.open",
+        "app.yandex_maps.open",
+        "app.google_maps.open",
+        "app.dgis.open",
+    )
+
+    private val navigationTextMarkers = listOf(
+        "навигац", "навигатор", "маршрут", "на карте",
+        "waze", "вейз", "вэйз",
+        "яндекс карты", "yandex maps", "яндекс навигатор", "yandex navigator",
+        "google maps", "гугл карты", "карты google",
+        "2гис", "2gis",
     )
 
     private val automotiveQueryMarkers = listOf(
@@ -18,11 +37,16 @@ object AliceLocalCommandRouter {
         "song", "sealion", "электромоб", "батар", "заряд", "расход", "пробег", "запас хода",
         "шина", "давлен", "колес", "климат", "кондиц", "сиден", "стекл", "окн", "люк",
         "штор", "багаж", "капот", "двер", "замок", "фара", "мотор", "двигател", "инвертор",
-        "прибор", "панел", "рекуперац", "маршрут", "навигац", "зарядк", "холодильник",
+        "прибор", "панел", "рекуперац", "зарядк", "холодильник",
         "аварийн", "аварийк", "дхо", "ходов", "frunk",
     )
 
-    fun isNavigationAction(action: String): Boolean = action in navigationTextActions
+    fun isNavigationAction(action: String): Boolean = action in navigationActions
+
+    fun isNavigationText(text: String): Boolean {
+        val normalized = normalizeAliceText(text)
+        return normalized.isNotEmpty() && navigationTextMarkers.any(normalized::contains)
+    }
 
     fun commandText(json: JSONObject): String =
         json.optString("text").trim().ifEmpty { json.optString("prompt").trim() }
