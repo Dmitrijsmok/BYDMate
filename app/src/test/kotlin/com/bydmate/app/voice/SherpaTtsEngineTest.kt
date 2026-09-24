@@ -959,4 +959,28 @@ class SherpaTtsEngineTest {
         assertEquals(gen, engine.generationForTest())   // warming is not speech: no supersession
         assertFalse(engine.speaking.value)
     }
+    @Test
+    fun `DiLink3 output normalization boosts quiet PCM without clipping`() {
+        val input = floatArrayOf(0.10f, -0.20f, 0.05f)
+        val output = SherpaTtsEngine.dilink3OutputSamples(input, "BYD-AUTO/DiLink3.0/test")
+
+        assertEquals(0.40f, output[0], 0.0001f)
+        assertEquals(-0.80f, output[1], 0.0001f)
+        assertEquals(0.20f, output[2], 0.0001f)
+    }
+
+    @Test
+    fun `DiLink3 output normalization leaves already loud PCM unchanged`() {
+        val input = floatArrayOf(0.95f, -0.20f)
+        val output = SherpaTtsEngine.dilink3OutputSamples(input, "BYD-AUTO/DiLink3.0/test")
+        assertTrue(input === output)
+    }
+
+    @Test
+    fun `non DiLink3 output normalization is a no-op`() {
+        val input = floatArrayOf(0.10f, -0.20f)
+        val output = SherpaTtsEngine.dilink3OutputSamples(input, "BYD-AUTO/DiLink5.0/test")
+        assertTrue(input === output)
+    }
+
 }

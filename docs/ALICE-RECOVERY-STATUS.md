@@ -565,3 +565,12 @@ The next recovery branch should start from the desired current upstream revision
 1. Build 5.3 navigation semantics
 2. Build 4.8/5.3 duck lifecycle
 3. Build95 TTS warm path
+
+## 64025 field-recovery input (2026-09-24, build 64024)
+
+- Local physical ducking is confirmed working: `AudioCapture: duckMusic: 6 -> 1`.
+- The 250 ms delayed first-press arbitration clipped the beginning of real commands; earlier turns reached routing only as `снаружи` / `батареи`.
+- 64025 starts Local immediately on the first press and uses a 650 ms second-press window for Alice, with a separate 90 ms alias/bounce dedupe.
+- Local TTS is generated successfully but remains too quiet. 64025 adds DiLink3-only PCM peak normalization without changing other firmwares.
+- Manual Alice activation works, but media ducking was not perceptible. 64025 restores explicit Alice duck ownership/timeout logging and no longer trusts transient `isMusicActive=false` during Yandex focus changes.
+- Alice navigation remains disabled.

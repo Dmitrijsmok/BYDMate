@@ -45,11 +45,16 @@ class SteeringWheelKeyDecisionVoiceTest {
         assertEquals(VoiceKeyDecision.IGNORE, diLink3VoiceDecision(327, isDown = true, voiceEnabled = false))
     }
     @Test fun local_voice_second_press_within_window_is_double_press() {
-        assertTrue(isVoiceDoublePress(previousDownMs = 1_000L, nowMs = 1_250L))
+        assertTrue(isVoiceDoublePress(previousDownMs = 1_000L, nowMs = 1_650L))
     }
 
     @Test fun local_voice_press_after_window_is_normal_press() {
-        assertFalse(isVoiceDoublePress(previousDownMs = 1_000L, nowMs = 1_251L))
+        assertFalse(isVoiceDoublePress(previousDownMs = 1_000L, nowMs = 1_651L))
+    }
+
+    @Test fun near_simultaneous_alias_is_deduplicated() {
+        assertTrue(isVoiceAliasDuplicate(previousDownMs = 1_000L, nowMs = 1_090L))
+        assertFalse(isVoiceAliasDuplicate(previousDownMs = 1_000L, nowMs = 1_091L))
     }
 
     @Test fun first_local_voice_press_is_never_double_press() {
@@ -82,6 +87,32 @@ class SteeringWheelKeyDecisionVoiceTest {
         )
     }
 
+
+    @Test fun second_real_press_routes_to_alice_even_if_firmware_alias_changes() {
+        assertEquals(
+            VoicePressRoute.ALICE,
+            voicePressRoute(
+                repeatCount = 0,
+                aliceContextActive = false,
+                keyCode = 320,
+                previous = VoicePressMemory(304, 10_000L),
+                nowMs = 10_350L,
+            ),
+        )
+    }
+
+    @Test fun firmware_alias_bounce_is_ignored() {
+        assertEquals(
+            VoicePressRoute.NONE,
+            voicePressRoute(
+                repeatCount = 0,
+                aliceContextActive = false,
+                keyCode = 320,
+                previous = VoicePressMemory(304, 10_000L),
+                nowMs = 10_050L,
+            ),
+        )
+    }
     @Test fun yandex_browser_and_navigator_are_alice_contexts() {
         assertTrue(isAliceContextPackage("com.yandex.browser"))
         assertTrue(isAliceContextPackage("ru.yandex.yandexnavi"))
