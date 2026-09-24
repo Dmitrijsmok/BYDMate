@@ -178,9 +178,6 @@ const DEVICE = {
   insideTemp: "bydmate-inside-temp",
   outsideTemp: "bydmate-outside-temp",
 
-  waze: "bydmate-app-waze",
-  yandexNavi: "bydmate-app-yandex-navi",
-  yandexMaps: "bydmate-app-yandex-maps",
   music: "bydmate-app-music",
   youtube: "bydmate-app-youtube",
   browser: "bydmate-app-browser",
@@ -197,8 +194,6 @@ const DEVICE = {
   radio: "bydmate-app-radio",
   bydmate: "bydmate-app-self",
   tiktok: "bydmate-app-tiktok",
-
-  clusterNavigation: "bydmate-navigation-cluster",
 
   media: "bydmate-media",
   mediaNext: "bydmate-media-next",
@@ -260,7 +255,7 @@ function requestId(request) {
 
    Alice already performed speech recognition. The worker only classifies the
    text into deterministic BYDMate actions. No GigaAM and no LLM are involved
-   for vehicle controls, navigation or app launching.
+   for supported vehicle controls or app launching. Navigation is intentionally not bridged.
    ====================================================== */
 
 function normalizeAliceUtterance(value) {
@@ -275,14 +270,6 @@ function containsAny(text, markers) {
   return markers.some((marker) => text.includes(marker));
 }
 
-function stripDestinationPrep(value) {
-  const text = String(value || "").trim();
-  for (const prefix of ["до ", "к ", "в ", "на "]) {
-    if (text.startsWith(prefix)) return text.slice(prefix.length).trim();
-  }
-  return text;
-}
-
 function afterFirstPrefix(text, prefixes) {
   for (const prefix of prefixes) {
     if (text.startsWith(prefix)) {
@@ -290,29 +277,6 @@ function afterFirstPrefix(text, prefixes) {
     }
   }
   return null;
-}
-
-const NAV_APP_ALIASES = [
-  { app: "maps", aliases: ["в яндекс картах", "через яндекс карты", "яндекс карты"] },
-  { app: "yandex", aliases: ["в яндекс навигаторе", "через яндекс навигатор", "яндекс навигатор"] },
-  { app: "waze", aliases: ["через waze", "в waze", "waze", "вейз", "вэйз"] },
-  { app: "google_maps", aliases: ["через google maps", "в google maps", "google maps", "гугл карты"] },
-  { app: "dgis", aliases: ["через 2гис", "в 2гис", "2гис", "2 gis", "2gis"] },
-];
-
-function extractNavigationApp(value) {
-  let text = normalizeAliceUtterance(value);
-  let app = "";
-
-  for (const entry of NAV_APP_ALIASES) {
-    const alias = entry.aliases.find((candidate) => text.includes(candidate));
-    if (!alias) continue;
-    app = entry.app;
-    text = text.replace(alias, " ").replace(/\s+/g, " ").trim();
-    break;
-  }
-
-  return { text, app };
 }
 
 const VEHICLE_CONTROL_MARKERS = [
@@ -336,9 +300,7 @@ const KNOWN_HEADUNIT_APP_MARKERS = [
   "охранный режим", "sentry", "abrp", "media center", "медиацентр", "медиа центр",
   "телефон", "phone", "радио", "radio", "bydmate", "tiktok", "тикток",
   "youtube", "ютуб", "revanced", "rvx", "яндекс музыка", "yandex music",
-  "браузер", "browser", "chrome", "хром", "waze", "вейз", "вэйз",
-  "яндекс навигатор", "yandex navigator", "яндекс карты", "yandex maps",
-  "google maps", "гугл карты", "2гис", "2gis", "2 gis",
+  "браузер", "browser", "chrome", "хром",
 ];
 
 const AUTOMOTIVE_DOMAIN_MARKERS = [
@@ -346,12 +308,8 @@ const AUTOMOTIVE_DOMAIN_MARKERS = [
   "song", "sealion", "электромоб", "батар", "заряд", "расход", "пробег", "запас хода",
   "шина", "давлен", "колес", "климат", "кондиц", "сиден", "стекл", "окн", "люк",
   "штор", "багаж", "капот", "двер", "замок", "фара", "мотор", "двигател", "инвертор",
-  "прибор", "панел", "рекуперац", "маршрут", "навигац", "зарядк", "холодильник",
+  "прибор", "панел", "рекуперац", "зарядк", "холодильник",
   "аварийн", "аварийк", "дхо", "ходов", "frunk",
-];
-
-const MAP_SEARCH_MARKERS = [
-  "заправк", "зарядк", "аптек", "кафе", "ресторан", "парковк", "магазин", "сервис",
 ];
 
 function aperturePositionCommand(text) {
@@ -1287,12 +1245,6 @@ function yandexDevices() {
 
     // Applications
     appDevice(
-      DEVICE.waze,
-      "Навигация",
-      "Открыть навигацию на экране автомобиля"
-    ),
-
-    appDevice(
       DEVICE.music,
       "Яндекс Музыка",
       "Открыть Яндекс Музыку"
@@ -1358,17 +1310,6 @@ function yandexDevices() {
       "Открыть приложение TikTok"
     ),
 
-    // Navigation projection
-    baseDevice(
-      DEVICE.clusterNavigation,
-      "Навигатор на приборке",
-      "Проекция выбранного навигатора на приборную панель",
-      "devices.types.switch",
-      [
-        onOffCapability(false),
-      ]
-    ),
-
     // Media controls
     baseDevice(
       DEVICE.media,
@@ -1417,13 +1358,7 @@ function yandexDevices() {
 
 function exposedYandexDevices(env) {
   const mode = String(env.ALICE_SMART_HOME_CARDS || "full").trim().toLowerCase();
-  const navigationIds = new Set([
-    DEVICE.waze,
-    DEVICE.yandexNavi,
-    DEVICE.yandexMaps,
-    DEVICE.clusterNavigation,
-  ]);
-  const all = yandexDevices().filter((device) => !navigationIds.has(device.id));
+  const all = yandexDevices();
 
   if (mode === "legacy" || mode === "full") return all;
   if (mode === "none" || mode === "off" || mode === "dialogs") return [];
@@ -1653,8 +1588,6 @@ function isActionOnlyDevice(
       DEVICE.ambientLight ||
     id ===
       DEVICE.sunshade ||
-    id ===
-      DEVICE.clusterNavigation ||
     id ===
       DEVICE.media ||
     id ===
@@ -3014,12 +2947,6 @@ const BINARY_ACTIONS = {
     "sunroof.close",
 },
 
-  [DEVICE.clusterNavigation]: {
-    on:
-      "navigation.cluster_on",
-    off:
-      "navigation.cluster_off",
-  },
 };
 
 async function handleBinaryAction(
@@ -3389,7 +3316,7 @@ small{
 <input
   id="action"
   class="action"
-  placeholder="action, e.g. app.navigation.open"
+  placeholder="action, e.g. app.music.open"
 >
 
 <input
