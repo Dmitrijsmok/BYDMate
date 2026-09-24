@@ -574,3 +574,37 @@ The next recovery branch should start from the desired current upstream revision
 - Local TTS is generated successfully but remains too quiet. 64025 adds DiLink3-only PCM peak normalization without changing other firmwares.
 - Manual Alice activation works, but media ducking was not perceptible. 64025 restores explicit Alice duck ownership/timeout logging and no longer trusts transient `isMusicActive=false` during Yandex focus changes.
 - Alice navigation remains disabled.
+
+
+## 64025 field result and 64026 baseline (2026-09-24)
+
+ATTO 3 / DiLink 3.0 hardware test of 64025:
+
+PASS / freeze as regression baseline:
+- Local BYDMate starts immediately and no longer clips the first words.
+- Local answers are fast.
+- Local TTS is clearly audible at a good level.
+- Background MUSIC is physically ducked while Local listens.
+- Background MUSIC stays ducked while Local answers, then restores correctly.
+- Local -> Alice switching works with the 64025 double-press timing; keep that timing unchanged.
+- Manual navigator override `app.revanced.android.apps.maps` launches the installed ReVanced Google Maps build.
+
+64026 changes:
+- Do not touch the proven Local PTT/ASR/TTS/audio path.
+- Alice external duck now physically re-applies the owned STREAM_MUSIC target on every confirmed
+  accessibility event. 64025 only reasserted in-memory ownership, so Yandex/DiLink could raise the
+  physical stream again while BYDMate still believed it was ducked.
+- Alice vehicle-control execution is temporarily paused in BYDMate. Queued/stale vehicle commands
+  are ACKed as failed and are never forwarded to VehicleApi/ActionDispatcher. This prevents a
+  delayed command from moving a window after the user has switched assistants.
+- Local window-position success no longer becomes `window_position_miss` only because the final
+  post-STOP readback lagged after the target threshold had already been observed.
+- Navigator Settings expose the effective installed package and clear a stale manual override when
+  the user changes provider. Auto-discovery remains the normal path.
+- Narrow/portrait Settings rows stack labels and controls instead of squeezing text into a
+  one-letter-wide column.
+
+Still field-test required:
+- Whether Yandex Alice keeps its own spoken answer sufficiently loud while the external MUSIC duck
+  is repeatedly re-applied. Unlike Local BYDMate, BYDMate does not own Alice's PCM and cannot apply
+  the Local TTS digital gain to Yandex audio.
