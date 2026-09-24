@@ -543,22 +543,23 @@ class VoiceController @Inject constructor(
         val followUp = runCatching { agentOrchestrator.expectsFollowUp() }.getOrDefault(false)
         val lang = currentLang()
         val res = if (followUp) null else resolve(command, lang)
-        val localApp = if (!followUp && res == null) {
-            LocalAppLaunchQuery.target(command, lang)?.let { appName ->
-                val resolver = appResolver ?: AliceAppResolver(context)
-                val resolved = resolver.resolveText(appName)
-                resolved.exceptionOrNull()?.let {
-                    Log.i(TAG, "Local app resolve miss: app=$appName reason=${it.message}")
-                }
-                resolved.getOrNull()?.let { packageName ->
-                    Log.i(TAG, "Local app resolved: app=$appName package=$packageName")
-                    appName to packageName
-                }
-            }
+        val localAppName = if (!followUp && res == null) {
+            LocalAppLaunchQuery.target(command, lang)
         } else {
             null
         }
-        val localReply = if (!followUp && res == null && localApp == null) {
+        val localApp = localAppName?.let { appName ->
+            val resolver = appResolver ?: AliceAppResolver(context)
+            val resolved = resolver.resolveText(appName)
+            resolved.exceptionOrNull()?.let {
+                Log.i(TAG, "Local app resolve miss: app=$appName reason=${it.message}")
+            }
+            resolved.getOrNull()?.let { packageName ->
+                Log.i(TAG, "Local app resolved: app=$appName package=$packageName")
+                appName to packageName
+            }
+        }
+        val localReply = if (!followUp && res == null && localAppName == null) {
             LocalVehicleQuery.answer(command, lang, gate.vehicleSnapshot())
         } else {
             null
@@ -567,6 +568,7 @@ class VoiceController @Inject constructor(
         when {
             res != null -> apply(res, command, decodeMs)
             localApp != null -> launchLocalApp(localApp.first, localApp.second, command, decodeMs)
+            localAppName != null -> reportMissingLocalApp(localAppName, command, decodeMs)
             localReply != null -> {
                 earcon.ok()
                 _state.value = VoiceUiState.AgentAnswer(localReply.text)
@@ -583,6 +585,26 @@ class VoiceController @Inject constructor(
             }
             else -> agentFallback(command, decodeMs)
         }
+    }
+
+    private suspend fun reportMissingLocalApp(
+        appName: String,
+        transcript: String,
+        decodeMs: Long?,
+    ) {
+        val answer = "Приложение $appName не найдено."
+        earcon.fail()
+        _state.value = VoiceUiState.Blocked(answer)
+        record(
+            VoiceJournalEntry.Route.NLU,
+            transcript,
+            withDecodeMs(transcript, decodeMs),
+            VoiceJournalEntry.Outcome.BLOCKED,
+            answer,
+            "Local app missing: app=$appName transcript=\"$transcript\"",
+            answer = answer,
+        )
+        announce("Голос", answer, answer)
     }
 
     private suspend fun launchLocalApp(
