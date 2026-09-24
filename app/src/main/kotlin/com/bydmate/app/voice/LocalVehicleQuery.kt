@@ -49,8 +49,14 @@ internal object LocalVehicleQuery {
             null
         }
 
-    private fun isOutsideTemperature(q: String): Boolean =
-        mentionsTemperature(q) && OUTSIDE_MARKERS.any(q::contains)
+    private fun isOutsideTemperature(q: String): Boolean {
+        if (!OUTSIDE_MARKERS.any(q::contains)) return false
+        if (mentionsTemperature(q)) return true
+        // GigaAM on a moving DiLink 3 can clip/misrecognize the beginning of
+        // "какая температура на улице" as "которая на улице". This is still a narrow,
+        // read-only local query and answering it locally avoids a 3-6 second LLM/tool round.
+        return OUTSIDE_READ_PREFIXES.any(q::startsWith)
+    }
 
     private fun isInsideTemperature(q: String): Boolean =
         mentionsTemperature(q) && INSIDE_MARKERS.any(q::contains)
@@ -70,6 +76,9 @@ internal object LocalVehicleQuery {
         q == "заряд" || READ_PREFIXES.any(q::startsWith) || "уровень заряда" in q
 
     private val OUTSIDE_MARKERS = listOf("на улице", "на улиц", "снаруж", "за борт")
+    private val OUTSIDE_READ_PREFIXES = listOf(
+        "какая ", "какой ", "сколько ", "которая ", "что там ", "что на ",
+    )
     private val INSIDE_MARKERS = listOf(
         "в салон", "внутри салон", "внутри машин", "в машине", "в машин", "в автомоб",
     )
