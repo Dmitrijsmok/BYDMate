@@ -45,7 +45,7 @@ internal fun voicePressRoute(
 ): VoicePressRoute = when {
     repeatCount != 0 -> VoicePressRoute.NONE
     aliceContextActive -> VoicePressRoute.ALICE
-    isVoiceAliasDuplicate(previous.downMs, nowMs) -> VoicePressRoute.NONE
+    keyCode != previous.keyCode && isVoiceAliasDuplicate(previous.downMs, nowMs) -> VoicePressRoute.NONE
     isVoiceDoublePress(previous.downMs, nowMs) -> VoicePressRoute.ALICE
     else -> VoicePressRoute.LOCAL
 }
