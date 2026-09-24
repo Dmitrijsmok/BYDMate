@@ -115,10 +115,18 @@ class VoiceController @Inject constructor(
      * generation-based safety timeout, exact restore on every exit path.
      */
     fun beginExternalAssistantAudio() {
+        var acquired = false
         val saved = synchronized(externalAudioLock) {
             externalAssistantDuck ?: runCatching {
                 audioCapture.duckMusicForExternalAssistant()
-            }.getOrNull()?.also { externalAssistantDuck = it }
+            }.getOrNull()?.also {
+                externalAssistantDuck = it
+                acquired = true
+            }
+        }
+        if (!acquired) {
+            Log.i(TAG, "ALICE_EXTERNAL_DUCK reassert saved=${saved}")
+            return
         }
         val generation = externalAssistantDuckGeneration.incrementAndGet()
         Log.i(TAG, "ALICE_EXTERNAL_DUCK begin saved=${saved} generation=${generation}")
