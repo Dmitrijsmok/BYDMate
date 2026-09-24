@@ -1290,6 +1290,8 @@
     <string name="settings_route_navigator_hint">Какое приложение открывать для маршрутов и поиска на карте</string>
     <string name="settings_route_navigator_package_label">Package навигатора (необязательно)</string>
     <string name="settings_route_navigator_package_hint">Для нестандартной сборки укажи точный package, например app.revanced.android.apps.maps. Пусто = автоопределение установленного приложения.</string>
+    <string name="settings_route_navigator_resolved">Используется пакет: %1$s</string>
+    <string name="settings_route_navigator_resolved_missing">Установленный пакет для выбранного навигатора не найден</string>
     <string name="settings_agent_memory_title">Память о водителе</string>
     <string name="settings_agent_memory_hint">Агент запоминает имя и устойчивые предпочтения, когда вы ему об этом говорите. Скажите «забудь …», чтобы убрать один факт</string>
     <string name="settings_agent_memory_empty">Пока ничего не запомнено</string>
@@ -1607,7 +1609,7 @@
 
     <string name="settings_alice_provider_header">Голосовой помощник</string>
     <string name="settings_voice_provider_label">Помощник</string>
-    <string name="settings_voice_provider_hint">Выберите, какой голосовой помощник будет использовать кнопка на руле</string>
+    <string name="settings_voice_provider_hint">Выберите ассистента для кнопки на руле.</string>
     <string name="settings_voice_provider_local">BYDMate / TTS</string>
     <string name="settings_alice_provider_title">Яндекс Алиса</string>
     <string name="settings_alice_provider_desc">Использовать Алису вместо встроенного голосового помощника BYDMate</string>
