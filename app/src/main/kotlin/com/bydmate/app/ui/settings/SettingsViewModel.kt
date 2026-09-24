@@ -227,6 +227,8 @@ data class SettingsUiState(
     val routeNavigator: String = com.bydmate.app.data.automation.RouteNavigatorUris.YANDEX,
     /** Optional exact APK package overriding auto-discovery for the selected navigator. */
     val routeNavigatorPackage: String = "",
+    /** Effective installed package after manual override / automatic discovery. */
+    val routeNavigatorResolvedPackage: String = "",
     /** Only navigator apps that currently expose a launcher activity on this head unit. */
     val routeNavigatorOptions: List<String> = emptyList(),
     /** Resolved voice-action -> installed launcher package diagnostics for the Settings UI. */
@@ -529,6 +531,12 @@ class SettingsViewModel @Inject constructor(
                     .putString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, routeNavigator)
                     .apply()
             }
+            val routeNavigatorResolvedPackage = (
+                routeNavigatorPackage.takeIf { manualPackageInstalled } ?:
+                    com.bydmate.app.data.automation.RouteNavigatorDiscovery
+                        .packagesFor(routeNavigator, appContext.packageManager)
+                        .firstOrNull()
+                ).orEmpty()
 
             // Wave J: multi-provider LLM connections
             val zaiApiKey = settingsRepository.getString(SettingsRepository.KEY_ZAI_API_KEY, "")
@@ -590,6 +598,7 @@ class SettingsViewModel @Inject constructor(
                     agentGender = agentGender,
                     routeNavigator = routeNavigator,
                     routeNavigatorPackage = routeNavigatorPackage,
+                    routeNavigatorResolvedPackage = routeNavigatorResolvedPackage,
                     routeNavigatorOptions = routeNavigatorOptions,
                     voiceAppMatches = voiceAppMatches,
                     agentMemoryFacts = driverMemory.facts(),
@@ -1652,22 +1661,59 @@ class SettingsViewModel @Inject constructor(
 
     fun setRouteNavigator(value: String) {
         val normalized = com.bydmate.app.data.automation.RouteNavigatorUris.normalize(value)
-        _uiState.update { it.copy(routeNavigator = normalized) }
-        appContext.getSharedPreferences(
+        val changed = normalized != _uiState.value.routeNavigator
+        val autoPackage = com.bydmate.app.data.automation.RouteNavigatorDiscovery
+            .packagesFor(normalized, appContext.packageManager)
+            .firstOrNull()
+            .orEmpty()
+        _uiState.update {
+            it.copy(
+                routeNavigator = normalized,
+                routeNavigatorPackage = if (changed) "" else it.routeNavigatorPackage,
+                routeNavigatorResolvedPackage = if (changed) autoPackage else {
+                    it.routeNavigatorPackage
+                        .trim()
+                        .takeIf { pkg ->
+                            pkg.isNotEmpty() &&
+                                appContext.packageManager.getLaunchIntentForPackage(pkg) != null
+                        }
+                        ?: autoPackage
+                },
+            )
+        }
+        val editor = appContext.getSharedPreferences(
             com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
         ).edit()
             .putString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, normalized)
-            .apply()
+        // A manual package belongs to the provider for which it was entered. Carrying it from
+        // Waze to Google Maps (or vice versa) silently defeats auto-discovery.
+        if (changed) {
+            editor.remove(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE)
+        }
+        editor.apply()
     }
 
     fun setRouteNavigatorPackage(value: String) {
-        _uiState.update { it.copy(routeNavigatorPackage = value) }
+        val manual = value.trim()
+        val selected = _uiState.value.routeNavigator
+        val manualInstalled = manual.isNotEmpty() &&
+            appContext.packageManager.getLaunchIntentForPackage(manual) != null
+        val autoPackage = com.bydmate.app.data.automation.RouteNavigatorDiscovery
+            .packagesFor(selected, appContext.packageManager)
+            .firstOrNull()
+            .orEmpty()
+        _uiState.update {
+            it.copy(
+                routeNavigatorPackage = value,
+                routeNavigatorResolvedPackage = if (manualInstalled) manual else autoPackage,
+            )
+        }
         appContext.getSharedPreferences(
             com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
         ).edit()
             .putString(
                 com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE,
-                value.trim(),
+                manual,
             )
             .apply()
     }
