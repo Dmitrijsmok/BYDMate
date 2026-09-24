@@ -7,10 +7,18 @@ import org.json.JSONObject
  * calls an LLM; execution remains in AlicePollingManager/ActionDispatcher where safety gates live.
  */
 object AliceLocalCommandRouter {
-    private val navigationTextActions = setOf(
+    private val disabledNavigationActions = setOf(
         "navigation.route",
         "navigation.search",
         "navigation.show",
+        "navigation.cluster_on",
+        "navigation.cluster_off",
+        "app.navigation.open",
+        "app.waze.open",
+        "app.yandex_navi.open",
+        "app.yandex_maps.open",
+        "app.google_maps.open",
+        "app.dgis.open",
     )
 
     private val automotiveQueryMarkers = listOf(
@@ -18,11 +26,11 @@ object AliceLocalCommandRouter {
         "song", "sealion", "электромоб", "батар", "заряд", "расход", "пробег", "запас хода",
         "шина", "давлен", "колес", "климат", "кондиц", "сиден", "стекл", "окн", "люк",
         "штор", "багаж", "капот", "двер", "замок", "фара", "мотор", "двигател", "инвертор",
-        "прибор", "панел", "рекуперац", "маршрут", "навигац", "зарядк", "холодильник",
+        "прибор", "панел", "рекуперац", "зарядк", "холодильник",
         "аварийн", "аварийк", "дхо", "ходов", "frunk",
     )
 
-    fun isNavigationAction(action: String): Boolean = action in navigationTextActions
+    fun isNavigationAction(action: String): Boolean = action in disabledNavigationActions
 
     fun commandText(json: JSONObject): String =
         json.optString("text").trim().ifEmpty { json.optString("prompt").trim() }
