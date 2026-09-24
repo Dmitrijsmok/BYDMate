@@ -50,7 +50,8 @@ internal object LocalVehicleQuery {
         }
 
     private fun isOutsideTemperature(q: String): Boolean =
-        mentionsTemperature(q) && OUTSIDE_MARKERS.any(q::contains)
+        OUTSIDE_MARKERS.any(q::contains) &&
+            (mentionsTemperature(q) || OUTSIDE_QUESTION_MARKERS.any(q::contains))
 
     private fun isInsideTemperature(q: String): Boolean =
         mentionsTemperature(q) && INSIDE_MARKERS.any(q::contains)
@@ -70,6 +71,9 @@ internal object LocalVehicleQuery {
         q == "заряд" || READ_PREFIXES.any(q::startsWith) || "уровень заряда" in q
 
     private val OUTSIDE_MARKERS = listOf("на улице", "на улиц", "снаруж", "за борт")
+    // GigaAM can clip "какая температура на улице" to fragments such as "которая на улице".
+    // The outside marker keeps this narrow enough to answer locally without guessing other topics.
+    private val OUTSIDE_QUESTION_MARKERS = listOf("какая", "какой", "которая", "сколько")
     private val INSIDE_MARKERS = listOf(
         "в салон", "внутри салон", "внутри машин", "в машине", "в машин", "в автомоб",
     )
