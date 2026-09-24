@@ -30,6 +30,21 @@ class AlicePollingManagerRoutingTest {
         assertFalse(AliceLocalCommandRouter.isAutomotiveAgentQuery("открой навигатор"))
     }
 
+
+    @Test
+    fun `alice vehicle controls are paused in 64026 while app and media actions stay available`() {
+        assertTrue(aliceVehicleControlPaused("vehicle.command"))
+        assertTrue(aliceVehicleControlPaused("window.driver.position"))
+        assertTrue(aliceVehicleControlPaused("climate.on"))
+        assertTrue(aliceVehicleControlPaused("seat.driver.heat"))
+        assertTrue(aliceVehicleControlPaused("trunk.rear.open"))
+        assertTrue(aliceVehicleControlPaused("agent.query"))
+
+        assertFalse(aliceVehicleControlPaused("app.youtube.open"))
+        assertFalse(aliceVehicleControlPaused("app.music.open"))
+        assertFalse(aliceVehicleControlPaused("media.pause"))
+    }
+
     @Test
     fun `delegated vehicle commands stay deterministic`() {
         assertEquals("前备箱打开", AliceLocalCommandRouter.directVehicleCommand("открой передний багажник"))
