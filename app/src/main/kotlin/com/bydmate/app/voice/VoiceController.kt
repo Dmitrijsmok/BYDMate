@@ -440,6 +440,11 @@ class VoiceController @Inject constructor(
                                 droppedWhileBusy++
                                 return@collect
                             }
+                            // Field-verified on ATTO 3 / DiLink 3: listening at MUSIC index 1
+                            // is excellent for ASR, but Local TTS uses the same fallback stream and
+                            // becomes effectively inaudible if we keep index 1 during the reply.
+                            // Keep duck ownership, only expose the saved user level while routing/TTS.
+                            runCatching { audioCapture.exposeOwnedDuckForReply() }
                             processingUtterance = true
                             // Paint the recognized phrase NOW, before any vehicle dispatch, network
                             // call or LLM work. The driver can immediately see what GigaAM heard.
@@ -464,6 +469,11 @@ class VoiceController @Inject constructor(
                                     // answer before its queued TTS drains. Continuous listening
                                     // stays ON; this only serializes conversational turns.
                                     if (!stopRequested.get()) awaitTurnSpeechDrain()
+                                    // Return to the proven near-zero media level before reopening
+                                    // the listening state. Ownership/restore target stay unchanged.
+                                    if (!stopRequested.get()) {
+                                        runCatching { audioCapture.reapplyOwnedDuckForListening() }
+                                    }
                                     routingJob = null
                                     processingUtterance = false
                                     runCatching { updateListeningOverlay(context.getString(R.string.voice_listening)) }
