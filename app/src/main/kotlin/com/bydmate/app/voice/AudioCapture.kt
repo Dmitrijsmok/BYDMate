@@ -148,6 +148,33 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         return saved
     }
 
+    /**
+     * Continuous Local assistant on DiLink 3 owns one physical duck for the session, but its
+     * fallback TTS is routed through STREAM_MUSIC too. While the assistant is replying, expose the
+     * exact pending restore volume without releasing duck ownership. That keeps the user's volume
+     * target intact, makes Local TTS audible again, and lets the same session drop back to index 1
+     * before the next listen window.
+     */
+    internal fun exposeOwnedDuckForReply(): Unit = synchronized(duckLock) {
+        if (duckDepth <= 0) return
+        val target = pendingRestore ?: return
+        runCatching {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+        }.onSuccess {
+            Log.i(TAG, "duckMusic: reply level -> $target (depth $duckDepth)")
+        }
+    }
+
+    /** Re-apply the proven DiLink 3 listening level while preserving the original restore target. */
+    internal fun reapplyOwnedDuckForListening(): Unit = synchronized(duckLock) {
+        if (duckDepth <= 0) return
+        runCatching {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, DUCK_VOLUME_INDEX, 0)
+        }.onSuccess {
+            Log.i(TAG, "duckMusic: listening level -> $DUCK_VOLUME_INDEX (depth $duckDepth)")
+        }
+    }
+
     internal fun duckMusicForExternalAssistant(): Int? = synchronized(duckLock) {
         if (!audioManager.isMusicActive) return null
         val saved = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
