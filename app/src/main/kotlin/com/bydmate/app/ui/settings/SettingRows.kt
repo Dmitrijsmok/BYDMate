@@ -7,6 +7,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -61,6 +62,8 @@ import com.bydmate.app.ui.theme.TextSecondary
 
 /** Button styles for [SettingActionRow]. */
 enum class SettingButtonStyle { Primary, Secondary, Warning }
+
+private val SETTINGS_ROW_STACK_WIDTH = 520.dp
 
 /** Title (14sp Medium) + optional description (12sp) column shared by all rows. */
 @Composable
@@ -135,36 +138,76 @@ fun SettingSliderRow(
     enabled: Boolean = true,
     onValueChangeFinished: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        RowLabel(title, description, enabled, Modifier.weight(1f))
-        Slider(
-            value = value,
-            onValueChange = onValueChange,
-            valueRange = valueRange,
-            steps = steps,
-            enabled = enabled,
-            onValueChangeFinished = onValueChangeFinished,
-            colors = SliderDefaults.colors(
-                thumbColor = AccentGreen,
-                activeTrackColor = AccentGreen,
-                inactiveTrackColor = CardBorder,
-            ),
-            modifier = Modifier.width(280.dp),
-        )
-        Text(
-            text = valueLabel,
-            color = if (enabled) AccentGreen else TextMuted,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            textAlign = TextAlign.End,
-            modifier = Modifier.width(64.dp),
-        )
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val narrow = maxWidth < SETTINGS_ROW_STACK_WIDTH
+        if (narrow) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 10.dp),
+            ) {
+                RowLabel(title, description, enabled, Modifier.fillMaxWidth())
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Slider(
+                        value = value,
+                        onValueChange = onValueChange,
+                        valueRange = valueRange,
+                        steps = steps,
+                        enabled = enabled,
+                        onValueChangeFinished = onValueChangeFinished,
+                        colors = SliderDefaults.colors(
+                            thumbColor = AccentGreen,
+                            activeTrackColor = AccentGreen,
+                            inactiveTrackColor = CardBorder,
+                        ),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = valueLabel,
+                        color = if (enabled) AccentGreen else TextMuted,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.width(64.dp),
+                    )
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .padding(vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RowLabel(title, description, enabled, Modifier.weight(1f))
+                Slider(
+                    value = value,
+                    onValueChange = onValueChange,
+                    valueRange = valueRange,
+                    steps = steps,
+                    enabled = enabled,
+                    onValueChangeFinished = onValueChangeFinished,
+                    colors = SliderDefaults.colors(
+                        thumbColor = AccentGreen,
+                        activeTrackColor = AccentGreen,
+                        inactiveTrackColor = CardBorder,
+                    ),
+                    modifier = Modifier.width(280.dp),
+                )
+                Text(
+                    text = valueLabel,
+                    color = if (enabled) AccentGreen else TextMuted,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.width(64.dp),
+                )
+            }
+        }
     }
 }
 
@@ -181,19 +224,55 @@ fun SettingActionRow(
     onSecondClick: (() -> Unit)? = null,
     secondButtonEnabled: Boolean = enabled,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        RowLabel(title, description, enabled, Modifier.weight(1f))
-        if (secondButtonLabel != null && onSecondClick != null) {
-            SettingRowButton(secondButtonLabel, onSecondClick, SettingButtonStyle.Secondary, secondButtonEnabled)
-            Spacer(modifier = Modifier.width(8.dp))
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        if (maxWidth < SETTINGS_ROW_STACK_WIDTH) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 10.dp),
+            ) {
+                RowLabel(title, description, enabled, Modifier.fillMaxWidth())
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (secondButtonLabel != null && onSecondClick != null) {
+                        SettingRowButton(
+                            secondButtonLabel,
+                            onSecondClick,
+                            SettingButtonStyle.Secondary,
+                            secondButtonEnabled,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    SettingRowButton(buttonLabel, onClick, style, enabled)
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .padding(vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RowLabel(title, description, enabled, Modifier.weight(1f))
+                if (secondButtonLabel != null && onSecondClick != null) {
+                    SettingRowButton(
+                        secondButtonLabel,
+                        onSecondClick,
+                        SettingButtonStyle.Secondary,
+                        secondButtonEnabled,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                SettingRowButton(buttonLabel, onClick, style, enabled)
+            }
         }
-        SettingRowButton(buttonLabel, onClick, style, enabled)
     }
 }
 
@@ -278,25 +357,55 @@ fun SettingChipRow(
     enabled: Boolean = true,
     onHelp: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        RowLabel(title, description, enabled, Modifier.weight(1f))
-        if (onHelp != null) SettingHelpBadge(onHelp)
-        Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            options.forEachIndexed { index, label ->
-                UnitChip(
-                    label = label,
-                    selected = index == selectedIndex,
-                    onClick = { if (enabled) onSelect(index) },
-                )
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        if (maxWidth < SETTINGS_ROW_STACK_WIDTH) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 10.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RowLabel(title, description, enabled, Modifier.weight(1f))
+                    if (onHelp != null) SettingHelpBadge(onHelp)
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    options.forEachIndexed { index, label ->
+                        UnitChip(
+                            label = label,
+                            selected = index == selectedIndex,
+                            onClick = { if (enabled) onSelect(index) },
+                        )
+                    }
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .padding(vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RowLabel(title, description, enabled, Modifier.weight(1f))
+                if (onHelp != null) SettingHelpBadge(onHelp)
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    options.forEachIndexed { index, label ->
+                        UnitChip(
+                            label = label,
+                            selected = index == selectedIndex,
+                            onClick = { if (enabled) onSelect(index) },
+                        )
+                    }
+                }
             }
         }
     }
