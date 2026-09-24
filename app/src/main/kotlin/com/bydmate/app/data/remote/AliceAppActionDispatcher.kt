@@ -58,8 +58,6 @@ class AliceAppActionDispatcher @Inject constructor(
     }
 
     private fun actionDef(action: String, json: JSONObject): ActionDef? = when (action) {
-        "navigation.cluster_on" -> ActionDef("", "Alice", "cluster_projection", "1")
-        "navigation.cluster_off" -> ActionDef("", "Alice", "cluster_projection", "0")
         "media.volume_up" -> aliceVolumeAction("+1")
         "media.volume_down" -> aliceVolumeAction("-1")
         "media.mute" -> aliceVolumeAction("mute")
