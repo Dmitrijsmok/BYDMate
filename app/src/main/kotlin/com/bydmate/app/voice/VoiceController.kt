@@ -89,6 +89,17 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
      */
     fun sessionActive(): Boolean = listening.value || busy.get()
 
+    /**
+     * DiLink 3's local TTS shares the effective MUSIC route with background playback.
+     * Preserve the session's saved restore target, but lift the owned duck from listen level 1
+     * to a field-tested audible level while BYDMate speaks.
+     */
+    private fun prepareLocalTtsAudio() {
+        if (_listening.value) {
+            runCatching { audioCapture.setOwnedDuckLevel(AudioCapture.LOCAL_TTS_VOLUME_INDEX) }
+        }
+    }
+
     /** Test seams, same rationale as [lastSpeakingSeenMs]: deterministic await conditions
      *  instead of fixed sleeps, no public API surface added. */
     internal fun routingJobForTest(): Job? = routingJob
@@ -165,6 +176,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             // never get stamped at all, since speaking never reads true on any frame. Only
             // stamp when speak() actually enqueued playback -- see lastSpeakingSeenMs above.
             val phrase = agentIdentity().persona.spokenPhrase(spoken)
+            prepareLocalTtsAudio()
             if (runCatching { ttsEngine.speak(phrase) }.getOrDefault(false)) {
                 echoFilter.noteSpoken(phrase)
                 lastSpeakingSeenMs = System.currentTimeMillis()
@@ -288,6 +300,13 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                     when (ev) {
                         is ContinuousAsrEvent.SpeechStart -> {
                             lastEventMs = System.currentTimeMillis()
+                            // If the preceding reply lifted the owned duck for local TTS, return
+                            // to the proven near-silent listening level before accepting speech.
+                            if (audioCapture.hasOwnedDuck()) {
+                                runCatching {
+                                    audioCapture.setOwnedDuckLevel(AudioCapture.DUCK_VOLUME_INDEX)
+                                }
+                            }
                             // The live VAD now detects speech while a routing child is in
                             // flight; clobbering Thinking here would violate the busy-drop
                             // contract (no state change while an utterance is being routed).
@@ -713,6 +732,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                     // non-suspend, so it must check for itself (the TTS queue is already
                     // superseded by tts.stop(), but the orb dialog repaint is not).
                     if (stopRequested.get() || askJob.isCancelled) return@ask
+                    prepareLocalTtsAudio()
                     if (queue != null && runCatching { queue.enqueue(sentence) }.getOrDefault(false)) {
                         echoFilter.noteSpoken(sentence)
                         queuedAny = true
@@ -773,6 +793,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                 if (!queuedAny && gate.ttsEnabled()) {
                     // See announce() for why this is stamped at call time, not only per-frame,
                     // and only when speak() actually enqueued playback.
+                    prepareLocalTtsAudio()
                     if (runCatching { ttsEngine.speak(result.text) }.getOrDefault(false)) {
                         echoFilter.noteSpoken(result.text)
                         lastSpeakingSeenMs = System.currentTimeMillis()
