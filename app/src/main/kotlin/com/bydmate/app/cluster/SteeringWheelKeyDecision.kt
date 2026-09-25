@@ -81,6 +81,23 @@ fun voiceDecision(keyCode: Int, isDown: Boolean, voiceEnabled: Boolean, voiceKey
 }
 
 /**
+ * DiLink 3.0 microphone-key aliases observed on ATTO 3.
+ * 304 is the physical PTT edge; 327 belongs to the same stock-assistant path and must be
+ * swallowed while BYDMate voice is enabled so one press cannot wake two assistants.
+ *
+ * Platform selection is intentionally outside this pure function. Callers must gate it with
+ * [isDiLink3VoiceAliasPlatform] so other BYD generations never see these aliases.
+ */
+fun diLink3VoiceDecision(keyCode: Int, isDown: Boolean, voiceEnabled: Boolean): VoiceKeyDecision {
+    if (!voiceEnabled) return VoiceKeyDecision.IGNORE
+    return when (keyCode) {
+        304 -> if (isDown) VoiceKeyDecision.TRIGGER else VoiceKeyDecision.CONSUME
+        327 -> VoiceKeyDecision.CONSUME
+        else -> VoiceKeyDecision.IGNORE
+    }
+}
+
+/**
  * Volume-knob PRESS on the steering wheel (KEYCODE_AUTO_MEDIA_PLAY_PAUSE). On firmware V1.6
  * (2026-05) PhoneWindowManager routes this code to the stock MediaKeyHandler, which hands
  * play/pause only to the current audio-focus owner; for anyone else com.byd.mediacenter takes it
