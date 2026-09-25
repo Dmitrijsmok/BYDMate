@@ -281,6 +281,9 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         stopRequested.set(false)
         _state.value = VoiceUiState.Listening
         _listening.value = true
+        // Local vehicle queries can answer before the LLM path ever runs, so pre-warm TTS
+        // as soon as the session opens instead of waiting until agentFallback().
+        if (gate.ttsEnabled()) runCatching { ttsEngine.warmUp() }
         earcon.ok()
         // Duck the music the instant the orb appears -- captureSession's own duck fires only after
         // the GigaAM recognizer is constructed (~1.3 s, field defect APK 337). duckMusic() is
