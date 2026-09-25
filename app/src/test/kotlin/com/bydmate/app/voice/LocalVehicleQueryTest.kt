@@ -35,6 +35,12 @@ class LocalVehicleQueryTest {
         )
     }
 
+    @Test fun temperature_inside_phrase_stays_on_local_path() {
+        assertEquals(
+            LocalVehicleQuery.Reply("inside_temp", "В салоне 23 градусов."),
+            LocalVehicleQuery.answer("температура внутри", VoiceLang.RU, diParsData(insideTemp = 23)),
+        )
+    }
     @Test fun temperature_in_car_phrase_is_cabin_query() {
         assertEquals(
             LocalVehicleQuery.Reply("inside_temp", "В салоне 24 градусов."),
