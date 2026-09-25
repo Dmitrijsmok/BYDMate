@@ -286,4 +286,54 @@ class AudioCaptureDuckTest {
         capture.restoreMusic(session)          // session teardown must keep the user's 5
         assertEquals(5, vol)
     }
+
+    @Test fun `owned duck can lift local TTS then return to listening without losing restore target`() {
+        val audioManager = mockk<AudioManager>(relaxed = true)
+        var volume = 12
+        every { audioManager.isMusicActive } returns true
+        every { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) } answers { volume }
+        every { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, any(), 0) } answers {
+            volume = secondArg<Int>()
+        }
+        val capture = AudioCapture(audioManager, prefsMock().first)
+
+        val saved = capture.duckMusic()
+        assertEquals(AudioCapture.DUCK_VOLUME_INDEX, volume)
+        assertEquals(12, capture.pendingRestoreVolume())
+
+        assertEquals(true, capture.setOwnedDuckLevel(AudioCapture.LOCAL_TTS_VOLUME_INDEX))
+        assertEquals(AudioCapture.LOCAL_TTS_VOLUME_INDEX, volume)
+        assertEquals(12, capture.pendingRestoreVolume())
+
+        assertEquals(true, capture.setOwnedDuckLevel(AudioCapture.DUCK_VOLUME_INDEX))
+        assertEquals(AudioCapture.DUCK_VOLUME_INDEX, volume)
+        assertEquals(12, capture.pendingRestoreVolume())
+
+        capture.restoreMusic(saved)
+        assertEquals(12, volume)
+        assertNull(capture.pendingRestoreVolume())
+    }
+
+    @Test fun `owned duck level is a no-op without live duck ownership`() {
+        val audioManager = mockk<AudioManager>(relaxed = true)
+        every { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) } returns 9
+        val capture = AudioCapture(audioManager, prefsMock().first)
+
+        assertEquals(false, capture.setOwnedDuckLevel(AudioCapture.LOCAL_TTS_VOLUME_INDEX))
+        verify(exactly = 0) {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, AudioCapture.LOCAL_TTS_VOLUME_INDEX, 0)
+        }
+    }
+
+    @Test fun `stuck duck recovery also restores when process dies during local TTS level`() {
+        val audioManager = mockk<AudioManager>(relaxed = true)
+        every { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) } returns AudioCapture.LOCAL_TTS_VOLUME_INDEX
+        val (prefs, editor) = prefsMock(pending = 15)
+
+        AudioCapture(audioManager, prefs).restoreStuckDuck()
+
+        verify(exactly = 1) { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 15, 0) }
+        verify(exactly = 1) { editor.remove(AudioCapture.KEY_PRE_DUCK_VOLUME) }
+    }
+
 }
