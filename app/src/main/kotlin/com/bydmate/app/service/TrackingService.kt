@@ -693,7 +693,16 @@ class TrackingService : Service(), LocationListener {
                         com.bydmate.app.data.repository.SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT,
                         "")
                     if (pref.isNotEmpty()) {
-                        helperClient.setAppHidden("com.byd.autovoice", pref == "true")
+                        val hidden = pref == "true"
+                        getSharedPreferences("voice", Context.MODE_PRIVATE)
+                            .edit()
+                            .putBoolean(
+                                com.bydmate.app.data.repository.SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT,
+                                hidden,
+                            )
+                            .apply()
+                        helperClient.setAppHidden("com.byd.autovoice", hidden)
+                        helperClient.setAppHidden("com.byd.vrassistant", hidden)
                     }
                 }
                 // Power down a cluster compositor left "on" by a car shutdown mid-projection —
