@@ -447,12 +447,19 @@ class SettingsViewModelTest {
         val vm = buildViewModel()
         testDispatcher.scheduler.advanceUntilIdle()
         coEvery { helperClient.setAppHidden("com.byd.autovoice", true) } returns true
+        coEvery { helperClient.setAppHidden("com.byd.vrassistant", true) } returns true
 
         vm.setDisableNativeAssistant(true)
         testDispatcher.scheduler.advanceUntilIdle()
 
         assertTrue(vm.uiState.value.disableNativeAssistant)
         coVerify { helperClient.setAppHidden("com.byd.autovoice", true) }
+        coVerify { helperClient.setAppHidden("com.byd.vrassistant", true) }
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        assertTrue(
+            ctx.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                .getBoolean(SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, false)
+        )
     }
 
     @Test fun `setVoiceEnabled persists and mirrors into voice prefs`() = runTest {
