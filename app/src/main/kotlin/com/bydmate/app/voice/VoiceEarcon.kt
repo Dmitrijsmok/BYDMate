@@ -19,8 +19,10 @@ class VoiceEarcon(private val volume: Int = 100) {
         }
     }
 
-    // Field-proven DiLink 3 route from 64027. Stream 17 can be constructible but effectively
-    // absent/inaudible on ATTO 3, so use ALARM at full ToneGenerator volume on that firmware.
+    // Prefer BYD's custom Voice stream where the firmware exposes it. DiLink 3 / ATTO 3
+    // diagnostics show stream 17 is absent and its accessibility route is barely audible on-car.
+    // Use the independent ALARM route for the two short start/stop/error tones only; spoken TTS
+    // remains on the normal accessibility speech route.
     private fun toneGenerator(): ToneGenerator {
         if (!SherpaTtsEngine.shouldUseBydVoiceStream(Build.FINGERPRINT.orEmpty())) {
             return ToneGenerator(AudioManager.STREAM_ALARM, volume)
