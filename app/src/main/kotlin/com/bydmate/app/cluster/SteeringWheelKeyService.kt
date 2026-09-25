@@ -88,7 +88,14 @@ class SteeringWheelKeyService : AccessibilityService() {
         val voicePrefs = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
         val voiceEnabled = voicePrefs.getBoolean("voice_enabled", false)
         val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)
-        when (voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey)) {
+        val voiceDecision = if (android.os.Build.VERSION.SDK_INT <= 29) {
+            val diLink3 = diLink3VoiceDecision(event.keyCode, isDown, voiceEnabled)
+            if (diLink3 != VoiceKeyDecision.IGNORE) diLink3
+            else voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey)
+        } else {
+            voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey)
+        }
+        when (voiceDecision) {
             VoiceKeyDecision.TRIGGER -> {
                 entryPoint().voiceController().onPttPressed()
                 return true
