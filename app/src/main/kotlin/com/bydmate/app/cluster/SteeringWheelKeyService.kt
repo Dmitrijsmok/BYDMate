@@ -83,19 +83,8 @@ class SteeringWheelKeyService : AccessibilityService() {
                 LearnAction.CONSUME -> true
             }
         }
-        // Voice check: runs after learn-mode, before star decision. Returns true only when voice is
-        // enabled and the configured voice key is pressed (isDown). Non-voice keys fall through.
-        val voicePrefs = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
-        val voiceEnabled = voicePrefs.getBoolean("voice_enabled", false)
-        val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)
-        val normalVoiceDecision = voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey)
-        val decision = if (isDiLink3VoiceAliasPlatform()) {
-            val aliasDecision = diLink3VoiceDecision(event.keyCode, isDown, voiceEnabled)
-            if (aliasDecision != VoiceKeyDecision.IGNORE) aliasDecision else normalVoiceDecision
-        } else {
-            normalVoiceDecision
-        }
-        when (decision) {
+        // Voice check: runs after learn-mode, before star decision. Non-voice keys fall through.
+        when (resolveVoiceKeyDecision(event.keyCode, isDown)) {
             VoiceKeyDecision.TRIGGER -> {
                 entryPoint().voiceController().onPttPressed()
                 return true
@@ -142,6 +131,16 @@ class SteeringWheelKeyService : AccessibilityService() {
                 SteeringKeyDecision.PASS_THROUGH -> false
             }
         }
+    }
+
+    private fun resolveVoiceKeyDecision(keyCode: Int, isDown: Boolean): VoiceKeyDecision {
+        val voicePrefs = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+        val voiceEnabled = voicePrefs.getBoolean("voice_enabled", false)
+        val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)
+        val normalDecision = voiceDecision(keyCode, isDown, voiceEnabled, voiceKey)
+        if (!isDiLink3VoiceAliasPlatform()) return normalDecision
+        val aliasDecision = diLink3VoiceDecision(keyCode, isDown, voiceEnabled)
+        return if (aliasDecision != VoiceKeyDecision.IGNORE) aliasDecision else normalDecision
     }
 
     private fun entryPoint(): ClusterEntryPoint =
