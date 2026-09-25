@@ -161,13 +161,14 @@ class VoiceController @Inject constructor(
     }
     /**
      * DiLink 3 shares Local TTS and background media on the effective MUSIC route. Listening at
-     * index 1 is field-confirmed; before local speech we raise the already-owned duck to index 4
-     * without touching its saved restore target. The next SpeechStart returns it to index 1.
+     * index 1 is field-confirmed; before local speech we raise the already-owned duck to the
+     * dedicated Local TTS level without touching its saved restore target. Alice has a separate
+     * duck target and must never change this proven Local behavior.
      */
     private fun prepareLocalTtsAudio() {
         if (_listening.value) {
             runCatching {
-                audioCapture.setOwnedDuckLevel(AudioCapture.EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX)
+                audioCapture.setOwnedDuckLevel(AudioCapture.LOCAL_TTS_VOLUME_INDEX)
             }
         }
     }
