@@ -285,6 +285,9 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         // as soon as the session opens instead of waiting until agentFallback().
         if (gate.ttsEnabled()) runCatching { ttsEngine.warmUp() }
         earcon.ok()
+        // Warm offline TTS in parallel with listening. Local vehicle answers can arrive without
+        // an LLM round-trip, so agentFallback() is too late to hide the cold TTS startup cost.
+        if (gate.ttsEnabled()) runCatching { ttsEngine.warmUp() }
         // Duck the music the instant the orb appears -- captureSession's own duck fires only after
         // the GigaAM recognizer is constructed (~1.3 s, field defect APK 337). duckMusic() is
         // idempotent (volume already at the duck target returns null), so the inner call becomes
