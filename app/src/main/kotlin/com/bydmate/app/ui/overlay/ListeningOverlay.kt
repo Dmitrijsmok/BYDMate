@@ -1,38 +1,36 @@
 package com.bydmate.app.ui.overlay
 
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
+import android.widget.ImageView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Mic
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.ViewCompositionStrategy
@@ -127,8 +125,8 @@ object ListeningOverlay {
 
     private class RealOverlayHandle(
         private val wm: WindowManager,
-        private val view: ComposeView,
-        private val owner: OverlayLifecycleOwner,
+        private val view: View,
+        private val owner: OverlayLifecycleOwner? = null,
     ) : OverlayHandle {
         override fun destroy() {
             try {
@@ -136,7 +134,7 @@ object ListeningOverlay {
             } catch (e: Exception) {
                 Log.w(TAG, "hide failed: ${e.message}")
             }
-            owner.onDestroy()
+            owner?.onDestroy()
         }
     }
 
@@ -235,9 +233,11 @@ object ListeningOverlay {
 
         // One fixed, click-through status icon in the upper-left. Keeping it non-touchable means
         // it never steals taps from the car UI underneath.
+        val micSizePx = (40 * density).toInt()
+        val micPaddingPx = (8 * density).toInt()
         val micParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            micSizePx,
+            micSizePx,
             overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
@@ -264,17 +264,20 @@ object ListeningOverlay {
             y = top + pillOffsetPx
         }
 
-        val micOwner = OverlayLifecycleOwner().also { it.onCreate() }
         val dialogOwner = OverlayLifecycleOwner().also { it.onCreate() }
-        val micView = ComposeView(context)
+        val micView = ImageView(context).apply {
+            setImageResource(android.R.drawable.ic_btn_speak_now)
+            imageTintList = ColorStateList.valueOf(AccentGreen.toArgb())
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(micPaddingPx, micPaddingPx, micPaddingPx, micPaddingPx)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(CardSurface.copy(alpha = 0.94f).toArgb())
+                setStroke((density.coerceAtLeast(1f)).toInt(), AccentGreen.toArgb())
+            }
+        }
         val dialogView = ComposeView(context)
 
-        micView.apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindowOrReleasedFromPool)
-            setViewTreeLifecycleOwner(micOwner)
-            setViewTreeSavedStateRegistryOwner(micOwner)
-            setContent { ListeningMicIndicator() }
-        }
         dialogView.apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindowOrReleasedFromPool)
             setViewTreeLifecycleOwner(dialogOwner)
@@ -283,33 +286,16 @@ object ListeningOverlay {
         }
 
         wm.addView(micView, micParams)
+        Log.i(TAG, "mic overlay attached type=${micParams.type} x=$left y=$top size=$micSizePx")
         wm.addView(dialogView, dialogParams)
+        Log.i(TAG, "dialog overlay attached type=${dialogParams.type} x=$left y=${top + pillOffsetPx}")
 
         return CompositeOverlayHandle(
             listOf(
-                RealOverlayHandle(wm, micView, micOwner),
+                RealOverlayHandle(wm, micView),
                 RealOverlayHandle(wm, dialogView, dialogOwner),
             ),
         )
-    }
-
-    @Composable
-    private fun ListeningMicIndicator() {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(40.dp)
-                .background(CardSurface.copy(alpha = 0.94f), CircleShape)
-                .border(1.dp, AccentGreen, CircleShape)
-                .padding(8.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.Mic,
-                contentDescription = null,
-                tint = AccentGreen,
-                modifier = Modifier.size(24.dp),
-            )
-        }
     }
 
     @Composable
