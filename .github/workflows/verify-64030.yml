@@ -1,9 +1,9 @@
-name: Verify 64030 local voice recovery
+name: Verify 64031 overlay earcon local tts
 
 on:
   push:
     branches:
-      - fix/64030-upstream-3.18.2-local-voice-recovery
+      - fix/64031-upstream-3.18.2-local-voice-recovery
 
 permissions:
   contents: read
@@ -37,12 +37,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          cp app/build/outputs/apk/debug/*.apk out/BYDMate-3.18.2-64030-LocalVoiceFix-debug.apk
+          cp app/build/outputs/apk/debug/*.apk out/BYDMate-3.18.2-64031-OverlayEarconFix-debug.apk
 
       - uses: actions/upload-artifact@v7
         with:
-          name: BYDMate-3.18.2-64030-LocalVoiceFix-debug
-          path: out/BYDMate-3.18.2-64030-LocalVoiceFix-debug.apk
+          name: BYDMate-3.18.2-64031-LocalVoiceFix-debug
+          path: out/BYDMate-3.18.2-64031-LocalVoiceFix-debug.apk
           if-no-files-found: error
           retention-days: 2
 
@@ -58,7 +58,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: android-signing-tools-64030
+          name: android-signing-tools-64031
           path: signing-tools
           if-no-files-found: error
           retention-days: 2
