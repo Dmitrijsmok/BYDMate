@@ -19,7 +19,8 @@ import org.robolectric.annotation.Config
 @Config(sdk = [29])
 class CameraForegroundHintTest {
 
-    private val monitor = CameraStateMonitor(ApplicationProvider.getApplicationContext())
+    private val appContext = ApplicationProvider.getApplicationContext<android.content.Context>()
+    private val monitor = CameraStateMonitor(appContext)
 
     @Test
     fun `a hint takes effect at once`() {
@@ -50,7 +51,7 @@ class CameraForegroundHintTest {
     @Test
     fun `hints from our own windows and from the system bars are ignored`() {
         monitor.onForegroundHint(NATIVE_CAMERA)
-        monitor.onForegroundHint("com.bydmate.app")
+        monitor.onForegroundHint(appContext.packageName)
         monitor.onForegroundHint("com.android.systemui")
         monitor.onForegroundHint("com.android.inputmethod.latin")
         assertTrue(monitor.active.value)
