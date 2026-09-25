@@ -67,6 +67,12 @@ class AudioCaptureDuckTest {
     }
 
     @Test
+    fun `Alice duck target matches Local listening minimum without changing Local TTS level`() {
+        assertEquals(1, AudioCapture.EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX)
+        assertEquals(1, AudioCapture.DUCK_VOLUME_INDEX)
+        assertEquals(4, AudioCapture.LOCAL_TTS_VOLUME_INDEX)
+    }
+    @Test
     fun `external Alice duck ignores transient isMusicActive false and preserves original volume`() {
         val audioManager = mockk<AudioManager>(relaxed = true)
         var vol = 6
@@ -250,7 +256,7 @@ class AudioCaptureDuckTest {
         assertEquals(1, vol)
         assertEquals(6, capture.pendingRestoreVolume())
 
-        capture.setOwnedDuckLevel(AudioCapture.EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX)
+        capture.setOwnedDuckLevel(AudioCapture.LOCAL_TTS_VOLUME_INDEX)
         assertEquals(4, vol)
         assertEquals(6, capture.pendingRestoreVolume())
 
