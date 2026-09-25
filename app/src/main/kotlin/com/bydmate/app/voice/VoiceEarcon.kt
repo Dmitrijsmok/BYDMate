@@ -23,8 +23,11 @@ class VoiceEarcon(private val volume: Int = 100) {
     // diagnostics show stream 17 is absent and its accessibility route is barely audible on-car.
     // Use the independent ALARM route for the two short start/stop/error tones only; spoken TTS
     // remains on the normal accessibility speech route.
+    private fun isDiLink3(fingerprint: String): Boolean =
+        fingerprint.contains("DiLink3.0", ignoreCase = true) || Build.VERSION.SDK_INT <= 29
+
     private fun toneGenerator(): ToneGenerator {
-        if (!SherpaTtsEngine.shouldUseBydVoiceStream(Build.FINGERPRINT.orEmpty())) {
+        if (isDiLink3(Build.FINGERPRINT.orEmpty())) {
             return ToneGenerator(AudioManager.STREAM_ALARM, volume)
         }
         return runCatching { ToneGenerator(SherpaTtsEngine.BYD_STREAM_BTTS, volume) }
