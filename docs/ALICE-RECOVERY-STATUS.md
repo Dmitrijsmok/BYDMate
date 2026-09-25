@@ -608,3 +608,29 @@ Still field-test required:
 - Whether Yandex Alice keeps its own spoken answer sufficiently loud while the external MUSIC duck
   is repeatedly re-applied. Unlike Local BYDMate, BYDMate does not own Alice's PCM and cannot apply
   the Local TTS digital gain to Yandex audio.
+
+
+## 64026 field result and 64027 test scope (2026-09-25)
+
+ATTO 3 / DiLink 3.0 field result of build 64026:
+
+PASS / freeze:
+- Portrait/narrow Settings layout is fixed. Do not touch this UI again in the audio/latency recovery branch.
+- Local BYDMate MUSIC duck is still correct: listening goes from 6 -> 1.
+- Local TTS remains clearly audible and uses the proven temporary MUSIC level 4.
+- Local-to-Alice switching remains good; preserve the 64025/64026 PTT timing.
+- Alice external duck ownership now works physically and is repeatedly re-applied when Yandex raises the stream.
+
+Latency finding:
+- "температура на улице" stayed on the local fast path: ASR decode 594 ms, local routing about 126 ms later, cached TTS immediately available.
+- "температура внутри" missed LocalVehicleQuery and fell through to OpenRouter. The LLM round alone took about 2.3 s before TTS, causing the perceived intermittent delay.
+- 64027 adds the exact short marker "внутри" to the cabin-temperature local resolver, guarded by the existing temperature-word check.
+
+Alice audio finding:
+- 64026 explicitly ducks Alice from MUSIC 6 -> 4.
+- Yandex repeatedly raises the physical MUSIC stream back toward 5/6; BYDMate reasserts it to 4, which the field log confirms.
+- Volume 4 is still too loud relative to Alice speech.
+- 64027 separates the audio constants: Local listening=1, Local TTS=4, Alice external duck=1.
+- This is a hardware experiment for Alice only. If Alice voice itself follows STREAM_MUSIC, it may also become quieter; unlike Local BYDMate, BYDMate cannot digitally amplify Yandex PCM.
+
+Alice vehicle control remains paused. UI remains unchanged.
