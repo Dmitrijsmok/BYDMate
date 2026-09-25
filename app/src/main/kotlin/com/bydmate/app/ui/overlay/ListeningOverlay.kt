@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.bydmate.app.R
+import com.bydmate.app.cluster.SteeringWheelKeyService
 import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.ui.theme.AccentGreen
 import com.bydmate.app.ui.theme.CardBorder
@@ -153,7 +154,9 @@ object ListeningOverlay {
 
     // Test seam: whether SYSTEM_ALERT_WINDOW is granted. Defaults to the real Settings check;
     // ListeningOverlayTest overrides this so attachWindow actually runs without a real Context.
-    internal var permissionCheck: (Context) -> Boolean = { context -> canShow(context) }
+    internal var permissionCheck: (Context) -> Boolean = { context ->
+        canShow(context) || SteeringWheelKeyService.instance != null
+    }
 
     // Test seam: builds and attaches the real window in production. Tests substitute a fake that
     // returns a lightweight OverlayHandle without ever touching WindowManager/ComposeView, so this
@@ -191,7 +194,8 @@ object ListeningOverlay {
                 // Commit `active` only after attachWindow returns successfully -- if it throws
                 // (e.g. addView failure), `active` is never assigned and stays null, so the next
                 // show() retries instead of silently no-op'ing forever.
-                active = attachWindow(context, initial)
+                val overlayContext = SteeringWheelKeyService.instance ?: context
+                active = attachWindow(overlayContext, initial)
             } catch (e: Exception) {
                 Log.e(TAG, "show failed: ${e.message}")
             }
@@ -214,8 +218,10 @@ object ListeningOverlay {
         poster(Runnable { handle.destroy() })
     }
 
-    private fun overlayType(): Int =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+    private fun overlayType(context: Context): Int =
+        if (context is android.accessibilityservice.AccessibilityService)
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+        else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         else
             @Suppress("DEPRECATION")
@@ -238,7 +244,7 @@ object ListeningOverlay {
         val micParams = WindowManager.LayoutParams(
             micSizePx,
             micSizePx,
-            overlayType(),
+            overlayType(context),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
@@ -253,7 +259,7 @@ object ListeningOverlay {
         val dialogParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
-            overlayType(),
+            overlayType(context),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
@@ -286,7 +292,7 @@ object ListeningOverlay {
         }
 
         wm.addView(micView, micParams)
-        Log.i(TAG, "mic overlay attached type=${micParams.type} x=$left y=$top size=$micSizePx")
+        Log.i(TAG, "mic overlay attached type=${micParams.type} host=${context.javaClass.simpleName} x=$left y=$top size=$micSizePx")
         wm.addView(dialogView, dialogParams)
         Log.i(TAG, "dialog overlay attached type=${dialogParams.type} x=$left y=${top + pillOffsetPx}")
 
