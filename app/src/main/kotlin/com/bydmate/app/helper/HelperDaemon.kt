@@ -532,23 +532,22 @@ fun main(args: Array<String>) {
                     // the caller may only name the launcher package.
                     // Validate the flag daemon-side too — a privileged shell-uid op must not
                     // trust the caller. Only 0/1 are a defined state; reject anything else.
-                    val ok = if (pkg == "com.byd.autovoice" && hidden in 0..1) {
-                        // `pm disable-user --user 0` force-stops the package and disables its
-                        // components so the framework stops routing the steering voice button to it.
-                        // `pm hide` left the already-running system assistant alive — the wheel
-                        // button still woke it. The competitor uses disable-user and suppresses the
-                        // assistant 100%; reversed with `pm enable`.
+                    val ok = if (hidden in 0..1) {
+                        // Exact known BYD assistant allowlist only. DiLink 3 ATTO 3 can use
+                        // com.byd.vrassistant instead of the newer com.byd.autovoice family.
+                        // Keep both reversible and reject every other package name.
                         val cmd = if (hidden == 1) "pm disable-user --user 0" else "pm enable"
-                        // The native assistant ships as a package FAMILY on Leopard 3: the launcher
-                        // (com.byd.autovoice), the wake/recognition engine (.engine) that actually
-                        // services the wheel mic button, and TTS output (.tts). Disabling only the
-                        // launcher leaves the wheel button live, so we disable the whole family.
-                        // Siblings are hardcoded literals, never caller input. Success is gated on
-                        // BOTH the launcher and the wake engine; TTS is output-only and best-effort.
-                        val primaryOk = shExec("$cmd \"\$1\"", pkg).code == 0
-                        val engineOk = shExec("$cmd \"\$1\"", "com.byd.autovoice.engine").code == 0
-                        shExec("$cmd \"\$1\"", "com.byd.autovoice.tts")
-                        primaryOk && engineOk
+                        when (pkg) {
+                            "com.byd.autovoice" -> {
+                                val primaryOk = shExec("$cmd \"\$1\"", pkg).code == 0
+                                val engineOk = shExec("$cmd \"\$1\"", "com.byd.autovoice.engine").code == 0
+                                shExec("$cmd \"\$1\"", "com.byd.autovoice.tts")
+                                primaryOk && engineOk
+                            }
+                            "com.byd.vrassistant" ->
+                                shExec("$cmd \"\$1\"", pkg).code == 0
+                            else -> false
+                        }
                     } else false
                     reply?.writeInt(if (ok) 0 else -1); reply?.writeInt(0)
                     true
