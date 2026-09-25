@@ -13,8 +13,7 @@ internal object LocalVehicleQuery {
 
     data class Reply(val kind: String, val text: String)
 
-    fun answer(text: String, lang: VoiceLang, data: DiParsData?): Reply? {
-        if (lang != VoiceLang.RU) return null
+    fun answer(text: String, data: DiParsData?): Reply? {
         val q = text.lowercase().replace('ё', 'е').trim()
         return temperatureAnswer(q, data) ?: batteryAnswer(q, data)
     }

@@ -470,7 +470,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             // Voice recognition is Russian in 3.18.2 regardless of the UI language.
             // Answer narrow read-only car questions from the live snapshot instead of paying
             // an LLM/network round-trip for data BYDMate already has.
-            LocalVehicleQuery.answer(command, VoiceLang.RU, gate.vehicleSnapshot())
+            LocalVehicleQuery.answer(command, gate.vehicleSnapshot())
         } else {
             null
         }
