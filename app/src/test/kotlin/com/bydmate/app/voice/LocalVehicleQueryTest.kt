@@ -42,6 +42,13 @@ class LocalVehicleQueryTest {
         )
     }
 
+    @Test fun short_temperature_inside_phrase_stays_on_local_fast_path() {
+        assertEquals(
+            LocalVehicleQuery.Reply("inside_temp", "В салоне 23 градусов."),
+            LocalVehicleQuery.answer("температура внутри", VoiceLang.RU, diParsData(insideTemp = 23)),
+        )
+    }
+
     @Test fun cabin_temperature_never_falls_back_to_climate_setpoint() {
         val data = diParsData(insideTemp = null, acTemp = 22)
         assertEquals(
