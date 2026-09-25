@@ -30,3 +30,10 @@ internal fun isDiLink3VoiceAliasPlatform(): Boolean =
         device = Build.DEVICE.orEmpty(),
         product = Build.PRODUCT.orEmpty(),
     )
+
+internal fun shouldBlockDiLink3NativeAssistantWindow(
+    packageName: String?,
+    nativeAssistantDisabled: Boolean,
+    diLink3: Boolean,
+): Boolean =
+    diLink3 && nativeAssistantDisabled && packageName == "com.byd.vrassistant"
