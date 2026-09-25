@@ -228,6 +228,7 @@ object ListeningOverlay {
             @Suppress("DEPRECATION")
             WindowManager.LayoutParams.TYPE_PHONE
 
+    @Suppress("LongMethod")
     private fun realAttach(context: Context, @Suppress("UNUSED_PARAMETER") initial: String): OverlayHandle {
         val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val density = context.resources.displayMetrics.density
