@@ -81,7 +81,7 @@ class FidRecorderReceiver : BroadcastReceiver() {
         raw.orEmpty().split(',').mapNotNull { it.trim().toIntOrNull() }.toIntArray()
 
     companion object {
-        const val ACTION_RECORD = "com.bydmate.app.FID_RECORD"
+        const val ACTION_RECORD = "com.bydmate.app.lab.FID_RECORD"
         const val EXTRA_CMD = "cmd"
         const val EXTRA_DEVICES = "devs"
         const val CMD_START = "start"
