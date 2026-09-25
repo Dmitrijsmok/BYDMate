@@ -167,7 +167,7 @@ class VoiceController @Inject constructor(
     private fun prepareLocalTtsAudio() {
         if (_listening.value) {
             runCatching {
-                audioCapture.setOwnedDuckLevel(AudioCapture.EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX)
+                audioCapture.setOwnedDuckLevel(AudioCapture.LOCAL_TTS_VOLUME_INDEX)
             }
         }
     }
