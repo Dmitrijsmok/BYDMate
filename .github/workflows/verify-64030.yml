@@ -3,7 +3,7 @@ name: Verify 64031 overlay earcon local tts
 on:
   push:
     branches:
-      - fix/64031-upstream-3.18.2-local-voice-recovery
+      - fix/64031-overlay-earcon-local-tts
 
 permissions:
   contents: read
@@ -37,7 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          cp app/build/outputs/apk/debug/*.apk out/BYDMate-3.18.2-64031-OverlayEarconFix-debug.apk
+          cp app/build/outputs/apk/debug/*.apk out/BYDMate-3.18.2-64031-LocalVoiceFix-debug.apk
 
       - uses: actions/upload-artifact@v7
         with:
