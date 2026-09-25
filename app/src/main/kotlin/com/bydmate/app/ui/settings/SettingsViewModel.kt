@@ -647,7 +647,14 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
         _uiState.update { it.copy(disableNativeAssistant = disabled) }
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, disabled.toString())
+            appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, disabled)
+                .apply()
             helperClient.setAppHidden("com.byd.autovoice", disabled)
+            // DiLink 3 ATTO 3 uses this older assistant package. The helper daemon accepts only
+            // these exact known BYD package names; a missing package simply returns false.
+            helperClient.setAppHidden("com.byd.vrassistant", disabled)
         }
     }
 
@@ -2151,7 +2158,12 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 appendLine("disable_native_assistant pref: \"$pref\"")
                 // Same package family the helper daemon disables via TX_SET_APP_HIDDEN.
                 val pm = appContext.packageManager
-                for (pkg in listOf("com.byd.autovoice", "com.byd.autovoice.engine", "com.byd.autovoice.tts")) {
+                for (pkg in listOf(
+                    "com.byd.autovoice",
+                    "com.byd.autovoice.engine",
+                    "com.byd.autovoice.tts",
+                    "com.byd.vrassistant",
+                )) {
                     val state = runCatching { enabledSettingName(pm.getApplicationEnabledSetting(pkg)) }
                         .getOrElse { "not installed" }
                     appendLine("$pkg: $state")
