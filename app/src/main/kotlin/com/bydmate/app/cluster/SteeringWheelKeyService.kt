@@ -185,10 +185,13 @@ class SteeringWheelKeyService : AccessibilityService() {
             // race package disable. Close only this exact stock package, only on confirmed
             // DiLink 3, and only while the user opted into native-assistant blocking.
             if (
-                pkg == "com.byd.vrassistant" &&
-                isDiLink3VoiceAliasPlatform() &&
-                applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
-                    .getBoolean("disable_native_assistant", false)
+                shouldBlockDiLink3NativeAssistantWindow(
+                    packageName = pkg,
+                    nativeAssistantDisabled = applicationContext
+                        .getSharedPreferences("voice", Context.MODE_PRIVATE)
+                        .getBoolean("disable_native_assistant", false),
+                    diLink3 = isDiLink3VoiceAliasPlatform(),
+                )
             ) {
                 val backedOut = performGlobalAction(GLOBAL_ACTION_BACK)
                 Log.i(TAG, "DILINK3_VRASSISTANT_WINDOW_BLOCKED back=$backedOut")
