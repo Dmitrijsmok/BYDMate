@@ -168,10 +168,10 @@ class AdbOnDeviceClientTest {
         assertTrue("must contain setsid", cmd.contains("setsid"))
         assertTrue("must contain CLASSPATH=", cmd.contains("CLASSPATH="))
         assertTrue("must contain app_process", cmd.contains("app_process"))
-        assertTrue("must contain --nice-name=bydmate_helper", cmd.contains("--nice-name=bydmate_helper"))
+        assertTrue("must contain --nice-name=bydmate_helper_lab", cmd.contains("--nice-name=bydmate_helper_lab"))
         assertTrue("must contain HelperDaemon class", cmd.contains("com.bydmate.app.helper.HelperDaemon"))
         assertTrue("must contain caller uid", cmd.contains(android.os.Process.myUid().toString()))
-        assertTrue("must redirect to bydmate_helper.log", cmd.contains("bydmate_helper.log"))
+        assertTrue("must redirect to bydmate_helper_lab.log", cmd.contains("bydmate_helper_lab.log"))
 
         // SIGHUP-race fix: the spawning shell must stay alive (poll-loop on the
         // service registry) until the detached app_process has booted and called
@@ -206,15 +206,15 @@ class AdbOnDeviceClientTest {
         assertEquals("exactly one exec call should be made", 1, fake.execCalls.size)
 
         val cmd = fake.execCalls.single()
-        // Regression guard: `pgrep -f bydmate_helper` self-matched this very kill shell's
-        // cmdline (which contains "bydmate_helper"), so the loop could kill itself before
+        // Regression guard: `pgrep -f bydmate_helper_lab` self-matched this very kill shell's
+        // cmdline (which contains "bydmate_helper_lab"), so the loop could kill itself before
         // reaching the daemon and leave the stale daemon alive (on-car incident, APK 338).
         assertFalse("must NOT use pgrep -f (self-match bug)", cmd.contains("pgrep"))
         // Must select via ps + exact NAME (comm) equality — the discipline helperHeartbeat uses.
         assertTrue("must select via ps -A -o PID,NAME", cmd.contains("ps -A -o PID,NAME"))
         assertTrue(
-            "must match the process NAME exactly (== \"bydmate_helper\")",
-            cmd.contains("\$2==\"bydmate_helper\"")
+            "must match the process NAME exactly (== \"bydmate_helper_lab\")",
+            cmd.contains("\$2==\"bydmate_helper_lab\"")
         )
         assertTrue("must kill -9 the selected pids", cmd.contains("kill -9"))
     }
@@ -266,7 +266,7 @@ class AdbOnDeviceClientTest {
         // there sent HelperBootstrap into kill+respawn on a healthy daemon (#64/#148).
         val fake = FakeProtocol(
             connectResult = true,
-            execResponses = mapOf("ps -A -o NAME" to "init\nbydmate_helper\nzygote"),
+            execResponses = mapOf("ps -A -o NAME" to "init\nbydmate_helper_lab\nzygote"),
         )
         val client = newClient(fake)
 
@@ -287,7 +287,7 @@ class AdbOnDeviceClientTest {
     fun `readHelperLog connects lazily too`() = runTest {
         val fake = FakeProtocol(
             connectResult = true,
-            execResponses = mapOf("cat /data/local/tmp/bydmate_helper.log" to "READY via=broadcast"),
+            execResponses = mapOf("cat /data/local/tmp/bydmate_helper_lab.log" to "READY via=broadcast"),
         )
         val client = newClient(fake)
 
