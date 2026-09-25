@@ -154,7 +154,7 @@
             android:name=".cluster.ClusterProbeReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.bydmate.app.CLUSTER_PROBE" />
+                <action android:name="com.bydmate.app.lab.CLUSTER_PROBE" />
             </intent-filter>
         </receiver>
 
@@ -164,7 +164,7 @@
             android:name=".data.push.FidRecorderReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.bydmate.app.FID_RECORD" />
+                <action android:name="com.bydmate.app.lab.FID_RECORD" />
             </intent-filter>
         </receiver>
 
@@ -175,7 +175,7 @@
             android:name=".helper.HelperBinderReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.bydmate.app.helper.BINDER" />
+                <action android:name="com.bydmate.app.lab.helper.BINDER" />
             </intent-filter>
         </receiver>
 
