@@ -608,3 +608,21 @@ Still field-test required:
 - Whether Yandex Alice keeps its own spoken answer sufficiently loud while the external MUSIC duck
   is repeatedly re-applied. Unlike Local BYDMate, BYDMate does not own Alice's PCM and cannot apply
   the Local TTS digital gain to Yandex audio.
+
+## 64026 field result and 64027 audio experiment (2026-09-25)
+
+ATTO 3 / DiLink 3.0 hardware log from 64026:
+
+- Local BYDMate audio remains good: listening ducks MUSIC `6 -> 1`; Local TTS temporarily uses `1 -> 4`; restore returns to `6`.
+- Local deterministic queries are fast. `температура на улице` reached the Local resolver about 126 ms after the decoded utterance event, and `температура в машине` about 128 ms after it.
+- The perceived slow case was `температура внутри`: it missed the Local cabin matcher and fell through to OpenRouter, whose single round took about 2281 ms. 64027 adds `внутри` to the Local cabin marker set.
+- Alice duck ownership/reassert now works mechanically. The log shows `duckExternalAlice: active=true 6 -> 4` followed by repeated successful reasserts.
+- Yandex repeatedly raises STREAM_MUSIC back to 5/6 during the Alice lifecycle; 64026 immediately forces it back to 4. This proves the remaining loud-background problem is the chosen Alice target, not missing ownership/reassert.
+- Portrait/narrow Settings layout is field-confirmed fixed. Freeze that UI in 64027.
+
+64027 experiment:
+
+- Alice external MUSIC target changes from 4 to 1.
+- Local BYDMate listening remains 1 and Local TTS remains independently pinned to 4 via `LOCAL_TTS_VOLUME_INDEX`; do not couple these constants again.
+- Because BYDMate does not own Yandex Alice PCM, hardware testing must confirm whether Alice speech remains sufficiently loud at external MUSIC target 1.
+- If Alice speech also becomes too quiet, a single STREAM_MUSIC level cannot independently control background media and Alice speech; the next step must be phase-aware/per-app audio handling rather than lowering the stream further.
