@@ -27,7 +27,8 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
             MediaRecorder.AudioSource.DEFAULT,              // 0
         )
         internal const val DUCK_VOLUME_INDEX = 1
-        internal const val EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX = 4
+        internal const val LOCAL_TTS_VOLUME_INDEX = 4
+        internal const val EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX = 1
         private const val TAG = "AudioCapture"
         // Pre-duck media volume survives process death here; restoreStuckDuck() reads it
         // at service start (stuck-quiet media after a crash / APK update mid session).
@@ -176,7 +177,8 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
      * This never creates another duck depth and never changes the original volume to restore.
      *
      * DiLink 3 routes Local TTS through the same effective MUSIC path as background media:
-     * listen at index 1, speak at index 4, then return to 1 on the next SpeechStart.
+     * listen at index 1, speak at LOCAL_TTS_VOLUME_INDEX (4), then return to 1 on SpeechStart.
+     * External Alice has its own independently field-tested duck target.
      */
     internal fun setOwnedDuckLevel(level: Int): Boolean = synchronized(duckLock) {
         val restore = pendingRestore ?: return false
