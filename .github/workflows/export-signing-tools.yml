@@ -1,0 +1,25 @@
+name: Export Android signing tools 64029
+on:
+  push:
+    branches:
+      - test/64029-upstream-3.18.2-dilink3-ptt
+permissions:
+  contents: read
+jobs:
+  export-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect apksigner and zipalign
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          mkdir -p signing-tools/lib
+          cp "$BT/apksigner" "$BT/zipalign" signing-tools/
+          cp "$BT/lib/apksigner.jar" signing-tools/lib/
+          chmod +x signing-tools/apksigner signing-tools/zipalign
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-signing-tools
+          path: signing-tools
+          retention-days: 1
