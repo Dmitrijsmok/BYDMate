@@ -27,6 +27,10 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
             MediaRecorder.AudioSource.DEFAULT,              // 0
         )
         internal const val DUCK_VOLUME_INDEX = 1
+        // DiLink 3 routes local TTS through the same effective MUSIC path as background audio.
+        // Listening stays nearly silent at 1; raise only an already-owned duck to 4 while BYDMate
+        // speaks so Dmitry remains audible without losing the user's original restore volume.
+        internal const val LOCAL_TTS_VOLUME_INDEX = 4
         private const val TAG = "AudioCapture"
         // Pre-duck media volume survives process death here; restoreStuckDuck() reads it
         // at service start (stuck-quiet media after a crash / APK update mid session).
@@ -144,6 +148,30 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         return saved
     }
 
+    /**
+     * Changes the physical MUSIC level while a live duck still owns the original restore target.
+     * Does not create another duck depth and never replaces the volume that session teardown
+     * returns to. Used by DiLink 3 to alternate listen=1 and local-TTS=4.
+     */
+    internal fun setOwnedDuckLevel(level: Int): Boolean = synchronized(duckLock) {
+        val restore = pendingRestore ?: return false
+        if (duckDepth <= 0) return false
+        val target = level.coerceIn(0, restore)
+        val current = runCatching {
+            audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        }.getOrNull()
+        if (current == target) return true
+        val applied = runCatching {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+        }.isSuccess
+        Log.i(TAG, "ownedDuckLevel: $current -> $target restore=$restore applied=$applied")
+        applied
+    }
+
+    internal fun hasOwnedDuck(): Boolean = synchronized(duckLock) {
+        duckDepth > 0 && pendingRestore != null
+    }
+
     /** Restore the media volume captured by duckMusic(), or the explicit mid-session override. No-op if nothing was ducked. */
     // internal for direct unit tests
     internal fun restoreMusic(saved: Int?): Unit = synchronized(duckLock) {
@@ -206,7 +234,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         val saved = prefs.getInt(KEY_PRE_DUCK_VOLUME, -1)
         if (saved < 0) return
         val cur = runCatching { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrNull()
-        if (cur != null && cur <= DUCK_VOLUME_INDEX) {
+        if (cur != null && cur <= LOCAL_TTS_VOLUME_INDEX) {
             runCatching { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, saved, 0) }
             Log.i(TAG, "restoreStuckDuck: volume stuck at $cur, restored to $saved")
         } else {
