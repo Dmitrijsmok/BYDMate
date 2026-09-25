@@ -17,6 +17,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
@@ -67,6 +68,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
     val listening: StateFlow<Boolean> = _listening.asStateFlow()
 
     private val busy = AtomicBoolean(false)
+    @Volatile private var warmupJob: Job? = null
     @Volatile private var sessionJob: Job? = null
     @Volatile private var routingJob: Job? = null
     @Volatile private var cancellableAskJob: Job? = null
@@ -212,7 +214,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             return
         }
         if (continuousAsr.isReady()) {
-            startContinuousSession()
+            startLocalSessionWhenReady()
         } else {
             // GigaAM model missing: preserve the degraded UX the legacy path produced —
             // overlay + journal ERROR.
@@ -233,6 +235,34 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             scheduleIdleReset()
             scope.launch { announce("Голос", msg, msg) }
         }
+    }
+
+    /**
+     * The service normally pre-warms GigaAM. After a process restart, however, model files can
+     * be ready while the native recognizer/VAD are still cold. Do that work off the PTT path and
+     * only expose the listening state once both pieces can consume microphone frames immediately.
+     */
+    private fun startLocalSessionWhenReady() {
+        if (continuousAsr.isWarm()) {
+            startContinuousSession()
+            return
+        }
+        if (warmupJob?.isActive == true) return
+        warmupJob = scope.launch(Dispatchers.IO) {
+            try {
+                continuousAsr.warmUp()
+                if (canStartAfterWarmup()) startContinuousSession()
+            } finally {
+                warmupJob = null
+            }
+        }
+    }
+
+    private suspend fun canStartAfterWarmup(): Boolean {
+        if (!currentCoroutineContext().isActive) return false
+        if (!gate.isEnabled()) return false
+        if (!continuousAsr.isWarm()) return false
+        return !_listening.value
     }
 
     /** Continuous PTT-toggled session (Wave B): one long-lived mic capture feeds VAD-segmented
@@ -436,12 +466,37 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         // AgentOrchestrator.expectsFollowUp.
         val followUp = runCatching { agentOrchestrator.expectsFollowUp() }.getOrDefault(false)
         val res = if (followUp) Resolution.None(VoiceRefusal.AGENT_FOLLOWUP_WINDOW) else resolve(command)
-        _state.value = VoiceUiState.Thinking
-        if (res is Resolution.None) {
-            turn = turn.copy(agentReason = res.reason)
-            agentFallback(command, decodeMs)
+        val localReply = if (!followUp && res is Resolution.None) {
+            // Voice recognition is Russian in 3.18.2 regardless of the UI language.
+            // Answer narrow read-only car questions from the live snapshot instead of paying
+            // an LLM/network round-trip for data BYDMate already has.
+            LocalVehicleQuery.answer(command, VoiceLang.RU, gate.vehicleSnapshot())
         } else {
-            apply(res, command, decodeMs)
+            null
+        }
+        _state.value = VoiceUiState.Thinking
+        when {
+            localReply != null -> {
+                earcon.ok()
+                _state.value = VoiceUiState.AgentAnswer(localReply.text)
+                record(
+                    VoiceJournalEntry(
+                        transcript = command,
+                        route = VoiceJournalEntry.Route.NLU,
+                        detail = withDecodeMs(command, decodeMs),
+                        outcome = VoiceJournalEntry.Outcome.OK,
+                        answer = localReply.text,
+                        asrMs = decodeMs,
+                    ),
+                    "Local vehicle query: kind=${localReply.kind} transcript=\"$command\"",
+                )
+                announce("Голос", localReply.text, localReply.text)
+            }
+            res is Resolution.None -> {
+                turn = turn.copy(agentReason = res.reason)
+                agentFallback(command, decodeMs)
+            }
+            else -> apply(res, command, decodeMs)
         }
     }
 
@@ -700,6 +755,10 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             announce("Голос", "Не понял", "Не понял")
             return
         }
+        // Field-proven latency guard from the 64026/64027 local assistant: start loading the
+        // offline TTS model while the LLM is thinking so the first streamed sentence does not
+        // pay model-load latency after the answer has already arrived.
+        if (gate.ttsEnabled()) runCatching { ttsEngine.warmUp() }
         val queue = if (gate.ttsEnabled()) runCatching { ttsEngine.startQueue() }.getOrNull() else null
         val streamed = StringBuilder()
         var queuedAny = false
