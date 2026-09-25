@@ -608,3 +608,27 @@ Still field-test required:
 - Whether Yandex Alice keeps its own spoken answer sufficiently loud while the external MUSIC duck
   is repeatedly re-applied. Unlike Local BYDMate, BYDMate does not own Alice's PCM and cannot apply
   the Local TTS digital gain to Yandex audio.
+
+
+## 64026 field result and 64027 experiment (2026-09-25)
+
+ATTO 3 / DiLink 3.0 hardware test of 64026:
+
+PASS / keep frozen:
+- Portrait/narrow Settings layout is fixed. Do not touch the responsive UI again unless a new field regression appears.
+- Local BYDMate still ducks MUSIC from 6 -> 1 while listening.
+- Local BYDMate raises the owned MUSIC level only to 4 while its own TTS speaks, and the spoken response remains clearly audible.
+- Local PTT / double-PTT switching remains good.
+
+Latency evidence from the field log:
+- `температура на улице`: decodeMs=594, then direct LocalVehicleQuery; no LLM round-trip.
+- `температура внутри`: fell through to the agent and spent about 2.3 s in the LLM because the standalone `внутри` wording was not in the cabin-temperature matcher.
+- 64027 adds `внутри` as a narrow local cabin-temperature synonym. The Local ASR/TTS pipeline itself is unchanged.
+
+Alice audio evidence from 64026:
+- The external duck is now definitely executing: `duckExternalAlice: active=true 6 -> 4`.
+- Yandex repeatedly raises STREAM_MUSIC back toward 5/6; accessibility events make BYDMate reassert the owned level back to 4.
+- Therefore the remaining problem is no longer missing duck invocation; target 4 is simply still too loud relative to Alice on this head unit.
+- 64027 splits the targets so Local TTS keeps its field-proven level 4, while external Alice is experimentally ducked to index 1.
+- This is a hardware experiment: BYDMate does not own Alice's PCM. If Yandex speech itself shares STREAM_MUSIC, index 1 may also make Alice quieter. Do not change the Local TTS gain/duck path to compensate for Alice.
+
