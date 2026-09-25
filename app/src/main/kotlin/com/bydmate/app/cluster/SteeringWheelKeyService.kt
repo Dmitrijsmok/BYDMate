@@ -181,6 +181,18 @@ class SteeringWheelKeyService : AccessibilityService() {
         // stays the fallback for everything the hints miss.
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val pkg = event.packageName?.toString()
+            // Last-resort DiLink 3 takeover guard: an already-starting vrassistant window can
+            // race package disable. Close only this exact stock package, only on confirmed
+            // DiLink 3, and only while the user opted into native-assistant blocking.
+            if (
+                pkg == "com.byd.vrassistant" &&
+                isDiLink3VoiceAliasPlatform() &&
+                applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                    .getBoolean("disable_native_assistant", false)
+            ) {
+                val backedOut = performGlobalAction(GLOBAL_ACTION_BACK)
+                Log.i(TAG, "DILINK3_VRASSISTANT_WINDOW_BLOCKED back=$backedOut")
+            }
             if (pkg != null && ForegroundHintFilter.allows(this, event, pkg)) {
                 entryPoint().cameraStateMonitor().onForegroundHint(pkg)
             }
