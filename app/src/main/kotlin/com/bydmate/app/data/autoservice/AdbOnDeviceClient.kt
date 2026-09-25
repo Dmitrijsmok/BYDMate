@@ -297,14 +297,14 @@ class AdbOnDeviceClientImpl @Inject constructor(
         private val WRITE_BARRIER_REGEX = Regex("""^service call autoservice [579] i32 \d+ i32 -?\d+$""")
 
         // Narrow whitelist for the two self-grants — only our own package.
-        private val PACKAGE_NAME_REGEX = Regex("""^com\.bydmate\.app$""")
+        private val PACKAGE_NAME_REGEX = Regex("""^com\.bydmate\.app\.lab$""")
 
         // Spawn token shape — alphanumeric only, so it can never break out of the spawn
         // command line. HelperBootstrap generates 32 hex characters.
         private val SPAWN_TOKEN_REGEX = Regex("""^[A-Za-z0-9]{16,64}$""")
 
         // Helper daemon — hardcoded so neither caller can inject paths/cmdlines.
-        private const val HELPER_PROCESS_NAME = "bydmate_helper"
-        private const val HELPER_LOG_PATH = "/data/local/tmp/bydmate_helper.log"
+        private const val HELPER_PROCESS_NAME = "bydmate_helper_lab"
+        private const val HELPER_LOG_PATH = "/data/local/tmp/bydmate_helper_lab.log"
     }
 }
