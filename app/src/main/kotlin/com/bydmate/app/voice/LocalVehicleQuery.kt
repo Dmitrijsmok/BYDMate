@@ -75,7 +75,7 @@ internal object LocalVehicleQuery {
     // The outside marker keeps this narrow enough to answer locally without guessing other topics.
     private val OUTSIDE_QUESTION_MARKERS = listOf("какая", "какой", "которая", "сколько")
     private val INSIDE_MARKERS = listOf(
-        "в салон", "внутри салон", "внутри машин", "в машине", "в машин", "в автомоб",
+        "в салон", "внутри", "внутри салон", "внутри машин", "в машине", "в машин", "в автомоб",
     )
     private val CLIMATE_MARKERS = listOf("климат", "кондиционер")
     private val READ_PREFIXES = listOf(
