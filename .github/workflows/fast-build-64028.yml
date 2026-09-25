@@ -1,4 +1,4 @@
-name: Fast build 64028 upstream 3.18.1
+name: Fast build 64028 upstream 3.18.1 release
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  fast-build:
+  fast-release:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -19,21 +19,40 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v5
-      - name: Build test APK
-        run: ./gradlew :app:assembleDebug --stacktrace
-      - name: Verify APK metadata
+
+      - name: Build minified release APK
+        run: ./gradlew :app:assembleRelease -PallowUnsignedRelease --stacktrace
+
+      - name: Sign and verify with stable BYDMate key
+        env:
+          KEYSTORE_B64: ${{ secrets.BYDMATE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.BYDMATE_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.BYDMATE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.BYDMATE_KEY_PASSWORD }}
         shell: bash
         run: |
           set -euo pipefail
-          APK="$(find app/build/outputs/apk/debug -name '*.apk' -print -quit)"
-          test -n "$APK"
+          test -n "$KEYSTORE_B64"
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_ALIAS"
+          test -n "$KEY_PASSWORD"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/bydmate-stable.jks"
+
           TOOLS_DIR="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
-          "$TOOLS_DIR/aapt" dump badging "$APK" | head -1
-          cp "$APK" BYDMate-3.18.1-64028-Upstream-No-Alice-UNSIGNED.apk
-          sha256sum BYDMate-3.18.1-64028-Upstream-No-Alice-UNSIGNED.apk
+          INPUT_APK="$(find app/build/outputs/apk/release -name '*.apk' -print -quit)"
+          test -n "$INPUT_APK"
+
+          "$TOOLS_DIR/zipalign" -f -p 4 "$INPUT_APK" "$RUNNER_TEMP/64028-aligned.apk"
+          "$TOOLS_DIR/apksigner" sign             --ks "$RUNNER_TEMP/bydmate-stable.jks"             --ks-pass "pass:$STORE_PASSWORD"             --ks-key-alias "$KEY_ALIAS"             --key-pass "pass:$KEY_PASSWORD"             --out "BYDMate-3.18.1-64028-Upstream-No-Alice.apk"             "$RUNNER_TEMP/64028-aligned.apk"
+
+          "$TOOLS_DIR/apksigner" verify --verbose --print-certs "BYDMate-3.18.1-64028-Upstream-No-Alice.apk"
+          "$TOOLS_DIR/zipalign" -c -v 4 "BYDMate-3.18.1-64028-Upstream-No-Alice.apk"
+          "$TOOLS_DIR/aapt" dump badging "BYDMate-3.18.1-64028-Upstream-No-Alice.apk" | head -1
+          sha256sum "BYDMate-3.18.1-64028-Upstream-No-Alice.apk"
+
       - uses: actions/upload-artifact@v7
         with:
-          name: BYDMate-3.18.1-64028-Upstream-No-Alice-UNSIGNED
-          path: BYDMate-3.18.1-64028-Upstream-No-Alice-UNSIGNED.apk
+          name: BYDMate-3.18.1-64028-Upstream-No-Alice
+          path: BYDMate-3.18.1-64028-Upstream-No-Alice.apk
           if-no-files-found: error
           retention-days: 2
