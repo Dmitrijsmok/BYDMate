@@ -33,7 +33,7 @@ import java.nio.channels.OverlappingFileLockException
 import kotlin.system.exitProcess
 
 // Lock path on the device filesystem (writable by shell uid).
-private const val LOCK_PATH = "/data/local/tmp/bydmate_helper.lock"
+private const val LOCK_PATH = "/data/local/tmp/bydmate_helper_lab.lock"
 
 // SELinux domain of the running process; the daemon must land in the shell domain to be
 // allowed to addService. Unreadable on some firmwares — never fatal.
@@ -2025,7 +2025,7 @@ private fun recoverAccessibilityService(): Boolean {
     for (attempt in 1..2) {
         am = runCatching {
             amShell(
-                "am broadcast --include-stopped-packages -a com.bydmate.app.action.RECOVER_START -n \"\$1\"",
+                "am broadcast --include-stopped-packages -a com.bydmate.app.lab.action.RECOVER_START -n \"\$1\"",
                 listOf("$pkg/com.bydmate.app.service.BootReceiver"),
             )
         }.getOrElse { "broadcast failed: ${it.javaClass.simpleName}: ${it.message}" }
@@ -2069,11 +2069,11 @@ private fun logA11yFrameworkState(reassertOk: Boolean) {
     }.take(12)
     android.util.Log.i(tag, "a11y state after reassert ok=$reassertOk: sdk=${android.os.Build.VERSION.SDK_INT} lines=${a11y.size}")
     keep.forEach { android.util.Log.i(tag, "a11y: " + it.trim().take(300)) }
-    val pid = shExecBounded("pidof com.bydmate.app")
-    val stopped = shExecBounded("dumpsys package com.bydmate.app").lines()
+    val pid = shExecBounded("pidof ${HelperBinderProtocol.APP_PACKAGE}")
+    val stopped = shExecBounded("dumpsys package ${HelperBinderProtocol.APP_PACKAGE}").lines()
         .firstOrNull { it.contains("stopped=", ignoreCase = true) }?.trim()?.take(200)
     android.util.Log.i(tag, "pkg: pid=${pid.ifEmpty { "none" }} $stopped")
-    val am = shExecBounded("dumpsys activity services com.bydmate.app").lines()
+    val am = shExecBounded("dumpsys activity services ${HelperBinderProtocol.APP_PACKAGE}").lines()
     val start = am.indexOfFirst { it.contains("SteeringWheelKeyService") }
     if (start < 0) {
         android.util.Log.i(tag, "am: no ServiceRecord for SteeringWheelKeyService (lines=${am.size})")
