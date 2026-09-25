@@ -60,4 +60,35 @@ class DiLink3VoicePlatformTest {
             )
         )
     }
+
+    @Test fun `vrassistant fallback requires exact package opt-in and DiLink3`() {
+        assertTrue(
+            shouldBlockDiLink3NativeAssistantWindow(
+                packageName = "com.byd.vrassistant",
+                nativeAssistantDisabled = true,
+                diLink3 = true,
+            )
+        )
+        assertFalse(
+            shouldBlockDiLink3NativeAssistantWindow(
+                packageName = "com.byd.vrassistant",
+                nativeAssistantDisabled = false,
+                diLink3 = true,
+            )
+        )
+        assertFalse(
+            shouldBlockDiLink3NativeAssistantWindow(
+                packageName = "com.byd.vrassistant",
+                nativeAssistantDisabled = true,
+                diLink3 = false,
+            )
+        )
+        assertFalse(
+            shouldBlockDiLink3NativeAssistantWindow(
+                packageName = "com.example.voice",
+                nativeAssistantDisabled = true,
+                diLink3 = true,
+            )
+        )
+    }
 }
