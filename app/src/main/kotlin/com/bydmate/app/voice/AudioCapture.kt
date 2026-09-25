@@ -27,7 +27,8 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
             MediaRecorder.AudioSource.DEFAULT,              // 0
         )
         internal const val DUCK_VOLUME_INDEX = 1
-        internal const val EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX = 4
+        internal const val LOCAL_TTS_DUCK_VOLUME_INDEX = 4
+        internal const val EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX = 1
         private const val TAG = "AudioCapture"
         // Pre-duck media volume survives process death here; restoreStuckDuck() reads it
         // at service start (stuck-quiet media after a crash / APK update mid session).
@@ -259,7 +260,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         val saved = prefs.getInt(KEY_PRE_DUCK_VOLUME, -1)
         if (saved < 0) return
         val cur = runCatching { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrNull()
-        if (cur != null && cur <= maxOf(DUCK_VOLUME_INDEX, EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX)) {
+        if (cur != null && cur <= maxOf(DUCK_VOLUME_INDEX, LOCAL_TTS_DUCK_VOLUME_INDEX, EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX)) {
             runCatching { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, saved, 0) }
             Log.i(TAG, "restoreStuckDuck: volume stuck at $cur, restored to $saved")
         } else {
