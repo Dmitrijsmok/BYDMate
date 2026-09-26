@@ -151,6 +151,19 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
     internal var showAnswerHook: (String) -> Unit = { text -> ListeningOverlay.showAnswer(text) }
     internal var clearDialogHook: () -> Unit = { ListeningOverlay.clearDialog() }
 
+    /**
+     * Field-proven DiLink3 audio handoff from 64024-64027. Music stays deeply ducked
+     * while listening; immediately before Local TTS we lift only the owned duck level
+     * without losing the driver's original restore target.
+     */
+    private fun prepareLocalTtsAudio() {
+        if (_listening.value) {
+            runCatching {
+                audioCapture.setOwnedDuckLevel(AudioCapture.LOCAL_TTS_DUCK_VOLUME_INDEX)
+            }
+        }
+    }
+
     /** Speak a short phrase for every session outcome (not only agent answers).
      *  Overlay text stays detailed; the spoken phrase is terse for the road. */
     private suspend fun announce(title: String, overlay: String, spoken: String) {
@@ -167,6 +180,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             // never get stamped at all, since speaking never reads true on any frame. Only
             // stamp when speak() actually enqueued playback -- see lastSpeakingSeenMs above.
             val phrase = agentIdentity().persona.spokenPhrase(spoken)
+            prepareLocalTtsAudio()
             if (runCatching { ttsEngine.speak(phrase) }.getOrDefault(false)) {
                 echoFilter.noteSpoken(phrase)
                 lastSpeakingSeenMs = System.currentTimeMillis()
@@ -302,6 +316,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             runCatching { showListeningOverlay(appStrings.get(R.string.voice_listening)) }
             var lastEventMs = System.currentTimeMillis()
             var wasAudible = false
+            var lateDuck: Int? = null
             try {
                 val pcm = audioCapture.captureSession(maxMs = Long.MAX_VALUE) // Wave P: no session cap; silence auto-stop below is the only auto-exit
                     .filter {
@@ -328,6 +343,16 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                     when (ev) {
                         is ContinuousAsrEvent.SpeechStart -> {
                             lastEventMs = System.currentTimeMillis()
+                            // Field-proven 64024-64027 behaviour: if this session already owns
+                            // a media duck, return it to the deep listening level before capture.
+                            // If music started only after the session opened, acquire a late duck.
+                            if (audioCapture.hasOwnedDuck()) {
+                                runCatching {
+                                    audioCapture.setOwnedDuckLevel(AudioCapture.DUCK_VOLUME_INDEX)
+                                }
+                            } else if (earlyDuck == null && lateDuck == null) {
+                                lateDuck = runCatching { audioCapture.duckMusic() }.getOrNull()
+                            }
                             // The live VAD now detects speech while a routing child is in
                             // flight; clobbering Thinking here would violate the busy-drop
                             // contract (no state change while an utterance is being routed).
@@ -407,6 +432,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                 routingJob = null
                 cancellableAskJob = null
                 processingUtterance = false
+                runCatching { audioCapture.restoreMusic(lateDuck) }
                 runCatching { audioCapture.restoreMusic(earlyDuck) }
                 _listening.value = false
                 _state.value = VoiceUiState.Idle
@@ -788,6 +814,9 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                     onFiller = queue?.let { q ->
                         { phrase ->
                             // Same hard stop gate as the sentence callback below.
+                            if (!stopRequested.get() && !askJob.isCancelled) {
+                                prepareLocalTtsAudio()
+                            }
                             if (!stopRequested.get() && !askJob.isCancelled &&
                                 runCatching { q.enqueue(phrase) }.getOrDefault(false)
                             ) {
@@ -803,6 +832,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                     // non-suspend, so it must check for itself (the TTS queue is already
                     // superseded by tts.stop(), but the orb dialog repaint is not).
                     if (stopRequested.get() || askJob.isCancelled) return@ask
+                    prepareLocalTtsAudio()
                     if (queue != null && runCatching { queue.enqueue(sentence) }.getOrDefault(false)) {
                         echoFilter.noteSpoken(sentence)
                         queuedAny = true
@@ -861,6 +891,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                     "Agent answered: transcript=\"$transcript\" tools=${result.tools.size}")
                 var didSpeak = queuedAny || fillerQueued
                 if (!queuedAny && gate.ttsEnabled()) {
+                    prepareLocalTtsAudio()
                     // See announce() for why this is stamped at call time, not only per-frame,
                     // and only when speak() actually enqueued playback.
                     if (runCatching { ttsEngine.speak(result.text) }.getOrDefault(false)) {
