@@ -770,8 +770,8 @@ class SherpaTtsEngine(
             )
         } else {
             viaFallback = true
-            Log.i(TAG, "DiLink3 detected: skipping BYD stream $BYD_STREAM_BTTS")
-            newTrack(accessibilityAttributes(), format, bufLen)
+            Log.i(TAG, "DiLink3 detected: routing local TTS to STREAM_ALARM")
+            newTrack(dilink3VoiceAttributes(), format, bufLen)
         }
         if (result.state != AudioTrack.STATE_INITIALIZED) {
             Log.w(TAG, "audio track bad state")
@@ -809,6 +809,19 @@ class SherpaTtsEngine(
         .setUsage(TTS_USAGE)
         .build()
 
+    /**
+     * DiLink 3 / ATTO 3 only.
+     *
+     * On this firmware USAGE_ASSISTANCE_ACCESSIBILITY is aliased to STREAM_MUSIC, so ducking
+     * background music also turns the agent down. Route LOCAL TTS through STREAM_ALARM instead:
+     * field-tested earcons already prove that this stream is independent from MUSIC on DiLink 3.
+     *
+     * Do not generalize this route to other BYD firmwares. They should keep STREAM_BTTS(17)
+     * when available, with accessibility as their normal fallback.
+     */
+    private fun dilink3VoiceAttributes(): AudioAttributes =
+        AudioAttributes.Builder().setLegacyStreamType(AudioManager.STREAM_ALARM).build()
+
     // Not private: awaitDrain is a pure poll loop exercised directly by SherpaTtsEngineTest
     // (no real AudioTrack/JNI needed) to pin the barge-in-frees-the-worker-promptly behaviour.
     companion object {
@@ -821,7 +834,9 @@ class SherpaTtsEngine(
         // BYD custom stream behind the DiLink UI "Voice" volume slider.
         internal const val BYD_STREAM_BTTS = 17
 
-        /** DiLink 3 / ATTO 3 does not expose BYD custom voice stream 17. */
+        /** DiLink 3 / ATTO 3 does not expose BYD custom voice stream 17.
+         *  It is intentionally routed via STREAM_ALARM in createTrack(); all other firmwares
+         *  retain the normal BYD voice/accessibility routing. */
         internal fun shouldUseBydVoiceStream(fingerprint: String): Boolean =
             !fingerprint.contains("DiLink3", ignoreCase = true)
 
