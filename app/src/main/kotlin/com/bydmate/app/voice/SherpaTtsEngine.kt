@@ -552,6 +552,7 @@ class SherpaTtsEngine(
     private data class ReadyPcm(
         val samples: FloatArray,
         val sampleRate: Int,
+        val track: AudioTrack? = null,
         val end: Boolean = false,
     )
 
@@ -565,8 +566,6 @@ class SherpaTtsEngine(
 
         override fun enqueue(text: String): Boolean {
             if (text.isBlank() || generation.get() != myGen) return false
-            // Keep ASR muted across the whole streamed reply, including synthesis gaps.
-            _speaking.value = true
             worker.execute {
                 if (generation.get() != myGen) return@execute
                 runCatching {
@@ -579,6 +578,16 @@ class SherpaTtsEngine(
                     }
                     Log.i(TAG, "enqueue synth: len=${text.length} engineRate=${engine.sampleRate()}")
                     val voice = selectedVoice()
+                    // Restore 64034's audio-route timing: create/reuse the local AudioTrack on the
+                    // original tts worker BEFORE synthesis and only then mark speech active.
+                    // Playback still runs independently on playbackWorker, so sentence N+1 can
+                    // synthesize while N is sounding without changing the proven DiLink3 route.
+                    val out = ensureTrackForRate(engine.sampleRate())
+                    _speaking.value = true
+                    if (generation.get() != myGen) {
+                        _speaking.value = false
+                        return@execute
+                    }
                     val synthesisText = textForSynthesis(voice.engine, text, marker::mark)
                     val samples = accumulateSentence(
                         generate = { onChunk ->
@@ -597,7 +606,7 @@ class SherpaTtsEngine(
                     )
                     if (samples != null && samples.isNotEmpty() && generation.get() == myGen) {
                         val outputSamples = dilink3OutputSamples(samples, Build.FINGERPRINT.orEmpty())
-                        offerWhileCurrent(ReadyPcm(outputSamples, engine.sampleRate()))
+                        offerWhileCurrent(ReadyPcm(outputSamples, engine.sampleRate(), out))
                     }
                 }.onFailure { Log.w(TAG, "tts enqueue synth failed", it) }
             }
@@ -626,7 +635,8 @@ class SherpaTtsEngine(
                     if (item.end) break
                     if (generation.get() != myGen) break
 
-                    val out = ensureTrackForRate(item.sampleRate)
+                    val out = item.track ?: continue
+                    if (out !== track || generation.get() != myGen) continue
                     if (out.playState != AudioTrack.PLAYSTATE_PLAYING) out.play()
                     val written = writeSentence(
                         samples = item.samples,
