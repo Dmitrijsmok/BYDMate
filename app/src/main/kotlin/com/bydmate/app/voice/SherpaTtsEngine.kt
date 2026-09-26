@@ -48,6 +48,7 @@ class SherpaTtsEngine(
     private val liveliness: () -> Int = { 33 },
     private val marker: RuStressMarker = RuStressMarker { null },
     private val loadGuard: AsrLoadGuard? = null,
+    private val beforeLocalPlayback: () -> Unit = {},
 ) : TtsEngine {
 
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "tts-worker") }
@@ -552,7 +553,6 @@ class SherpaTtsEngine(
     private data class ReadyPcm(
         val samples: FloatArray,
         val sampleRate: Int,
-        val track: AudioTrack? = null,
         val end: Boolean = false,
     )
 
@@ -566,6 +566,8 @@ class SherpaTtsEngine(
 
         override fun enqueue(text: String): Boolean {
             if (text.isBlank() || generation.get() != myGen) return false
+            // Keep ASR muted across the whole streamed reply, including synthesis gaps.
+            _speaking.value = true
             worker.execute {
                 if (generation.get() != myGen) return@execute
                 runCatching {
@@ -578,16 +580,6 @@ class SherpaTtsEngine(
                     }
                     Log.i(TAG, "enqueue synth: len=${text.length} engineRate=${engine.sampleRate()}")
                     val voice = selectedVoice()
-                    // Restore 64034's audio-route timing: create/reuse the local AudioTrack on the
-                    // original tts worker BEFORE synthesis and only then mark speech active.
-                    // Playback still runs independently on playbackWorker, so sentence N+1 can
-                    // synthesize while N is sounding without changing the proven DiLink3 route.
-                    val out = ensureTrackForRate(engine.sampleRate())
-                    _speaking.value = true
-                    if (generation.get() != myGen) {
-                        _speaking.value = false
-                        return@execute
-                    }
                     val synthesisText = textForSynthesis(voice.engine, text, marker::mark)
                     val samples = accumulateSentence(
                         generate = { onChunk ->
@@ -606,7 +598,7 @@ class SherpaTtsEngine(
                     )
                     if (samples != null && samples.isNotEmpty() && generation.get() == myGen) {
                         val outputSamples = dilink3OutputSamples(samples, Build.FINGERPRINT.orEmpty())
-                        offerWhileCurrent(ReadyPcm(outputSamples, engine.sampleRate(), out))
+                        offerWhileCurrent(ReadyPcm(outputSamples, engine.sampleRate()))
                     }
                 }.onFailure { Log.w(TAG, "tts enqueue synth failed", it) }
             }
@@ -635,8 +627,13 @@ class SherpaTtsEngine(
                     if (item.end) break
                     if (generation.get() != myGen) break
 
-                    val out = item.track ?: continue
-                    if (out !== track || generation.get() != myGen) continue
+                    // Two-thread pipeline can leave a long gap between q.enqueue() and actual
+                    // playback. VAD may have returned the owned media duck to listening level (1)
+                    // during that gap. Lift it at the physical playback boundary, preserving the
+                    // original restore target, exactly before local TTS becomes audible.
+                    runCatching { beforeLocalPlayback() }
+                        .onFailure { Log.w(TAG, "beforeLocalPlayback failed", it) }
+                    val out = ensureTrackForRate(item.sampleRate)
                     if (out.playState != AudioTrack.PLAYSTATE_PLAYING) out.play()
                     val written = writeSentence(
                         samples = item.samples,
