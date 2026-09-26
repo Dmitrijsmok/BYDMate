@@ -13,7 +13,6 @@ class SentenceChunker {
     private val buf = StringBuilder()
 
     @Suppress("CyclomaticComplexMethod", "ComplexCondition")
-    @Suppress("CyclomaticComplexMethod", "ComplexCondition")
     fun feed(delta: String): List<String> {
         buf.append(delta)
         val out = mutableListOf<String>()
