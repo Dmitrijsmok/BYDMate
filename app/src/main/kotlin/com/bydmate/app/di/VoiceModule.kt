@@ -72,6 +72,7 @@ object VoiceModule {
         TtsVoiceCatalog.byId(id)
     }
 
+    @Suppress("LongParameterList")
     @Provides @Singleton
     fun provideTtsEngine(
         mm: TtsModelManager,
