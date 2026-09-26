@@ -1,0 +1,44 @@
+name: Quick build 64035 DiLink3 audio
+
+on:
+  push:
+    branches:
+      - quick/64035-restore-field-audio
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Build APK only
+        run: ./gradlew :app:assembleDebug --stacktrace
+      - name: Stage APK
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/debug/*.apk out/BYDMate-3.18.2-64035-LocalTtsPipeline-debug.apk
+      - uses: actions/upload-artifact@v7
+        with:
+          name: BYDMate-3.18.2-64035-LocalTtsPipeline-debug
+          path: out/BYDMate-3.18.2-64035-LocalTtsPipeline-debug.apk
+          retention-days: 2
+      - name: Export signing tools
+        run: |
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          mkdir -p signing-tools/lib
+          cp "$BT/apksigner" "$BT/zipalign" "$BT/aapt2" signing-tools/
+          cp "$BT/lib/apksigner.jar" signing-tools/lib/
+          chmod +x signing-tools/apksigner signing-tools/zipalign signing-tools/aapt2
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-signing-tools-64035
+          path: signing-tools
+          retention-days: 2
