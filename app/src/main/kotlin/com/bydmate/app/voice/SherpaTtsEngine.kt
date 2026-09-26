@@ -549,13 +549,13 @@ class SherpaTtsEngine(
      *  [worker] because sherpa-onnx JNI/model access is single-threaded, while AudioTrack writes
      *  happen on [playbackWorker]. This is a real two-stage pipeline: sentence N+1 can synthesize
      *  while sentence N is already playing. A small bounded PCM queue prevents unbounded RAM use. */
-    private inner class QueuedSpeech(private val myGen: Int) : TtsEngine.SpeechQueue {
-        private data class ReadyPcm(
-            val samples: FloatArray,
-            val sampleRate: Int,
-            val end: Boolean = false,
-        )
+    private data class ReadyPcm(
+        val samples: FloatArray,
+        val sampleRate: Int,
+        val end: Boolean = false,
+    )
 
+    private inner class QueuedSpeech(private val myGen: Int) : TtsEngine.SpeechQueue {
         private val ready = java.util.concurrent.LinkedBlockingQueue<ReadyPcm>(LOCAL_QUEUE_CAPACITY)
         private val endMarker = ReadyPcm(FloatArray(0), 0, end = true)
 
