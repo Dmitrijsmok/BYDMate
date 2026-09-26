@@ -806,6 +806,19 @@ private fun WidgetSection() {
     var showLeftTapPicker by remember { mutableStateOf(false) }
     var showHideInAppsPicker by remember { mutableStateOf(false) }
 
+    // Android/DiLink may drop the overlay permission across an APK update while our
+    // persisted widget preference remains enabled. Heal that inconsistent state when
+    // the user opens Widget settings instead of showing an ON toggle with no widget.
+    LaunchedEffect(enabled) {
+        if (enabled && !AndroidSettings.canDrawOverlays(context)) {
+            val intent = Intent(
+                AndroidSettings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:${context.packageName}"),
+            ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            context.startActivity(intent)
+        }
+    }
+
     SectionHeader(text = stringResource(R.string.settings_widget_section_header))
     Card(
         shape = RoundedCornerShape(12.dp),
