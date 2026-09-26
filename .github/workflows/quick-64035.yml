@@ -3,7 +3,7 @@ name: Quick build 64035 DiLink3 audio
 on:
   push:
     branches:
-      - quick/64035-restore-field-audio
+      - quick/64035-local-tts-pipeline
 
 permissions:
   contents: read
