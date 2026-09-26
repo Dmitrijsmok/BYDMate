@@ -1,3 +1,5 @@
+@file:Suppress("LargeClass")
+
 package com.bydmate.app.voice
 
 import android.content.Context
