@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -71,7 +72,15 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         // pre-duck volume to restore, or null if nothing was ducked (no music / already low).
         // Ducking must precede openRecord(): that iterates up to 5 mic sources and would otherwise
         // delay the volume drop by a perceptible beat.
-        val duckedFrom = duckMusic()
+        // DiLink 3 fallback TTS shares the physical media-volume path. Lowering
+        // STREAM_MUSIC to 1 here also lowers the assistant itself, so preserve the
+        // driver's current volume on this head unit. Audio focus still requests ducking.
+        val duckedFrom = if (Build.FINGERPRINT.orEmpty().contains("DiLink3", ignoreCase = true)) {
+            Log.i(TAG, "duckMusic: skipped on DiLink3 (shared TTS/music volume path)")
+            null
+        } else {
+            duckMusic()
+        }
 
         // If the mic cannot open, restore the volume we just ducked before bailing — otherwise
         // media would stay stuck at the duck level with no listen window to justify it.
