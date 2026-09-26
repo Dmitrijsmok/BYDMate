@@ -3,7 +3,7 @@ name: Quick build 64033 DiLink3 audio
 on:
   push:
     branches:
-      - quick/64033-dilink3-audio
+      - quick/64033-audio-stream-widget
 
 permissions:
   contents: read
