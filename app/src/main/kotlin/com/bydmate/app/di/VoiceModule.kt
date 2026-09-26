@@ -80,6 +80,7 @@ object VoiceModule {
         http: OkHttpClient,
         connections: LlmConnectionResolver,
         settings: SettingsRepository,
+        audioCapture: AudioCapture,
         selectedTtsVoice: () -> TtsVoice,
         @Named("ttsLoadGuard") ttsGuard: AsrLoadGuard,
     ): TtsEngine {
@@ -91,6 +92,11 @@ object VoiceModule {
             liveliness = { prefs().getInt("tts_liveliness", 33) },
             marker = marker,
             loadGuard = ttsGuard,
+            beforeLocalPlayback = {
+                if (audioCapture.hasOwnedDuck()) {
+                    audioCapture.setOwnedDuckLevel(AudioCapture.LOCAL_TTS_DUCK_VOLUME_INDEX)
+                }
+            },
         )
         return TtsRouter(
             delegate = offline,
