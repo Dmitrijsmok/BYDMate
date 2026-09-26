@@ -3,7 +3,7 @@ name: Quick build 64034 DiLink3 audio
 on:
   push:
     branches:
-      - quick/64034-audio-stream-widget
+      - quick/64034-restore-field-audio
 
 permissions:
   contents: read
