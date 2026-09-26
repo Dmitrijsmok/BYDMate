@@ -5,7 +5,6 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -28,6 +27,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
             MediaRecorder.AudioSource.DEFAULT,              // 0
         )
         internal const val DUCK_VOLUME_INDEX = 1
+        internal const val LOCAL_TTS_DUCK_VOLUME_INDEX = 4
         private const val TAG = "AudioCapture"
         // Pre-duck media volume survives process death here; restoreStuckDuck() reads it
         // at service start (stuck-quiet media after a crash / APK update mid session).
@@ -72,15 +72,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         // pre-duck volume to restore, or null if nothing was ducked (no music / already low).
         // Ducking must precede openRecord(): that iterates up to 5 mic sources and would otherwise
         // delay the volume drop by a perceptible beat.
-        // DiLink 3 fallback TTS shares the physical media-volume path. Lowering
-        // STREAM_MUSIC to 1 here also lowers the assistant itself, so preserve the
-        // driver's current volume on this head unit. Audio focus still requests ducking.
-        val duckedFrom = if (Build.FINGERPRINT.orEmpty().contains("DiLink3", ignoreCase = true)) {
-            Log.i(TAG, "duckMusic: skipped on DiLink3 (shared TTS/music volume path)")
-            null
-        } else {
-            duckMusic()
-        }
+        val duckedFrom = duckMusic()
 
         // If the mic cannot open, restore the volume we just ducked before bailing — otherwise
         // media would stay stuck at the duck level with no listen window to justify it.
@@ -151,6 +143,29 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         prefs.edit().putInt(KEY_PRE_DUCK_VOLUME, saved).apply()
         Log.i(TAG, "duckMusic: $saved -> $target")
         return saved
+    }
+
+    /**
+     * Adjust the physical MUSIC level while an existing duck owns the restore target.
+     * This does not create another duck depth or replace the driver's original volume.
+     */
+    internal fun setOwnedDuckLevel(level: Int): Boolean = synchronized(duckLock) {
+        val restore = pendingRestore ?: return false
+        if (duckDepth <= 0) return false
+        val target = level.coerceAtLeast(0).coerceAtMost(restore)
+        val current = runCatching {
+            audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        }.getOrNull()
+        if (current == target) return true
+        val applied = runCatching {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+        }.isSuccess
+        Log.i(TAG, "ownedDuckLevel: $current -> $target restore=$restore applied=$applied")
+        applied
+    }
+
+    internal fun hasOwnedDuck(): Boolean = synchronized(duckLock) {
+        duckDepth > 0 && pendingRestore != null
     }
 
     /** Restore the media volume captured by duckMusic(), or the explicit mid-session override. No-op if nothing was ducked. */
