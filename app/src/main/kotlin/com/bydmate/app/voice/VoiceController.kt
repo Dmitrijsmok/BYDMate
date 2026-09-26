@@ -36,6 +36,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 
+@Suppress("LargeClass")
 @Singleton
 class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hilt-injected dependencies
     private val audioCapture: AudioCapture,
