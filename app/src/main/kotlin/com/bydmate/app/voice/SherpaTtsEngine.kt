@@ -41,6 +41,7 @@ internal class TtsSamplesCallback(
  *  AudioTrack (MODE_STREAM) so speech starts before synthesis finishes.
  *  Each speak() supersedes queued/playing speech via a generation counter;
  *  stop() invalidates all pending jobs. */
+@Suppress("LongParameterList")
 class SherpaTtsEngine(
     private val modelManager: TtsModelManager,
     private val selectedVoice: () -> TtsVoice = { TtsVoiceCatalog.byId(TtsModelManager.DEFAULT_VOICE_ID) },
@@ -619,6 +620,7 @@ class SherpaTtsEngine(
             }
         }
 
+        @Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "LoopWithTooManyJumpStatements")
         private fun playbackLoop() {
             var totalFramesWritten = 0L
             try {
