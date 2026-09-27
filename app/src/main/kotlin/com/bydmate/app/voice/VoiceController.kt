@@ -413,8 +413,20 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                     }
                 }
             } catch (e: StopSession) {
-                // Expected silence auto-stop. Deferred PTT-stop after an in-flight utterance uses
-                // session cancellation from the routing child so the session finally still runs.
+                // A 30s listen window ended without VAD ever producing an utterance. Persist this
+                // explicitly so field diagnostics do not look as if the user's request vanished.
+                Log.i(TAG, "Continuous session auto-stop: no ASR utterance in ${SILENCE_AUTOSTOP_MS}ms")
+                record(
+                    VoiceJournalEntry(
+                        transcript = "",
+                        route = VoiceJournalEntry.Route.REFUSED,
+                        detail = "",
+                        outcome = VoiceJournalEntry.Outcome.ERROR,
+                        reason = "Речь не распознана",
+                        refusal = VoiceRefusal.ASR_EMPTY,
+                    ),
+                    "Continuous session auto-stop: no ASR utterance",
+                )
             } catch (t: Throwable) {
                 // A real coroutine cancellation (e.g. stopContinuousSession() cancelling sessionJob
                 // while idle) must propagate. Anything else is a genuine capture/ASR failure (e.g.
