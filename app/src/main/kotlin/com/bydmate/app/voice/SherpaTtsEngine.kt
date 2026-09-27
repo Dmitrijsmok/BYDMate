@@ -568,8 +568,6 @@ class SherpaTtsEngine(
         override fun enqueue(text: String): Boolean {
             if (text.isBlank() || generation.get() != myGen) return false
             pendingSynth.incrementAndGet()
-            // Keep ASR muted across the whole streamed reply, including synthesis gaps.
-            _speaking.value = true
             worker.execute {
                 if (generation.get() != myGen) {
                     pendingSynth.decrementAndGet()
@@ -585,6 +583,10 @@ class SherpaTtsEngine(
                             Log.w(TAG, "createTts returned null for voice=${selectedVoice().id}")
                             return@runCatching
                         }
+                        // 3.19 lifecycle compatibility: failed engine creation must never make
+                        // the session logically "speaking". Once the engine exists, keep the flag
+                        // high across synthesis/playback gaps for the whole queued reply.
+                        _speaking.value = true
                         Log.i(TAG, "enqueue synth: len=${text.length} engineRate=${engine.sampleRate()}")
                         val voice = selectedVoice()
                         val synthesisText = textForSynthesis(voice.engine, text, marker::mark)
