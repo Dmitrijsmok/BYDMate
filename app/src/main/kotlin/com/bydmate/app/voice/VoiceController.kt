@@ -18,6 +18,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
@@ -71,6 +72,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
     val listening: StateFlow<Boolean> = _listening.asStateFlow()
 
     private val busy = AtomicBoolean(false)
+    @Volatile private var warmupJob: Job? = null
     @Volatile private var sessionJob: Job? = null
     @Volatile private var routingJob: Job? = null
     @Volatile private var cancellableAskJob: Job? = null
@@ -187,6 +189,22 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
     internal var showAnswerHook: (String) -> Unit = { text -> ListeningOverlay.showAnswer(text) }
     internal var clearDialogHook: () -> Unit = { ListeningOverlay.clearDialog() }
 
+    /**
+     * Field-proven DiLink3 audio handoff from 64024-64027. Music stays deeply ducked
+     * while listening; immediately before local TTS we lift only the owned duck level
+     * without losing the driver's original restore target.
+     */
+    private fun prepareLocalTtsAudio() {
+        // DiLink 3 / ATTO 3 routes local TTS through BYD STREAM_NAVI and does not need
+        // the media stream lifted. Other BYD generations keep the earlier voice-stream handoff.
+        if (!SherpaTtsEngine.shouldUseBydVoiceStream(android.os.Build.FINGERPRINT.orEmpty())) return
+        if (_listening.value) {
+            runCatching {
+                audioCapture.setOwnedDuckLevel(AudioCapture.LOCAL_TTS_DUCK_VOLUME_INDEX)
+            }
+        }
+    }
+
     /** Speak a short phrase for every session outcome (not only agent answers).
      *  Overlay text stays detailed; the spoken phrase is terse for the road. */
     private suspend fun announce(title: String, overlay: String, spoken: String) {
@@ -204,6 +222,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             // stamp when speak() actually enqueued playback -- see lastSpeakingSeenMs above.
             val phrase = agentIdentity().persona.spokenPhrase(spoken)
             releaseSelfNameGuardForNewReply()
+            prepareLocalTtsAudio()
             if (runCatching { ttsEngine.speak(phrase) }.getOrDefault(false)) {
                 noteOwnSpeech(phrase)
                 didSpeak = true
@@ -290,7 +309,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             return
         }
         if (continuousAsr.isReady()) {
-            startContinuousSession()
+            startLocalSessionWhenReady()
         } else {
             // GigaAM model missing: preserve the degraded UX the legacy path produced —
             // overlay + journal ERROR.
@@ -310,6 +329,51 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             busy.set(false)
             scheduleIdleReset()
             scope.launch { announce("Голос", msg, msg) }
+        }
+    }
+
+    /**
+     * Keep GigaAM cold-start work off the PTT capture path. The session becomes visible only
+     * after both the recognizer and cached VAD are ready to consume microphone frames.
+     */
+    private fun startLocalSessionWhenReady() {
+        if (continuousAsr.isWarm()) {
+            startContinuousSession()
+            return
+        }
+        if (warmupJob?.isActive == true) return
+        warmupJob = scope.launch(Dispatchers.IO) {
+            try {
+                continuousAsr.warmUp()
+                if (canStartAfterWarmup()) startContinuousSession()
+            } finally {
+                warmupJob = null
+            }
+        }
+    }
+
+    private suspend fun canStartAfterWarmup(): Boolean {
+        if (!currentCoroutineContext().isActive) return false
+        if (!gate.isEnabled()) return false
+        if (!continuousAsr.isWarm()) return false
+        return !_listening.value
+    }
+
+    /**
+     * Safe latency recovery: do not compete with AudioRecord startup. This runs only after
+     * MicSourceProbe has selected a source that actually produced live PCM.
+     */
+    private fun prewarmReplyPathAfterMicReady() {
+        Log.i(TAG, "reply prewarm: live microphone confirmed")
+        if (gate.ttsEnabled()) {
+            scope.launch(Dispatchers.IO) {
+                runCatching { ttsEngine.warmUp() }
+                    .onFailure { Log.w(TAG, "reply TTS prewarm failed", it) }
+            }
+        }
+        scope.launch(Dispatchers.IO) {
+            runCatching { agentOrchestrator.prewarm() }
+                .onFailure { Log.w(TAG, "reply agent prewarm failed", it) }
         }
     }
 
@@ -341,15 +405,13 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         // idempotent (volume already at the duck target returns null), so the inner call becomes
         // a no-op and this early saved volume is the one restored at session teardown.
         val earlyDuck = runCatching { audioCapture.duckMusic() }.getOrNull()
-        // Warm the model and online-voice connections while the driver is still speaking: a cold
-        // turn otherwise pays DNS + TLS on both hosts inside the reply latency.
-        runCatching { if (gate.ttsEnabled()) ttsEngine.prewarmNetwork() }
-        scope.launch { runCatching { agentOrchestrator.prewarm() } }
         sessionJob = scope.launch {
             val session = coroutineContext[Job]
             runCatching { showListeningOverlay(appStrings.get(R.string.voice_listening)) }
             var lastEventMs = System.currentTimeMillis()
             var wasAudible = false   // capture thread only
+            var lateDuck: Int? = null
+            var replyPathWarmupStarted = false
             // Silence for the auto-stop, counted the way it was while playback muted the mic:
             // the agent's turn (routing, then a frame captured in the playback window) does not
             // count, and the countdown starts over once the turn is over, so neither a long
@@ -386,6 +448,12 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                     )
                 }
                     .filter { frame ->
+                        // MicSourceProbe only publishes frames after a candidate has proved live.
+                        // Its preserved probe frames keep their capture-time 3.19 barge-in marks.
+                        if (!replyPathWarmupStarted) {
+                            replyPathWarmupStarted = true
+                            prewarmReplyPathAfterMicReady()
+                        }
                         // Once a stop has been requested (see stopContinuousSession()) no further
                         // frames are forwarded to the recognizer, even while an in-flight utterance
                         // started before the stop is still being routed.
@@ -403,6 +471,15 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                     when (ev) {
                         is ContinuousAsrEvent.SpeechStart -> {
                             lastEventMs = System.currentTimeMillis()
+                            // Keep the owned media duck at the field-proven listening level.
+                            // If music started after the session opened, acquire a late duck.
+                            if (audioCapture.hasOwnedDuck()) {
+                                runCatching {
+                                    audioCapture.setOwnedDuckLevel(AudioCapture.DUCK_VOLUME_INDEX)
+                                }
+                            } else if (earlyDuck == null && lateDuck == null) {
+                                lateDuck = runCatching { audioCapture.duckMusic() }.getOrNull()
+                            }
                             segmentOverlapsPlayback = frameInPlayback
                             segmentSelfNameGuarded = frameSelfNameGuard
                             lastTickSilentMs = 0L
@@ -489,8 +566,18 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                     }
                 }
             } catch (e: StopSession) {
-                // Expected silence auto-stop. Deferred PTT-stop after an in-flight utterance uses
-                // session cancellation from the routing child so the session finally still runs.
+                Log.i(TAG, "Continuous session auto-stop: no ASR utterance in ${SILENCE_AUTOSTOP_MS}ms")
+                record(
+                    VoiceJournalEntry(
+                        transcript = "",
+                        route = VoiceJournalEntry.Route.REFUSED,
+                        detail = "",
+                        outcome = VoiceJournalEntry.Outcome.ERROR,
+                        reason = "Речь не распознана",
+                        refusal = VoiceRefusal.ASR_EMPTY,
+                    ),
+                    "Continuous session auto-stop: no ASR utterance",
+                )
             } catch (t: Throwable) {
                 // A real coroutine cancellation (e.g. stopContinuousSession() cancelling sessionJob
                 // while idle) must propagate. Anything else is a genuine capture/ASR failure (e.g.
@@ -507,6 +594,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                 routingJob = null
                 cancellableAskJob = null
                 processingUtterance = false
+                runCatching { audioCapture.restoreMusic(lateDuck) }
                 runCatching { audioCapture.restoreMusic(earlyDuck) }
                 _listening.value = false
                 _state.value = VoiceUiState.Idle
@@ -625,12 +713,34 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         // AgentOrchestrator.expectsFollowUp.
         val followUp = runCatching { agentOrchestrator.expectsFollowUp() }.getOrDefault(false)
         val res = if (followUp) Resolution.None(VoiceRefusal.AGENT_FOLLOWUP_WINDOW) else resolve(command)
-        _state.value = VoiceUiState.Thinking
-        if (res is Resolution.None) {
-            turn = turn.copy(agentReason = res.reason)
-            agentFallback(command, decodeMs)
+        val localReply = if (!followUp && res is Resolution.None) {
+            LocalVehicleQuery.answer(command, gate.vehicleSnapshot())
         } else {
-            apply(res, command, decodeMs)
+            null
+        }
+        _state.value = VoiceUiState.Thinking
+        when {
+            localReply != null -> {
+                earcon.ok()
+                _state.value = VoiceUiState.AgentAnswer(localReply.text)
+                record(
+                    VoiceJournalEntry(
+                        transcript = command,
+                        route = VoiceJournalEntry.Route.NLU,
+                        detail = withDecodeMs(command, decodeMs),
+                        outcome = VoiceJournalEntry.Outcome.OK,
+                        answer = localReply.text,
+                        asrMs = decodeMs,
+                    ),
+                    "Local vehicle query: kind=${localReply.kind} transcript=\"$command\"",
+                )
+                announce("Голос", localReply.text, localReply.text)
+            }
+            res is Resolution.None -> {
+                turn = turn.copy(agentReason = res.reason)
+                agentFallback(command, decodeMs)
+            }
+            else -> apply(res, command, decodeMs)
         }
     }
 
@@ -890,6 +1000,8 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             return
         }
         releaseSelfNameGuardForNewReply()
+        // Offline engine warmup overlaps the LLM turn; for an online source TtsRouter handles its cache.
+        if (gate.ttsEnabled()) runCatching { ttsEngine.warmUp() }
         val queue = if (gate.ttsEnabled()) runCatching { ttsEngine.startQueue() }.getOrNull() else null
         val streamed = StringBuilder()
         var queuedAny = false
@@ -913,6 +1025,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                     onFiller = queue?.let { q ->
                         { phrase ->
                             // Same hard stop gate as the sentence callback below.
+                            if (!stopRequested.get() && !askJob.isCancelled) prepareLocalTtsAudio()
                             if (!stopRequested.get() && !askJob.isCancelled &&
                                 runCatching { q.enqueue(phrase) }.getOrDefault(false)
                             ) {
@@ -927,6 +1040,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                     // non-suspend, so it must check for itself (the TTS queue is already
                     // superseded by tts.stop(), but the orb dialog repaint is not).
                     if (stopRequested.get() || askJob.isCancelled) return@ask
+                    prepareLocalTtsAudio()
                     if (queue != null && runCatching { queue.enqueue(sentence) }.getOrDefault(false)) {
                         noteOwnSpeech(sentence)
                         queuedAny = true
@@ -984,6 +1098,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                     "Agent answered: transcript=\"$transcript\" tools=${result.tools.size}")
                 var didSpeak = queuedAny || fillerQueued
                 if (!queuedAny && gate.ttsEnabled()) {
+                    prepareLocalTtsAudio()
                     // See announce() for why this is stamped at call time, not only per-frame,
                     // and only when speak() actually enqueued playback.
                     if (runCatching { ttsEngine.speak(result.text) }.getOrDefault(false)) {
