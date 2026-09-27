@@ -304,22 +304,12 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         stopRequested.set(false)
         _state.value = VoiceUiState.Listening
         _listening.value = true
-        // Local vehicle queries can answer before the LLM path ever runs, so pre-warm TTS
-        // as soon as the session opens instead of waiting until agentFallback().
-        if (gate.ttsEnabled()) runCatching { ttsEngine.warmUp() }
         earcon.ok()
-        // Warm offline TTS in parallel with listening. Local vehicle answers can arrive without
-        // an LLM round-trip, so agentFallback() is too late to hide the cold TTS startup cost.
-        if (gate.ttsEnabled()) runCatching { ttsEngine.warmUp() }
         // Duck the music the instant the orb appears -- captureSession's own duck fires only after
         // the GigaAM recognizer is constructed (~1.3 s, field defect APK 337). duckMusic() is
         // idempotent (volume already at the duck target returns null), so the inner call becomes
         // a no-op and this early saved volume is the one restored at session teardown.
         val earlyDuck = runCatching { audioCapture.duckMusic() }.getOrNull()
-        // Warm the model and online-voice connections while the driver is still speaking: a cold
-        // turn otherwise pays DNS + TLS on both hosts inside the reply latency.
-        runCatching { if (gate.ttsEnabled()) ttsEngine.prewarmNetwork() }
-        scope.launch { runCatching { agentOrchestrator.prewarm() } }
         sessionJob = scope.launch {
             val session = coroutineContext[Job]
             runCatching { showListeningOverlay(appStrings.get(R.string.voice_listening)) }
