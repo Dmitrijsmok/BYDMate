@@ -148,6 +148,10 @@ class VoiceControllerPlaybackBargeInTest {
             recognizerFactory = { recognizer },
             vadFactory = { vad },
         )
+        // These tests exercise 3.19 playback overlap/barge-in semantics, not ASR cold start.
+        // Production warms GigaAM outside the PTT path; prime the fake here so the controller
+        // reaches capture immediately and the tests do not time out on the 64044 cold-start gate.
+        asr.warmUp()
         val mic = Channel<MicFrame<Any?>>(Channel.UNLIMITED)
         val mark = CompletableDeferred<() -> Any?>()
         val audioCapture = mockk<AudioCapture>(relaxed = true)
