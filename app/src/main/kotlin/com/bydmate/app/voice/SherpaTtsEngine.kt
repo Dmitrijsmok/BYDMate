@@ -41,6 +41,7 @@ internal class TtsSamplesCallback(
  *  AudioTrack (MODE_STREAM) so speech starts before synthesis finishes.
  *  Each speak() supersedes queued/playing speech via a generation counter;
  *  stop() invalidates all pending jobs. */
+@Suppress("LongParameterList")
 class SherpaTtsEngine(
     private val modelManager: TtsModelManager,
     private val selectedVoice: () -> TtsVoice = { TtsVoiceCatalog.byId(TtsModelManager.DEFAULT_VOICE_ID) },
@@ -48,9 +49,11 @@ class SherpaTtsEngine(
     private val liveliness: () -> Int = { 33 },
     private val marker: RuStressMarker = RuStressMarker { null },
     private val loadGuard: AsrLoadGuard? = null,
+    private val beforeLocalPlayback: () -> Unit = {},
 ) : TtsEngine {
 
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "tts-worker") }
+    private val playbackWorker = Executors.newSingleThreadExecutor { r -> Thread(r, "tts-playback") }
     @Volatile private var tts: OfflineTts? = null
     @Volatile private var track: AudioTrack? = null
     private val generation = AtomicInteger(0)
@@ -180,6 +183,7 @@ class SherpaTtsEngine(
                         stillCurrent = { generation.get() == myGen },
                     ).also { Log.i(TAG, "synth done: samples=${it?.size} generation ok=${generation.get() == myGen}") }
                     if (samples != null && samples.isNotEmpty() && generation.get() == myGen) {
+                        val outputSamples = dilink3OutputSamples(samples, Build.FINGERPRINT.orEmpty())
                         // Only a complete, still-current sentence goes into the cache: accumulateSentence
                         // returns null when superseded, and a partial buffer would be replayed forever.
                         if (cached == null && cacheKey != null) pcmCache[cacheKey] = samples.copyOf()
@@ -194,11 +198,11 @@ class SherpaTtsEngine(
                         // doc. The track buffer holds only a fraction of a sentence, so the write
                         // blocks for nearly the whole playback duration.
                         val written = writeSentence(
-                            samples = samples,
+                            samples = outputSamples,
                             write = { out.write(it, 0, it.size, AudioTrack.WRITE_BLOCKING) },
                             publish = {
-                                pendingTarget = PendingTarget(myGen, trackFramesWritten + samples.size)
-                                stampAudibleClock(samples.size, engine.sampleRate())
+                                pendingTarget = PendingTarget(myGen, trackFramesWritten + outputSamples.size)
+                                stampAudibleClock(outputSamples.size, engine.sampleRate())
                             },
                             stillCurrent = { generation.get() == myGen },
                             retract = { pendingTarget = null; audibleUntilMs = 0L },
@@ -284,7 +288,8 @@ class SherpaTtsEngine(
      *  The drain wait continues on the worker thread after the caller unblocks. */
     override fun playPcm(samples: FloatArray, sampleRate: Int): Boolean {
         if (samples.isEmpty()) return false
-        Log.i(TAG, "playPcm: samples=${samples.size} rate=$sampleRate")
+        val outputSamples = dilink3OutputSamples(samples, Build.FINGERPRINT.orEmpty())
+        Log.i(TAG, "playPcm: samples=${outputSamples.size} rate=$sampleRate")
         val calledNs = System.nanoTime()
         val myGen = generation.incrementAndGet()
         val requestedRate = rate()  // frozen once; both worker and caller use this snapshot, no race
@@ -309,14 +314,14 @@ class SherpaTtsEngine(
                         Log.i(TAG, "playPcm write start: waitMs=${(System.nanoTime() - calledNs) / 1_000_000}")
                         // Same publish-before-write ordering as speak()/enqueue() -- see writeSentence's doc.
                         val written = writeSentence(
-                            samples = samples,
+                            samples = outputSamples,
                             write = { out.write(it, 0, it.size, AudioTrack.WRITE_BLOCKING) },
                             publish = {
-                                pendingTarget = PendingTarget(myGen, trackFramesWritten + samples.size)
+                                pendingTarget = PendingTarget(myGen, trackFramesWritten + outputSamples.size)
                                 // effectiveSampleRate falls back to sampleRate on HAL rejection,
                                 // so stamp accuracy is correct there. If HAL silently plays at a
                                 // different speed, stamp may expire early -- accepted trade-off.
-                                stampAudibleClock(samples.size, effectiveSampleRate)
+                                stampAudibleClock(outputSamples.size, effectiveSampleRate)
                             },
                             stillCurrent = { generation.get() == myGen },
                             retract = { pendingTarget = null; audibleUntilMs = 0L },
@@ -327,8 +332,8 @@ class SherpaTtsEngine(
                         }
                     }
                     val interrupted = generation.get() != myGen
-                    val outcome = playbackOutcome(framesWritten.toInt(), samples.size, interrupted)
-                    if (!outcome) Log.w(TAG, "playPcm failed: short write $framesWritten of ${samples.size}")
+                    val outcome = playbackOutcome(framesWritten.toInt(), outputSamples.size, interrupted)
+                    if (!outcome) Log.w(TAG, "playPcm failed: short write $framesWritten of ${outputSamples.size}")
                     // Signal the outcome to the calling thread BEFORE the drain wait so TtsRouter
                     // can decide immediately whether to fall back; drain continues here in background.
                     writeOutcome.complete(outcome)
@@ -542,19 +547,28 @@ class SherpaTtsEngine(
         return QueuedSpeech(myGen)
     }
 
-    /** One streamed reply = one queue = one generation bump (at startQueue). Sentences are
-     *  synthesized sequentially on the single worker into the shared MODE_STREAM track;
-     *  WRITE_BLOCKING gives natural backpressure, so sentence N+1 synthesizes while N's tail
-     *  is still playing. speaking stays true across sentence boundaries (mic-mute in the
-     *  continuous session reads it every frame; a false dip would let ASR hear the reply). */
+    /** One streamed reply = one queue = one generation bump. Synthesis stays serialized on
+     *  [worker] because sherpa-onnx JNI/model access is single-threaded, while AudioTrack writes
+     *  happen on [playbackWorker]. This is a real two-stage pipeline: sentence N+1 can synthesize
+     *  while sentence N is already playing. A small bounded PCM queue prevents unbounded RAM use. */
+    private data class ReadyPcm(
+        val samples: FloatArray,
+        val sampleRate: Int,
+        val end: Boolean = false,
+    )
+
     private inner class QueuedSpeech(private val myGen: Int) : TtsEngine.SpeechQueue {
-        // Worker-thread-confined (single executor), like tts/track. Frames THIS queue wrote --
-        // drain/audible targets use the engine-level trackFramesWritten (cumulative over the
-        // track's lifetime), this local only gates the drain wait in finish().
-        private var totalFramesWritten = 0L
+        private val ready = java.util.concurrent.LinkedBlockingQueue<ReadyPcm>(LOCAL_QUEUE_CAPACITY)
+        private val endMarker = ReadyPcm(FloatArray(0), 0, end = true)
+
+        init {
+            playbackWorker.execute { playbackLoop() }
+        }
 
         override fun enqueue(text: String): Boolean {
             if (text.isBlank() || generation.get() != myGen) return false
+            // Keep ASR muted across the whole streamed reply, including synthesis gaps.
+            _speaking.value = true
             worker.execute {
                 if (generation.get() != myGen) return@execute
                 runCatching {
@@ -565,79 +579,103 @@ class SherpaTtsEngine(
                         Log.w(TAG, "createTts returned null for voice=${selectedVoice().id}")
                         return@execute
                     }
-                    Log.i(TAG, "enqueue: len=${text.length} engineRate=${engine.sampleRate()}")
+                    Log.i(TAG, "enqueue synth: len=${text.length} engineRate=${engine.sampleRate()}")
                     val voice = selectedVoice()
-                    val out = ensureTrackForRate(engine.sampleRate())
-                    // Set-then-recheck: a stop() landing during the slow createTts/createTrack
-                    // above bumps generation before we get here, so undo our own speaking=true
-                    // write instead of leaving it stuck (stop() cannot see this write to undo it).
-                    _speaking.value = true
-                    if (generation.get() != myGen) { _speaking.value = false; return@execute }
                     val synthesisText = textForSynthesis(voice.engine, text, marker::mark)
                     val samples = accumulateSentence(
                         generate = { onChunk ->
                             engine.generateWithCallback(
-                                synthesisText, sid = voice.speakerId, speed = TtsTuning.speed(rate()), TtsSamplesCallback(onChunk),
+                                synthesisText,
+                                sid = voice.speakerId,
+                                speed = TtsTuning.speed(rate()),
+                                TtsSamplesCallback(onChunk),
                             )
                         },
                         stillCurrent = { generation.get() == myGen },
                     )
-                    Log.i(TAG, "synth done (queued): samples=${samples?.size} generation ok=${generation.get() == myGen}")
+                    Log.i(
+                        TAG,
+                        "synth done (pipelined): samples=${samples?.size} generation ok=${generation.get() == myGen}",
+                    )
                     if (samples != null && samples.isNotEmpty() && generation.get() == myGen) {
-                        // Same underrun-disable guard as speak(): start the track only with the
-                        // sentence in hand. The first sentence of a queue synthesizes for seconds
-                        // while an already-started track would starve ACTIVE and get disabled;
-                        // for later sentences the track is still playing and play() is skipped.
-                        if (out.playState != AudioTrack.PLAYSTATE_PLAYING) out.play()
-                        // See the speak() comment: publish before the blocking write, same
-                        // ordering fix for queued sentences.
-                        val written = writeSentence(
-                            samples = samples,
-                            write = { out.write(it, 0, it.size, AudioTrack.WRITE_BLOCKING) },
-                            publish = {
-                                pendingTarget =
-                                    PendingTarget(myGen, trackFramesWritten + samples.size)
-                                stampAudibleClock(samples.size, engine.sampleRate())
-                            },
-                            stillCurrent = { generation.get() == myGen },
-                            retract = { pendingTarget = null; audibleUntilMs = 0L },
-                        )
-                        if (written > 0) {
-                            totalFramesWritten += written
-                            trackFramesWritten += written
-                        }
+                        val outputSamples = dilink3OutputSamples(samples, Build.FINGERPRINT.orEmpty())
+                        offerWhileCurrent(ReadyPcm(outputSamples, engine.sampleRate()))
                     }
-                    // No drain and no speaking=false here: the queue stays hot for the next sentence.
-                }.onFailure { Log.w(TAG, "tts enqueue failed", it) }
+                }.onFailure { Log.w(TAG, "tts enqueue synth failed", it) }
             }
             return true
         }
 
         override fun finish() {
+            // Queued on the same synthesis worker, so this marker can only be published after
+            // every earlier enqueue() has finished synthesis (or been cancelled).
             worker.execute {
-                try {
-                    if (generation.get() != myGen) return@execute
-                    val out = track ?: return@execute
-                    val engine = tts ?: return@execute
-                    if (totalFramesWritten > 0) {
+                if (generation.get() == myGen) offerWhileCurrent(endMarker)
+            }
+        }
+
+        private fun offerWhileCurrent(item: ReadyPcm) {
+            while (generation.get() == myGen) {
+                if (ready.offer(item, LOCAL_QUEUE_POLL_MS, TimeUnit.MILLISECONDS)) return
+            }
+        }
+
+        @Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "LoopWithTooManyJumpStatements")
+        private fun playbackLoop() {
+            var totalFramesWritten = 0L
+            try {
+                while (generation.get() == myGen) {
+                    val item = ready.poll(LOCAL_QUEUE_POLL_MS, TimeUnit.MILLISECONDS) ?: continue
+                    if (item.end) break
+                    if (generation.get() != myGen) break
+
+                    // Two-thread pipeline can leave a long gap between q.enqueue() and actual
+                    // playback. VAD may have returned the owned media duck to listening level (1)
+                    // during that gap. Lift it at the physical playback boundary, preserving the
+                    // original restore target, exactly before local TTS becomes audible.
+                    runCatching { beforeLocalPlayback() }
+                        .onFailure { Log.w(TAG, "beforeLocalPlayback failed", it) }
+                    val out = ensureTrackForRate(item.sampleRate)
+                    if (out.playState != AudioTrack.PLAYSTATE_PLAYING) out.play()
+                    val written = writeSentence(
+                        samples = item.samples,
+                        write = { out.write(it, 0, it.size, AudioTrack.WRITE_BLOCKING) },
+                        publish = {
+                            pendingTarget = PendingTarget(myGen, trackFramesWritten + item.samples.size)
+                            stampAudibleClock(item.samples.size, item.sampleRate)
+                        },
+                        stillCurrent = { generation.get() == myGen },
+                        retract = { pendingTarget = null; audibleUntilMs = 0L },
+                    )
+                    if (written > 0) {
+                        totalFramesWritten += written
+                        trackFramesWritten += written
+                    }
+                    Log.i(
+                        TAG,
+                        "playback wrote: frames=$written queued=${ready.size} generation ok=${generation.get() == myGen}",
+                    )
+                }
+
+                if (generation.get() == myGen) {
+                    val out = track
+                    if (out != null && totalFramesWritten > 0) {
                         val targetFrames = trackFramesWritten
                         val timeout = queueDrainTimeoutMs(
                             targetFrames = targetFrames,
                             currentFrames = playbackFrames(out),
-                            sampleRate = engine.sampleRate(),
+                            sampleRate = out.sampleRate,
                         )
                         awaitPlaybackDrain(out, targetFrames, myGen, timeout)
                     }
-                    // Park the drained track (never flush) -- see the speak() drain comment.
-                    // Outside the frames-written check on purpose: a zero-length write still
-                    // leaves the track play()ed and starving, and pause() on a never-started
-                    // track is a harmless no-op.
-                    if (generation.get() == myGen) runCatching { out.pause() }
-                } finally {
-                    if (generation.get() == myGen) {
-                        pendingTarget = null
-                        _speaking.value = false
-                    }
+                    if (generation.get() == myGen) runCatching { out?.pause() }
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "tts playback pipeline failed", t)
+            } finally {
+                if (generation.get() == myGen) {
+                    pendingTarget = null
+                    _speaking.value = false
                 }
             }
         }
@@ -718,15 +756,30 @@ class SherpaTtsEngine(
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .setSampleRate(sampleRate)
             .build()
-        // BYD DiLink routes STREAM_BTTS(17) to the UI "Voice" volume slider (live-validated on
-        // Leopard 3, 2026-07-05). setLegacyStreamType is the only public way to target a custom
-        // stream; if this firmware rejects it (exception or uninitialized track), fall back to
-        // the previous accessibility route, which has an independent volume.
+        // BYD DiLink routes STREAM_BTTS(17) to the UI "Voice" volume slider on firmwares
+        // that expose it (live-validated on Leopard 3, 2026-07-05). DiLink 3 / ATTO 3 field
+        // diagnostics report that stream 17 is absent, yet constructing a track can still appear
+        // to succeed and leave speech extremely quiet. Skip stream 17 entirely on DiLink 3 and
+        // use the accessibility speech route directly. Other firmwares keep the old primary +
+        // fallback behaviour unchanged.
         var viaFallback = false
-        val result = createTrackWithFallback(
-            primary = { newTrack(bydVoiceAttributes(), format, bufLen).takeIfInitialized() },
-            fallback = { viaFallback = true; newTrack(accessibilityAttributes(), format, bufLen) },
-        )
+        val result = if (shouldUseBydVoiceStream(Build.FINGERPRINT)) {
+            createTrackWithFallback(
+                primary = { newTrack(bydVoiceAttributes(), format, bufLen).takeIfInitialized() },
+                fallback = { viaFallback = true; newTrack(accessibilityAttributes(), format, bufLen) },
+            )
+        } else {
+            val naviStream = resolveBydNaviStream()
+            Log.i(TAG, "DiLink3 detected: routing local TTS to BYD STREAM_NAVI=$naviStream")
+            createTrackWithFallback(
+                primary = { newTrack(dilink3VoiceAttributes(naviStream), format, bufLen).takeIfInitialized() },
+                fallback = {
+                    viaFallback = true
+                    Log.w(TAG, "BYD STREAM_NAVI=$naviStream rejected; falling back to Android NAVIGATION_GUIDANCE")
+                    newTrack(androidNavigationAttributes(), format, bufLen)
+                },
+            )
+        }
         if (result.state != AudioTrack.STATE_INITIALIZED) {
             Log.w(TAG, "audio track bad state")
             runCatching { result.release() }
@@ -763,6 +816,29 @@ class SherpaTtsEngine(
         .setUsage(TTS_USAGE)
         .build()
 
+    /**
+     * DiLink 3 / ATTO 3 only.
+     *
+     * On this firmware USAGE_ASSISTANCE_ACCESSIBILITY and generic Android navigation usage can
+     * still land in the media group. BYD's own map stack uses a dedicated legacy STREAM_NAVI,
+     * exposed by the car framework and controlled by the Broadcast / Navigation volume group.
+     * Resolve that stream at runtime and use generic Android navigation only as a construction
+     * fallback.
+     *
+     * Do not generalize this route to other BYD firmwares. They should keep STREAM_BTTS(17)
+     * when available, with accessibility as their normal fallback.
+     */
+    private fun dilink3VoiceAttributes(streamType: Int): AudioAttributes =
+        AudioAttributes.Builder()
+            .setLegacyStreamType(streamType)
+            .build()
+
+    private fun androidNavigationAttributes(): AudioAttributes =
+        AudioAttributes.Builder()
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+            .build()
+
     // Not private: awaitDrain is a pure poll loop exercised directly by SherpaTtsEngineTest
     // (no real AudioTrack/JNI needed) to pin the barge-in-frees-the-worker-promptly behaviour.
     companion object {
@@ -774,11 +850,51 @@ class SherpaTtsEngine(
         internal val TTS_USAGE = AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY
         // BYD custom stream behind the DiLink UI "Voice" volume slider.
         internal const val BYD_STREAM_BTTS = 17
+        internal const val BYD_STREAM_NAVI_FALLBACK = 15
+
+        /**
+         * BYD extends AudioManager with a dedicated STREAM_NAVI. Read the car framework's
+         * own value at runtime instead of hardcoding a DiLink generation-specific number.
+         * Decompiled BYD builds use 14 or 15 depending on platform branch, while STREAM_BTTS
+         * is 17. Reflection keeps this APK aligned with the actual firmware.
+         */
+        internal fun resolveBydNaviStream(): Int =
+            runCatching {
+                AudioManager::class.java.getField("STREAM_NAVI").getInt(null)
+            }.recoverCatching {
+                Class.forName("android.media.AudioSystem").getField("STREAM_NAVI").getInt(null)
+            }.getOrDefault(BYD_STREAM_NAVI_FALLBACK)
+
+        /** DiLink 3 / ATTO 3 does not expose BYD custom voice stream 17.
+         *  It is intentionally routed via NAVIGATION_GUIDANCE in createTrack(); all other
+         *  firmwares retain the normal BYD voice/accessibility routing. */
+        internal fun shouldUseBydVoiceStream(fingerprint: String): Boolean =
+            !fingerprint.contains("DiLink3", ignoreCase = true)
+
+        /** Field-proven 64025-64027 gain: boost only DiLink3 TTS PCM, not background music. */
+        internal fun dilink3OutputSamples(
+            samples: FloatArray,
+            fingerprint: String,
+            targetPeak: Float = 0.92f,
+            maxGain: Float = 4.0f,
+        ): FloatArray {
+            if (!fingerprint.contains("DiLink3", ignoreCase = true) || samples.isEmpty()) return samples
+            var peak = 0f
+            for (sample in samples) peak = maxOf(peak, kotlin.math.abs(sample))
+            if (peak <= 0f || peak >= targetPeak) return samples
+            val gain = (targetPeak / peak).coerceAtMost(maxGain).coerceAtLeast(1f)
+            if (gain <= 1f) return samples
+            return FloatArray(samples.size) { index ->
+                (samples[index] * gain).coerceIn(-1f, 1f)
+            }
+        }
 
         // The track buffer holds this many seconds of audio so a whole sentence's blocking write
         // returns while the sentence is still playing -- the worker then synthesizes the NEXT
         // sentence in parallel with playback, which removes the inter-sentence pauses (Wave P).
         internal const val TRACK_LOOKAHEAD_SECONDS = 8
+        private const val LOCAL_QUEUE_CAPACITY = 3
+        private const val LOCAL_QUEUE_POLL_MS = 100L
 
         // Bytes per frame of the track's PCM_FLOAT mono format.
         internal const val FLOAT_FRAME_BYTES = 4
