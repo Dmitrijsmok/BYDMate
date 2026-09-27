@@ -769,9 +769,16 @@ class SherpaTtsEngine(
                 fallback = { viaFallback = true; newTrack(accessibilityAttributes(), format, bufLen) },
             )
         } else {
-            viaFallback = true
-            Log.i(TAG, "DiLink3 detected: routing local TTS to NAVIGATION_GUIDANCE")
-            newTrack(dilink3VoiceAttributes(), format, bufLen)
+            val naviStream = resolveBydNaviStream()
+            Log.i(TAG, "DiLink3 detected: routing local TTS to BYD STREAM_NAVI=$naviStream")
+            createTrackWithFallback(
+                primary = { newTrack(dilink3VoiceAttributes(naviStream), format, bufLen).takeIfInitialized() },
+                fallback = {
+                    viaFallback = true
+                    Log.w(TAG, "BYD STREAM_NAVI=$naviStream rejected; falling back to Android NAVIGATION_GUIDANCE")
+                    newTrack(androidNavigationAttributes(), format, bufLen)
+                },
+            )
         }
         if (result.state != AudioTrack.STATE_INITIALIZED) {
             Log.w(TAG, "audio track bad state")
@@ -812,15 +819,21 @@ class SherpaTtsEngine(
     /**
      * DiLink 3 / ATTO 3 only.
      *
-     * On this firmware USAGE_ASSISTANCE_ACCESSIBILITY and legacy alarm output are grouped with
-     * media by the BYD audio policy. Local BYDMate TTS intentionally uses Android navigation
-     * guidance so DiLink can place it in the vehicle's separate "Broadcast / Navigation" volume
-     * group while STREAM_MUSIC is ducked independently.
+     * On this firmware USAGE_ASSISTANCE_ACCESSIBILITY and generic Android navigation usage can
+     * still land in the media group. BYD's own map stack uses a dedicated legacy STREAM_NAVI,
+     * exposed by the car framework and controlled by the Broadcast / Navigation volume group.
+     * Resolve that stream at runtime and use generic Android navigation only as a construction
+     * fallback.
      *
      * Do not generalize this route to other BYD firmwares. They should keep STREAM_BTTS(17)
      * when available, with accessibility as their normal fallback.
      */
-    private fun dilink3VoiceAttributes(): AudioAttributes =
+    private fun dilink3VoiceAttributes(streamType: Int): AudioAttributes =
+        AudioAttributes.Builder()
+            .setLegacyStreamType(streamType)
+            .build()
+
+    private fun androidNavigationAttributes(): AudioAttributes =
         AudioAttributes.Builder()
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
@@ -837,6 +850,20 @@ class SherpaTtsEngine(
         internal val TTS_USAGE = AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY
         // BYD custom stream behind the DiLink UI "Voice" volume slider.
         internal const val BYD_STREAM_BTTS = 17
+        internal const val BYD_STREAM_NAVI_FALLBACK = 15
+
+        /**
+         * BYD extends AudioManager with a dedicated STREAM_NAVI. Read the car framework's
+         * own value at runtime instead of hardcoding a DiLink generation-specific number.
+         * Decompiled BYD builds use 14 or 15 depending on platform branch, while STREAM_BTTS
+         * is 17. Reflection keeps this APK aligned with the actual firmware.
+         */
+        internal fun resolveBydNaviStream(): Int =
+            runCatching {
+                AudioManager::class.java.getField("STREAM_NAVI").getInt(null)
+            }.recoverCatching {
+                Class.forName("android.media.AudioSystem").getField("STREAM_NAVI").getInt(null)
+            }.getOrDefault(BYD_STREAM_NAVI_FALLBACK)
 
         /** DiLink 3 / ATTO 3 does not expose BYD custom voice stream 17.
          *  It is intentionally routed via NAVIGATION_GUIDANCE in createTrack(); all other
