@@ -3,7 +3,7 @@ name: Quick build 64038 DiLink3 audio
 on:
   push:
     branches:
-      - quick/64038-dilink3-tts-alarm-route
+      - quick/64038-dilink3-navigation-guidance
 
 permissions:
   contents: read
