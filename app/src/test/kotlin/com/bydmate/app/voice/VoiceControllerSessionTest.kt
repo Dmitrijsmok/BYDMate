@@ -1717,9 +1717,61 @@ class VoiceControllerSessionTest {
         awaitTrue { answers.contains(modelMissingMsg) }
     }
 
-    // --- Voice speed wave step 1: PTT prewarms the online TTS network connection while the
-    // driver is still speaking, so a cold turn does not pay DNS+TLS inside the reply latency.
-    // Gated on gate.ttsEnabled() -- prewarming a connection nobody will use is wasted work.
+    // --- Voice latency regression guard: 64044 restores only the safe part of the 64035
+    // startup warmup. Nothing warms before capture is live; the first preserved mic frame then
+    // starts local TTS + agent warmup asynchronously. Network TTS prewarm stays disabled.
+
+    @Test fun `first live mic frame prewarms local tts and agent without network prewarm`() {
+        val fakeAsr = FakeContinuousAsr(ready = true)
+        val dispatcher = mockk<ActionDispatcher>(relaxed = true)
+        val rawFrames = MutableSharedFlow<ShortArray>(extraBufferCapacity = 8)
+        val audioCapture = mockk<AudioCapture>(relaxed = true)
+        every { audioCapture.captureSession(any()) } returns rawFrames
+
+        val ttsEngine = mockk<TtsEngine>(relaxed = true)
+        every { ttsEngine.speaking } returns MutableStateFlow(false)
+        every { ttsEngine.audible() } returns false
+
+        val agentOrchestrator = mockk<AgentOrchestrator>(relaxed = true)
+        val gate = mockk<VoiceGate>()
+        every { gate.isEnabled() } returns true
+        every { gate.vehicleSnapshot() } returns null
+        every { gate.ttsEnabled() } returns true
+
+        val automationEngine = mockk<AutomationEngine>(relaxed = true)
+        val automationResolver = mockk<VoiceAutomationResolver>()
+        coEvery { automationResolver.match(any()) } returns null
+        val context = mockk<Context>(relaxed = true)
+        val controller = VoiceController(
+            audioCapture, dispatcher, mockk(relaxed = true), gate,
+            automationEngine, automationResolver, agentOrchestrator, context,
+            ttsEngine, VoiceJournal(), fakeAsr,
+            agentIdentity = { AgentIdentity("", AgentPersona.NAVIGATOR) },
+            ttsModelManager = mockk(relaxed = true),
+            ruStressMarker = RuStressMarker { null },
+            selectedTtsVoice = { TtsVoiceCatalog.byId("dmitri") },
+            appStrings = appStringsOver(context),
+        )
+
+        controller.onPttPressed()
+        awaitTrue { controller.listening.value }
+        awaitSubscribed(rawFrames)
+
+        verify(exactly = 0) { ttsEngine.warmUp() }
+        coVerify(exactly = 0) { agentOrchestrator.prewarm() }
+        verify(exactly = 0) { ttsEngine.prewarmNetwork() }
+
+        rawFrames.tryEmit(shortArrayOf(1, 2, 3))
+
+        awaitVerify { verify(exactly = 1) { ttsEngine.warmUp() } }
+        awaitVerify { coVerify(exactly = 1) { agentOrchestrator.prewarm() } }
+        verify(exactly = 0) { ttsEngine.prewarmNetwork() }
+
+        controller.onPttPressed()
+        awaitTrue { !controller.listening.value }
+    }
+
+    // The rollback must keep the unsafe early network prewarm disabled.
 
     @Test fun `ptt session start does not prewarm the tts network before microphone capture`() {
         val fakeAsr = FakeContinuousAsr(ready = true)
