@@ -84,6 +84,7 @@ import com.bydmate.app.data.vehicle.SeatChannelStore
 import com.bydmate.app.service.BootReceiver
 import com.bydmate.app.cluster.DEFAULT_VOICE_KEYCODE
 import com.bydmate.app.voice.AgentPersona
+import com.bydmate.app.voice.SherpaTtsEngine
 import com.bydmate.app.voice.TtsGender
 import com.bydmate.app.voice.VoiceController
 import com.bydmate.app.voice.VoiceJournal
@@ -1913,6 +1914,17 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 val bttsMax = runCatching { am.getStreamMaxVolume(17) }.getOrNull()
                 val bttsVol = runCatching { am.getStreamVolume(17) }.getOrNull()
                 appendLine("byd_btts_stream17: " + if (bttsMax != null) "present vol=$bttsVol/$bttsMax" else "absent")
+                val resolvedNavi = SherpaTtsEngine.resolveBydNaviStream()
+                for (stream in listOf(14, 15)) {
+                    val max = runCatching { am.getStreamMaxVolume(stream) }.getOrNull()
+                    val vol = runCatching { am.getStreamVolume(stream) }.getOrNull()
+                    appendLine(
+                        "byd_navi_stream$stream: " +
+                            if (max != null) "present vol=$vol/$max resolved=${stream == resolvedNavi}"
+                            else "absent resolved=${stream == resolvedNavi}",
+                    )
+                }
+                appendLine("byd_navi_resolved_stream: $resolvedNavi")
                 val preDuck = appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
                     .getInt("pre_duck_volume", -1)
                 appendLine("pre_duck_volume: " + if (preDuck >= 0) "$preDuck" else "(none)")
