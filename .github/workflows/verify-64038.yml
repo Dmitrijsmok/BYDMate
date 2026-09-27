@@ -3,7 +3,7 @@ name: Verify 64038 local TTS pipeline audio restore
 on:
   push:
     branches:
-      - quick/64038-dilink3-tts-alarm-route
+      - quick/64038-dilink3-navigation-guidance
 
 permissions:
   contents: read
