@@ -10,6 +10,7 @@ import com.k2fsa.sherpa.onnx.Vad
 import com.k2fsa.sherpa.onnx.VadModelConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -210,22 +211,64 @@ internal class GigaAmAsrEngine(
         try {
             var speaking = false
             var silentMs = 0L
+            val preRoll = ArrayDeque<FloatArray>()
+            var preRollSamples = 0
+            var utterancePrefix = FloatArray(0)
+
             pcm.collect { shorts ->
-                vad.acceptWaveform(FloatArray(shorts.size) { i -> shorts[i] / 32768f })
-                if (vad.isSpeechDetected()) {
+                val frame = FloatArray(shorts.size) { i -> shorts[i] / 32768f }
+                vad.acceptWaveform(frame)
+                val speechDetected = vad.isSpeechDetected()
+
+                if (speechDetected) {
                     if (!speaking) {
                         speaking = true
                         silentMs = 0L
+                        if (preRollSamples > 0) {
+                            utterancePrefix = FloatArray(preRollSamples)
+                            var offset = 0
+                            for (chunk in preRoll) {
+                                chunk.copyInto(utterancePrefix, offset)
+                                offset += chunk.size
+                            }
+                            preRoll.clear()
+                            preRollSamples = 0
+                        }
                         emit(ContinuousAsrEvent.SpeechStart)
                     }
                 } else {
+                    if (!speaking) {
+                        preRoll.addLast(frame)
+                        preRollSamples += frame.size
+                        while (preRollSamples > VAD_PRE_ROLL_SAMPLES && preRoll.isNotEmpty()) {
+                            val first = preRoll.removeFirst()
+                            val excess = preRollSamples - VAD_PRE_ROLL_SAMPLES
+                            if (excess < first.size) {
+                                val kept = first.copyOfRange(excess, first.size)
+                                preRoll.addFirst(kept)
+                                preRollSamples -= excess
+                                break
+                            }
+                            preRollSamples -= first.size
+                        }
+                    }
                     silentMs += (shorts.size * 1000L) / SAMPLE_RATE
                     emit(ContinuousAsrEvent.SilenceTick(silentMs))
                 }
+
                 while (!vad.empty()) {
-                    val segment = vad.front()
+                    val rawSegment = vad.front()
                     vad.pop()
                     speaking = false
+                    val segment = if (utterancePrefix.isEmpty()) {
+                        rawSegment
+                    } else {
+                        FloatArray(utterancePrefix.size + rawSegment.size).also { merged ->
+                            utterancePrefix.copyInto(merged, 0)
+                            rawSegment.copyInto(merged, utterancePrefix.size)
+                        }
+                    }
+                    utterancePrefix = FloatArray(0)
                     val text = recognizer.decode(segment)
                     if (text.isNotBlank()) emit(ContinuousAsrEvent.Utterance(text))
                 }
@@ -241,6 +284,13 @@ internal class GigaAmAsrEngine(
         // Silero VAD tuning against field defect APK 335: default threshold=0.5 clipped soft
         // speech onsets ("лышишь меня"); default minSilenceDuration=0.25s split phrases
         // mid-sentence ("в том это где").
+        // Keep a short slice of audio from immediately before Silero declares speech.
+        // At motorway cabin-noise levels the first soft syllable can sit below the VAD threshold;
+        // prepending this context prevents commands like "температура снаружи" becoming only
+        // "снаружи" without weakening the VAD threshold for the whole session.
+        internal const val VAD_PRE_ROLL_MS = 400
+        internal const val VAD_PRE_ROLL_SAMPLES = SAMPLE_RATE * VAD_PRE_ROLL_MS / 1000
+
         internal const val VAD_THRESHOLD = 0.4f
         internal const val VAD_MIN_SILENCE_SEC = 0.8f
         internal const val VAD_MIN_SPEECH_SEC = 0.25f
