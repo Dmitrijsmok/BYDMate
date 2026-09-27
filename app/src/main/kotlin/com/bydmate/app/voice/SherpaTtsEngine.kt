@@ -770,7 +770,7 @@ class SherpaTtsEngine(
             )
         } else {
             viaFallback = true
-            Log.i(TAG, "DiLink3 detected: routing local TTS to STREAM_ALARM")
+            Log.i(TAG, "DiLink3 detected: routing local TTS to NAVIGATION_GUIDANCE")
             newTrack(dilink3VoiceAttributes(), format, bufLen)
         }
         if (result.state != AudioTrack.STATE_INITIALIZED) {
@@ -812,15 +812,19 @@ class SherpaTtsEngine(
     /**
      * DiLink 3 / ATTO 3 only.
      *
-     * On this firmware USAGE_ASSISTANCE_ACCESSIBILITY is aliased to STREAM_MUSIC, so ducking
-     * background music also turns the agent down. Route LOCAL TTS through STREAM_ALARM instead:
-     * field-tested earcons already prove that this stream is independent from MUSIC on DiLink 3.
+     * On this firmware USAGE_ASSISTANCE_ACCESSIBILITY and legacy alarm output are grouped with
+     * media by the BYD audio policy. Local BYDMate TTS intentionally uses Android navigation
+     * guidance so DiLink can place it in the vehicle's separate "Broadcast / Navigation" volume
+     * group while STREAM_MUSIC is ducked independently.
      *
      * Do not generalize this route to other BYD firmwares. They should keep STREAM_BTTS(17)
      * when available, with accessibility as their normal fallback.
      */
     private fun dilink3VoiceAttributes(): AudioAttributes =
-        AudioAttributes.Builder().setLegacyStreamType(AudioManager.STREAM_ALARM).build()
+        AudioAttributes.Builder()
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+            .build()
 
     // Not private: awaitDrain is a pure poll loop exercised directly by SherpaTtsEngineTest
     // (no real AudioTrack/JNI needed) to pin the barge-in-frees-the-worker-promptly behaviour.
@@ -835,8 +839,8 @@ class SherpaTtsEngine(
         internal const val BYD_STREAM_BTTS = 17
 
         /** DiLink 3 / ATTO 3 does not expose BYD custom voice stream 17.
-         *  It is intentionally routed via STREAM_ALARM in createTrack(); all other firmwares
-         *  retain the normal BYD voice/accessibility routing. */
+         *  It is intentionally routed via NAVIGATION_GUIDANCE in createTrack(); all other
+         *  firmwares retain the normal BYD voice/accessibility routing. */
         internal fun shouldUseBydVoiceStream(fingerprint: String): Boolean =
             !fingerprint.contains("DiLink3", ignoreCase = true)
 
