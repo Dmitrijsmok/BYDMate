@@ -1,0 +1,52 @@
+name: APK 64042
+
+on:
+  push:
+    branches:
+      - quick/64042-asr-preroll-dilink3-audio
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Verify targeted fixes
+        run: |
+          grep -q 'versionCode = 64042' app/build.gradle.kts
+          grep -q 'VAD_PRE_ROLL_MS = 400' app/src/main/kotlin/com/bydmate/app/voice/GigaAmAsrEngine.kt
+          grep -q '!SherpaTtsEngine.shouldUseBydVoiceStream' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
+      - name: Targeted tests
+        run: ./gradlew :app:testDebugUnitTest --tests com.bydmate.app.voice.GigaAmSegmenterTest --tests com.bydmate.app.voice.VoiceControllerSessionTest --stacktrace
+      - name: Build APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+      - name: Stage
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/debug/*.apk out/BYDMate-3.18.2-64042-ASRPreroll-DiLink3Audio-debug.apk
+      - uses: actions/upload-artifact@v7
+        with:
+          name: BYDMate-3.18.2-64042-ASRPreroll-DiLink3Audio-debug
+          path: out/BYDMate-3.18.2-64042-ASRPreroll-DiLink3Audio-debug.apk
+          retention-days: 2
+      - name: Export signing tools
+        run: |
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          mkdir -p signing-tools/lib signing-tools/lib64
+          cp "$BT/apksigner" "$BT/zipalign" signing-tools/
+          cp "$BT/lib/apksigner.jar" signing-tools/lib/
+          cp "$BT/lib64/libc++_shared.so" signing-tools/lib64/ 2>/dev/null || true
+          chmod +x signing-tools/apksigner signing-tools/zipalign
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-signing-tools-64042
+          path: signing-tools
+          retention-days: 2
