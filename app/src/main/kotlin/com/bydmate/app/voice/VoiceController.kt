@@ -160,6 +160,12 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
      * without losing the driver's original restore target.
      */
     private fun prepareLocalTtsAudio() {
+        // DiLink 3 / ATTO 3 only:
+        // local TTS is routed through NAVIGATION_GUIDANCE ("Broadcast / Navigation") and must
+        // remain independent from STREAM_MUSIC. Never lift the owned media duck for speech here.
+        // Other BYD generations keep the field-proven local-TTS handoff unchanged.
+        if (!SherpaTtsEngine.shouldUseBydVoiceStream(android.os.Build.FINGERPRINT.orEmpty())) return
+
         if (_listening.value) {
             runCatching {
                 audioCapture.setOwnedDuckLevel(AudioCapture.LOCAL_TTS_DUCK_VOLUME_INDEX)
