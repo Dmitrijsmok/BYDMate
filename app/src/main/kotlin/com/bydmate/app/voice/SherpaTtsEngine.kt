@@ -564,6 +564,7 @@ class SherpaTtsEngine(
             playbackWorker.execute { playbackLoop() }
         }
 
+        @Suppress("CyclomaticComplexMethod", "ComplexCondition")
         override fun enqueue(text: String): Boolean {
             if (text.isBlank() || generation.get() != myGen) return false
             pendingSynth.incrementAndGet()
@@ -636,7 +637,7 @@ class SherpaTtsEngine(
             return false
         }
 
-        @Suppress("TooGenericExceptionCaught")
+        @Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "LoopWithTooManyJumpStatements")
         private fun playbackLoop() {
             var totalFramesWritten = 0L
             try {
