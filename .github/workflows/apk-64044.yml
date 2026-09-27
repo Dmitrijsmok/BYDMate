@@ -1,0 +1,59 @@
+name: APK 64044
+
+on:
+  push:
+    branches:
+      - quick/64044-safe-latency-prewarm
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Verify targeted fixes
+        run: |
+          grep -q 'versionCode = 64044' app/build.gradle.kts
+          grep -q 'resolveBydNaviStream' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt
+          grep -q 'setLegacyStreamType(streamType)' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt
+          grep -q 'private val playbackWorker = Executors.newSingleThreadExecutor' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt
+          grep -q 'sentence N+1 can synthesize' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt
+          grep -q 'reply prewarm: live microphone confirmed' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
+          if sed -n '/private fun startContinuousSession()/,/sessionJob = scope.launch/p' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt | grep -q 'prewarmNetwork'; then
+            echo 'Unsafe prewarmNetwork restored before mic capture'
+            exit 1
+          fi
+      - name: Targeted tests
+        run: ./gradlew :app:testDebugUnitTest --tests com.bydmate.app.voice.SherpaTtsEngineTest --tests com.bydmate.app.voice.VoiceControllerSessionTest --tests com.bydmate.app.voice.AudioCaptureDuckTest --tests com.bydmate.app.voice.GigaAmSegmenterTest --stacktrace
+      - name: Build APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+      - name: Stage
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/debug/*.apk out/BYDMate-3.18.2-64044-SafeLatencyPrewarm-debug.apk
+      - uses: actions/upload-artifact@v7
+        with:
+          name: BYDMate-3.18.2-64044-SafeLatencyPrewarm-debug
+          path: out/BYDMate-3.18.2-64044-SafeLatencyPrewarm-debug.apk
+          retention-days: 2
+      - name: Export signing tools
+        run: |
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          mkdir -p signing-tools/lib signing-tools/lib64
+          cp "$BT/apksigner" "$BT/zipalign" signing-tools/
+          cp "$BT/lib/apksigner.jar" signing-tools/lib/
+          cp "$BT/lib64/libc++_shared.so" signing-tools/lib64/ 2>/dev/null || true
+          chmod +x signing-tools/apksigner signing-tools/zipalign
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-signing-tools-64044
+          path: signing-tools
+          retention-days: 2
