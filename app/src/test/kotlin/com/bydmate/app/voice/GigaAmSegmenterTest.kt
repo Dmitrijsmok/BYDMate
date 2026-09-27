@@ -91,6 +91,27 @@ class GigaAmSegmenterTest {
         assertSame(segment, recognizer.lastSamples)
     }
 
+    @Test fun `pre roll preserves soft audio immediately before vad speech start`() = runTest {
+        val segment = floatArrayOf(0.5f)
+        val vad = FakeVadHandle(listOf(
+            FakeVadHandle.FrameScript(speech = false),
+            FakeVadHandle.FrameScript(speech = true),
+            FakeVadHandle.FrameScript(speech = false, segment = segment),
+        ))
+        val recognizer = FakeRecognizerHandle("температура снаружи")
+        val engine = GigaAmAsrEngine(readyModelManager(), { recognizer }, { vad })
+        val quietOnset = ShortArray(320) { 1000 }
+        val speech = ShortArray(320) { 5000 }
+        val tail = ShortArray(320)
+
+        engine.transcribe(listOf(quietOnset, speech, tail).asFlow()).toList()
+
+        val decoded = recognizer.lastSamples!!
+        assertEquals(321, decoded.size)
+        assertEquals(1000f / 32768f, decoded.first(), 0.000001f)
+        assertEquals(0.5f, decoded.last(), 0.000001f)
+    }
+
     @Test fun `silence ticks grow monotonically over 1000ms of silence`() = runTest {
         // 320 samples at 16kHz = 20ms/frame; 50 frames = 1000ms.
         val vad = FakeVadHandle(List(50) { FakeVadHandle.FrameScript(speech = false) })
