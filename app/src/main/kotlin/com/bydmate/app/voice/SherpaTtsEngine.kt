@@ -579,7 +579,8 @@ class SherpaTtsEngine(
                         val engine = tts ?: createTts()?.also {
                             Log.i(TAG, "engine created: voice=${selectedVoice().id} engineRate=${it.sampleRate()}")
                             tts = it
-                        } ?: run {
+                        }
+                        if (engine == null) {
                             Log.w(TAG, "createTts returned null for voice=${selectedVoice().id}")
                             return@runCatching
                         }
