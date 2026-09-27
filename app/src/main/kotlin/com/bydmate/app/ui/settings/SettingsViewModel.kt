@@ -650,9 +650,19 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
      */
     fun setDisableNativeAssistant(disabled: Boolean) {
         _uiState.update { it.copy(disableNativeAssistant = disabled) }
+        appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("alice_native_takeover", disabled)
+            .apply()
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, disabled.toString())
             helperClient.setAppHidden("com.byd.autovoice", disabled)
+            helperClient.setAppHidden("com.byd.vrassistant", disabled)
+            // DiLink 3 can leave the steering-wheel accessibility binding stale after package
+            // state changes. Re-assert our key filter immediately when takeover is enabled.
+            if (disabled && _uiState.value.voiceEnabled) {
+                ensureVoiceKeyService("native-assistant-disabled")
+            }
         }
     }
 
@@ -2178,7 +2188,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 appendLine("disable_native_assistant pref: \"$pref\"")
                 // Same package family the helper daemon disables via TX_SET_APP_HIDDEN.
                 val pm = appContext.packageManager
-                for (pkg in listOf("com.byd.autovoice", "com.byd.autovoice.engine", "com.byd.autovoice.tts")) {
+                for (pkg in listOf("com.byd.autovoice", "com.byd.autovoice.engine", "com.byd.autovoice.tts", "com.byd.vrassistant")) {
                     val state = runCatching { enabledSettingName(pm.getApplicationEnabledSetting(pkg)) }
                         .getOrElse { "not installed" }
                     appendLine("$pkg: $state")
