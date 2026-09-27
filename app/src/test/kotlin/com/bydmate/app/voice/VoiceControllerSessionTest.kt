@@ -1721,7 +1721,7 @@ class VoiceControllerSessionTest {
     // driver is still speaking, so a cold turn does not pay DNS+TLS inside the reply latency.
     // Gated on gate.ttsEnabled() -- prewarming a connection nobody will use is wasted work.
 
-    @Test fun `ptt session start prewarms the tts network when spoken replies are enabled`() {
+    @Test fun `ptt session start does not prewarm the tts network before microphone capture`() {
         val fakeAsr = FakeContinuousAsr(ready = true)
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         val rawFrames = MutableSharedFlow<ShortArray>(extraBufferCapacity = 8)
@@ -1756,7 +1756,7 @@ class VoiceControllerSessionTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
 
-        verify(exactly = 1) { ttsEngine.prewarmNetwork() }
+        verify(exactly = 0) { ttsEngine.prewarmNetwork() }
     }
 
     @Test fun `ptt session start does not prewarm the tts network when spoken replies are disabled`() {
