@@ -3,7 +3,7 @@ name: Quick build 64039 DiLink3 audio
 on:
   push:
     branches:
-      - quick/64039-dilink3-navigation-guidance
+      - quick/64039-dilink3-nav-no-media-lift
 
 permissions:
   contents: read
