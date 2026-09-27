@@ -91,7 +91,53 @@ private class RealVadHandle(modelManager: GigaAmModelManager) : VadHandle {
  *  constructing it loads the model from disk; the VAD stays per-collection, created and
  *  released in transcribe()'s finally block, so neither cancellation nor a second collect can
  *  leak or clobber a VAD handle. */
-internal class GigaAmAsrEngine(
+internal private class SpeechPreRoll(private val maxSamples: Int) {
+    private val chunks = ArrayDeque<FloatArray>()
+    private var sampleCount = 0
+
+    fun append(frame: FloatArray) {
+        chunks.addLast(frame)
+        sampleCount += frame.size
+        trim()
+    }
+
+    fun take(): FloatArray {
+        if (sampleCount == 0) return FloatArray(0)
+        val out = FloatArray(sampleCount)
+        var offset = 0
+        for (chunk in chunks) {
+            chunk.copyInto(out, offset)
+            offset += chunk.size
+        }
+        chunks.clear()
+        sampleCount = 0
+        return out
+    }
+
+    private fun trim() {
+        while (sampleCount > maxSamples && chunks.isNotEmpty()) {
+            val first = chunks.removeFirst()
+            val excess = sampleCount - maxSamples
+            if (excess < first.size) {
+                val kept = first.copyOfRange(excess, first.size)
+                chunks.addFirst(kept)
+                sampleCount -= excess
+                return
+            }
+            sampleCount -= first.size
+        }
+    }
+}
+
+private fun prependPrefix(prefix: FloatArray, segment: FloatArray): FloatArray {
+    if (prefix.isEmpty()) return segment
+    return FloatArray(prefix.size + segment.size).also { merged ->
+        prefix.copyInto(merged, 0)
+        segment.copyInto(merged, prefix.size)
+    }
+}
+
+class GigaAmAsrEngine(
     private val modelManager: GigaAmModelManager,
     private val recognizerFactory: () -> RecognizerHandle = { RealRecognizerHandle(modelManager) },
     private val vadFactory: () -> VadHandle = { RealVadHandle(modelManager) },
@@ -211,8 +257,7 @@ internal class GigaAmAsrEngine(
         try {
             var speaking = false
             var silentMs = 0L
-            val preRoll = ArrayDeque<FloatArray>()
-            var preRollSamples = 0
+            val preRoll = SpeechPreRoll(VAD_PRE_ROLL_SAMPLES)
             var utterancePrefix = FloatArray(0)
 
             pcm.collect { shorts ->
@@ -224,34 +269,11 @@ internal class GigaAmAsrEngine(
                     if (!speaking) {
                         speaking = true
                         silentMs = 0L
-                        if (preRollSamples > 0) {
-                            utterancePrefix = FloatArray(preRollSamples)
-                            var offset = 0
-                            for (chunk in preRoll) {
-                                chunk.copyInto(utterancePrefix, offset)
-                                offset += chunk.size
-                            }
-                            preRoll.clear()
-                            preRollSamples = 0
-                        }
+                        utterancePrefix = preRoll.take()
                         emit(ContinuousAsrEvent.SpeechStart)
                     }
                 } else {
-                    if (!speaking) {
-                        preRoll.addLast(frame)
-                        preRollSamples += frame.size
-                        while (preRollSamples > VAD_PRE_ROLL_SAMPLES && preRoll.isNotEmpty()) {
-                            val first = preRoll.removeFirst()
-                            val excess = preRollSamples - VAD_PRE_ROLL_SAMPLES
-                            if (excess < first.size) {
-                                val kept = first.copyOfRange(excess, first.size)
-                                preRoll.addFirst(kept)
-                                preRollSamples -= excess
-                                break
-                            }
-                            preRollSamples -= first.size
-                        }
-                    }
+                    if (!speaking) preRoll.append(frame)
                     silentMs += (shorts.size * 1000L) / SAMPLE_RATE
                     emit(ContinuousAsrEvent.SilenceTick(silentMs))
                 }
@@ -260,14 +282,7 @@ internal class GigaAmAsrEngine(
                     val rawSegment = vad.front()
                     vad.pop()
                     speaking = false
-                    val segment = if (utterancePrefix.isEmpty()) {
-                        rawSegment
-                    } else {
-                        FloatArray(utterancePrefix.size + rawSegment.size).also { merged ->
-                            utterancePrefix.copyInto(merged, 0)
-                            rawSegment.copyInto(merged, utterancePrefix.size)
-                        }
-                    }
+                    val segment = prependPrefix(utterancePrefix, rawSegment)
                     utterancePrefix = FloatArray(0)
                     val text = recognizer.decode(segment)
                     if (text.isNotBlank()) emit(ContinuousAsrEvent.Utterance(text))
