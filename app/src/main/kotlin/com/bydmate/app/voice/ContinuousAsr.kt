@@ -13,6 +13,8 @@ sealed interface ContinuousAsrEvent {
 
 interface ContinuousAsr {
     fun isReady(): Boolean
+    /** True only when the expensive recognizer/VAD startup work is already paid. */
+    fun isWarm(): Boolean = isReady()
     /** Cold flow: collecting consumes pcm frames (16kHz ShortArray), cancelling stops. */
     fun transcribe(pcm: Flow<ShortArray>): Flow<ContinuousAsrEvent>
     /** Pre-build the recognizer ahead of the first PTT so its cold model load doesn't
