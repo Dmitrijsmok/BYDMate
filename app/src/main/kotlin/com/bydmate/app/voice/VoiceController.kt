@@ -164,7 +164,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         // local TTS is routed through NAVIGATION_GUIDANCE ("Broadcast / Navigation") and must
         // remain independent from STREAM_MUSIC. Never lift the owned media duck for speech here.
         // Other BYD generations keep the field-proven local-TTS handoff unchanged.
-        if (!SherpaTtsEngine.shouldUseBydVoiceStream(android.os.Build.FINGERPRINT.orEmpty())) return
+        if (SherpaTtsEngine.shouldUseBydVoiceStream(android.os.Build.FINGERPRINT.orEmpty())) return
 
         if (_listening.value) {
             runCatching {
