@@ -72,6 +72,7 @@ object VoiceModule {
         TtsVoiceCatalog.byId(id)
     }
 
+    @Suppress("LongParameterList")
     @Provides @Singleton
     fun provideTtsEngine(
         mm: TtsModelManager,
@@ -80,6 +81,7 @@ object VoiceModule {
         http: OkHttpClient,
         connections: LlmConnectionResolver,
         settings: SettingsRepository,
+        audioCapture: AudioCapture,
         selectedTtsVoice: () -> TtsVoice,
         @Named("ttsLoadGuard") ttsGuard: AsrLoadGuard,
     ): TtsEngine {
@@ -91,6 +93,17 @@ object VoiceModule {
             liveliness = { prefs().getInt("tts_liveliness", 33) },
             marker = marker,
             loadGuard = ttsGuard,
+            beforeLocalPlayback = {
+                // DiLink 3 / ATTO 3 routes local TTS through NAVIGATION_GUIDANCE, which is
+                // intentionally independent from STREAM_MUSIC. Do not lift the media duck for
+                // speech on this platform; the vehicle's "Broadcast / Navigation" volume group
+                // owns assistant loudness. Other BYD generations keep the existing media handoff.
+                if (SherpaTtsEngine.shouldUseBydVoiceStream(android.os.Build.FINGERPRINT.orEmpty()) &&
+                    audioCapture.hasOwnedDuck()
+                ) {
+                    audioCapture.setOwnedDuckLevel(AudioCapture.LOCAL_TTS_DUCK_VOLUME_INDEX)
+                }
+            },
         )
         return TtsRouter(
             delegate = offline,
