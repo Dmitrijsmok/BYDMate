@@ -10,6 +10,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlin.concurrent.thread
+import kotlin.math.sqrt
 
 class AudioCapture(private val audioManager: AudioManager, private val prefs: SharedPreferences) {
 
@@ -27,6 +28,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
             MediaRecorder.AudioSource.DEFAULT,              // 0
         )
         internal const val DUCK_VOLUME_INDEX = 1
+        internal const val LOCAL_TTS_DUCK_VOLUME_INDEX = 4
         private const val TAG = "AudioCapture"
         // Pre-duck media volume survives process death here; restoreStuckDuck() reads it
         // at service start (stuck-quiet media after a crash / APK update mid session).
@@ -67,44 +69,51 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         ).coerceAtLeast(SAMPLE_RATE) // ~0.5s
 
-        // Duck background media FIRST so it drops the instant the user triggers voice. DiLink's
-        // media player ignores audio-focus ducking, so the MAY_DUCK request below is not enough —
-        // we lower STREAM_MUSIC directly and restore it on every exit path. duckedFrom holds the
-        // pre-duck volume to restore, or null if nothing was ducked (no music / already low).
-        // Ducking must precede openRecord(): that iterates up to 5 mic sources and would otherwise
-        // delay the volume drop by a perceptible beat.
+        // Duck before touching AudioRecord so media drops immediately on PTT.
         val duckedFrom = duckMusic()
 
-        // If the mic cannot open, restore the volume we just ducked before bailing — otherwise
-        // media would stay stuck at the duck level with no listen window to justify it.
-        val record = openRecord(minBuf) ?: run {
-            restoreMusic(duckedFrom)
-            close(IllegalStateException("mic unavailable"))
-            return@callbackFlow
-        }
-
-        // Fix C — release the already-initialized AudioRecord and abandon focus if
-        // requestAudioFocus or startRecording throw (otherwise both resources leak
-        // because awaitClose has not been registered yet at this point).
+        // Probe every source under the same audio-focus state as the real session. On DiLink,
+        // STATE_INITIALIZED is not enough: a source can open and still deliver only digital zero.
         try {
-            audioManager.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-            record.startRecording()
+            audioManager.requestAudioFocus(
+                null,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+            )
         } catch (t: Throwable) {
-            runCatching { record.release() }
-            runCatching { audioManager.abandonAudioFocus(null) }
             restoreMusic(duckedFrom)
             close(t)
             return@callbackFlow
         }
 
+        val opened = MicSourceProbe.open(
+            minBuf = minBuf,
+            sources = SOURCES,
+            sampleRate = SAMPLE_RATE,
+            readChunk = READ_CHUNK,
+            mark = mark,
+        ) ?: run {
+            runCatching { audioManager.abandonAudioFocus(null) }
+            restoreMusic(duckedFrom)
+            close(IllegalStateException("mic unavailable or silent on all sources"))
+            return@callbackFlow
+        }
+        val record = opened.record
+
         val worker = thread(name = "voice-capture") {
             val buf = ShortArray(READ_CHUNK)
-            val start = System.nanoTime()
+            val startNs = System.nanoTime()
             try {
+                // Probe audio is real user audio. Preserve it and its capture-time mark so the
+                // barge-in/echo logic in 3.19 sees the same timing semantics as normal reads.
+                for (frame in opened.prefetchedFrames) {
+                    if (isClosedForSend) break
+                    trySend(frame)
+                }
                 while (!isClosedForSend) {
                     val n = record.read(buf, 0, buf.size)
                     if (n > 0) trySend(MicFrame(buf.copyOf(n), mark()))
-                    if ((System.nanoTime() - start) / 1_000_000 >= maxMs) break
+                    if ((System.nanoTime() - startNs) / 1_000_000 >= maxMs) break
                 }
             } finally {
                 close()
@@ -114,8 +123,6 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         awaitClose {
             runCatching { record.stop() }
             runCatching { record.release() }
-            // Each cleanup step is independent: a throw in one must not skip the
-            // volume restore below (otherwise media stays ducked at 15%).
             runCatching { audioManager.abandonAudioFocus(null) }
             restoreMusic(duckedFrom)
             worker.interrupt()
@@ -144,6 +151,29 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         prefs.edit().putInt(KEY_PRE_DUCK_VOLUME, saved).apply()
         Log.i(TAG, "duckMusic: $saved -> $target")
         return saved
+    }
+
+    /**
+     * Adjust the physical MUSIC level while an existing duck owns the restore target.
+     * This does not create another duck depth or replace the driver's original volume.
+     */
+    internal fun setOwnedDuckLevel(level: Int): Boolean = synchronized(duckLock) {
+        val restore = pendingRestore ?: return false
+        if (duckDepth <= 0) return false
+        val target = level.coerceAtLeast(0).coerceAtMost(restore)
+        val current = runCatching {
+            audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        }.getOrNull()
+        if (current == target) return true
+        val applied = runCatching {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+        }.isSuccess
+        Log.i(TAG, "ownedDuckLevel: $current -> $target restore=$restore applied=$applied")
+        applied
+    }
+
+    internal fun hasOwnedDuck(): Boolean = synchronized(duckLock) {
+        duckDepth > 0 && pendingRestore != null
     }
 
     /** Restore the media volume captured by duckMusic(), or the explicit mid-session override. No-op if nothing was ducked. */
@@ -217,15 +247,121 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         prefs.edit().remove(KEY_PRE_DUCK_VOLUME).apply()
     }
 
-    private fun openRecord(minBuf: Int): AudioRecord? {
-        for (src in SOURCES) {
-            val r = runCatching {
-                AudioRecord(src, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf)
-            }.getOrNull()
-            if (r != null && r.state == AudioRecord.STATE_INITIALIZED) return r
-            r?.release()
+}
+
+private data class OpenedRecord<T>(
+    val record: AudioRecord,
+    val prefetchedFrames: List<MicFrame<T>>,
+)
+
+private object MicSourceProbe {
+    private const val SOURCE_PROBE_READS = 3
+    private const val DEAD_SOURCE_PEAK = 1
+    private const val TAG = "AudioCapture"
+
+    fun <T> open(
+        minBuf: Int,
+        sources: IntArray,
+        sampleRate: Int,
+        readChunk: Int,
+        mark: () -> T,
+    ): OpenedRecord<T>? {
+        for (src in sources) {
+            val probe = probeSource(src, minBuf, sampleRate, readChunk, mark) ?: continue
+            if (probe.live) return probe.opened
+            runCatching { probe.opened.record.stop() }
+            runCatching { probe.opened.record.release() }
         }
         return null
+    }
+
+    private data class ProbeResult<T>(
+        val opened: OpenedRecord<T>,
+        val live: Boolean,
+    )
+
+    private fun <T> probeSource(
+        src: Int,
+        minBuf: Int,
+        sampleRate: Int,
+        readChunk: Int,
+        mark: () -> T,
+    ): ProbeResult<T>? {
+        val record = createRecord(src, minBuf, sampleRate) ?: return null
+        if (!startRecord(record, src)) return null
+
+        val frames = mutableListOf<MicFrame<T>>()
+        var peak = 0
+        var sampleCount = 0L
+        var sumSquares = 0.0
+        var positiveReads = 0
+
+        repeat(SOURCE_PROBE_READS) {
+            val pcm = readProbeFrame(record, readChunk) ?: return@repeat
+            positiveReads++
+            frames += MicFrame(pcm, mark())
+            for (sample in pcm) {
+                val abs = kotlin.math.abs(sample.toInt())
+                if (abs > peak) peak = abs
+                val value = sample.toDouble()
+                sumSquares += value * value
+                sampleCount++
+            }
+        }
+
+        val rms = if (sampleCount > 0) sqrt(sumSquares / sampleCount).toInt() else 0
+        val live = positiveReads > 0 && peak > DEAD_SOURCE_PEAK
+        Log.i(
+            TAG,
+            "mic probe: source=${sourceName(src)}($src) reads=$positiveReads/$SOURCE_PROBE_READS " +
+                "peak=$peak rms=$rms live=$live",
+        )
+        return ProbeResult(OpenedRecord(record, frames), live)
+    }
+
+    private fun createRecord(src: Int, minBuf: Int, sampleRate: Int): AudioRecord? {
+        val record = runCatching {
+            AudioRecord(
+                src,
+                sampleRate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                minBuf,
+            )
+        }.getOrNull()
+        if (record != null && record.state == AudioRecord.STATE_INITIALIZED) return record
+        record?.release()
+        Log.i(TAG, "mic source ${sourceName(src)}($src): init failed")
+        return null
+    }
+
+    private fun startRecord(record: AudioRecord, src: Int): Boolean {
+        val started = runCatching {
+            record.startRecording()
+            true
+        }.getOrElse {
+            Log.w(TAG, "mic source ${sourceName(src)}($src): start failed", it)
+            false
+        }
+        if (!started) runCatching { record.release() }
+        return started
+    }
+
+    private fun readProbeFrame(record: AudioRecord, readChunk: Int): ShortArray? {
+        val probe = ShortArray(readChunk)
+        val n = runCatching {
+            record.read(probe, 0, probe.size)
+        }.getOrDefault(AudioRecord.ERROR_INVALID_OPERATION)
+        return if (n > 0) probe.copyOf(n) else null
+    }
+
+    private fun sourceName(source: Int): String = when (source) {
+        MediaRecorder.AudioSource.VOICE_RECOGNITION -> "VOICE_RECOGNITION"
+        MediaRecorder.AudioSource.VOICE_COMMUNICATION -> "VOICE_COMMUNICATION"
+        MediaRecorder.AudioSource.MIC -> "MIC"
+        MediaRecorder.AudioSource.UNPROCESSED -> "UNPROCESSED"
+        MediaRecorder.AudioSource.DEFAULT -> "DEFAULT"
+        else -> "SOURCE"
     }
 }
 
