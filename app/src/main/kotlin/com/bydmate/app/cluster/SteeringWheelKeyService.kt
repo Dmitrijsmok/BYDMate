@@ -85,10 +85,8 @@ class SteeringWheelKeyService : AccessibilityService() {
         }
         // Voice check: runs after learn-mode, before star decision. Returns true only when voice is
         // enabled and the configured voice key is pressed (isDown). Non-voice keys fall through.
-        val voicePrefs = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
-        val voiceEnabled = voicePrefs.getBoolean("voice_enabled", false)
-        val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)
-        when (voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey)) {
+        val voiceDecision = resolveVoiceKeyDecision(event.keyCode, isDown)
+        when (voiceDecision) {
             VoiceKeyDecision.TRIGGER -> {
                 entryPoint().voiceController().onPttPressed()
                 return true
@@ -134,6 +132,21 @@ class SteeringWheelKeyService : AccessibilityService() {
                 SteeringKeyDecision.CONSUME -> true
                 SteeringKeyDecision.PASS_THROUGH -> false
             }
+        }
+    }
+
+    private fun resolveVoiceKeyDecision(keyCode: Int, isDown: Boolean): VoiceKeyDecision {
+        val voicePrefs = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+        val voiceEnabled = voicePrefs.getBoolean("voice_enabled", false)
+        val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)
+        if (android.os.Build.VERSION.SDK_INT > 29) {
+            return voiceDecision(keyCode, isDown, voiceEnabled, voiceKey)
+        }
+        val diLink3 = diLink3VoiceDecision(keyCode, isDown, voiceEnabled)
+        return if (diLink3 != VoiceKeyDecision.IGNORE) {
+            diLink3
+        } else {
+            voiceDecision(keyCode, isDown, voiceEnabled, voiceKey)
         }
     }
 
