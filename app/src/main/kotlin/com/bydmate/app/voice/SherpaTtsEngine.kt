@@ -560,6 +560,9 @@ class SherpaTtsEngine(
     private inner class QueuedSpeech(private val myGen: Int) : TtsEngine.SpeechQueue {
         private val ready = java.util.concurrent.LinkedBlockingQueue<ReadyPcm>(LOCAL_QUEUE_CAPACITY)
         private val endMarker = ReadyPcm(FloatArray(0), 0, end = true)
+        private val pendingSynth = AtomicInteger(0)
+        @Volatile private var finishRequested = false
+        @Volatile private var pcmQueued = false
 
         init {
             playbackWorker.execute { playbackLoop() }
@@ -568,10 +571,15 @@ class SherpaTtsEngine(
         override fun enqueue(text: String): Boolean {
             if (text.isBlank() || generation.get() != myGen) return false
             // Keep ASR muted across the whole streamed reply, including synthesis gaps.
+            pendingSynth.incrementAndGet()
             _speaking.value = true
             worker.execute {
-                if (generation.get() != myGen) return@execute
-                runCatching {
+                if (generation.get() != myGen) {
+                    pendingSynth.decrementAndGet()
+                    return@execute
+                }
+                try {
+                    runCatching {
                     val engine = tts ?: createTts()?.also {
                         Log.i(TAG, "engine created: voice=${selectedVoice().id} engineRate=${it.sampleRate()}")
                         tts = it
@@ -599,14 +607,27 @@ class SherpaTtsEngine(
                     )
                     if (samples != null && samples.isNotEmpty() && generation.get() == myGen) {
                         val outputSamples = dilink3OutputSamples(samples, Build.FINGERPRINT.orEmpty())
-                        offerWhileCurrent(ReadyPcm(outputSamples, engine.sampleRate()))
+                        if (offerWhileCurrent(ReadyPcm(outputSamples, engine.sampleRate()))) pcmQueued = true
                     }
-                }.onFailure { Log.w(TAG, "tts enqueue synth failed", it) }
+                    }.onFailure { Log.w(TAG, "tts enqueue synth failed", it) }
+                } finally {
+                    val remaining = pendingSynth.decrementAndGet()
+                    // A streamed reply can legitimately synthesize nothing (missing native engine,
+                    // cancelled/failed synthesis). Do not leave the logical speaking flag stuck
+                    // just because no PCM ever reached the playback worker.
+                    if (remaining == 0 && finishRequested && !pcmQueued && generation.get() == myGen) {
+                        _speaking.value = false
+                    }
+                }
             }
             return true
         }
 
         override fun finish() {
+            finishRequested = true
+            if (pendingSynth.get() == 0 && !pcmQueued && generation.get() == myGen) {
+                _speaking.value = false
+            }
             // Queued on the same synthesis worker, so this marker can only be published after
             // every earlier enqueue() has finished synthesis (or been cancelled).
             worker.execute {
@@ -614,10 +635,11 @@ class SherpaTtsEngine(
             }
         }
 
-        private fun offerWhileCurrent(item: ReadyPcm) {
+        private fun offerWhileCurrent(item: ReadyPcm): Boolean {
             while (generation.get() == myGen) {
-                if (ready.offer(item, LOCAL_QUEUE_POLL_MS, TimeUnit.MILLISECONDS)) return
+                if (ready.offer(item, LOCAL_QUEUE_POLL_MS, TimeUnit.MILLISECONDS)) return true
             }
+            return false
         }
 
         @Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "LoopWithTooManyJumpStatements")
