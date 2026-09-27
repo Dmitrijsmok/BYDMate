@@ -3,7 +3,7 @@ name: Verify 64039 local TTS pipeline audio restore
 on:
   push:
     branches:
-      - quick/64039-dilink3-navigation-guidance
+      - quick/64039-dilink3-nav-no-media-lift
 
 permissions:
   contents: read
