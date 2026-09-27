@@ -288,6 +288,26 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         return !_listening.value
     }
 
+    /**
+     * Safe latency recovery from the 64035/64040 path. Do not compete with AudioRecord startup:
+     * this is called only after capture has produced its first real frame, which on 64043 means
+     * MicSourceProbe has already opened and validated a live source. Warmups are fire-and-forget
+     * on IO so ASR keeps consuming the preserved probe frames immediately.
+     */
+    private fun prewarmReplyPathAfterMicReady() {
+        Log.i(TAG, "reply prewarm: live microphone confirmed")
+        if (gate.ttsEnabled()) {
+            scope.launch(Dispatchers.IO) {
+                runCatching { ttsEngine.warmUp() }
+                    .onFailure { Log.w(TAG, "reply TTS prewarm failed", it) }
+            }
+        }
+        scope.launch(Dispatchers.IO) {
+            runCatching { agentOrchestrator.prewarm() }
+                .onFailure { Log.w(TAG, "reply agent prewarm failed", it) }
+        }
+    }
+
     /** Continuous PTT-toggled session (Wave B): one long-lived mic capture feeds VAD-segmented
      *  utterances into the shared NLU/agent router (routeUtterance), so a follow-up question from
      *  the agent keeps listening for free — the loop just collects again. Auto-stops after
@@ -316,9 +336,17 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             var lastEventMs = System.currentTimeMillis()
             var wasAudible = false
             var lateDuck: Int? = null
+            var replyPathWarmupStarted = false
             try {
                 val pcm = audioCapture.captureSession(maxMs = Long.MAX_VALUE) // Wave P: no session cap; silence auto-stop below is the only auto-exit
                     .filter {
+                        // 64043's MicSourceProbe only emits preserved frames after a source proved
+                        // live, so the first frame is our safe boundary for restoring 64035 latency
+                        // warmups without delaying or destabilizing AudioRecord startup.
+                        if (!replyPathWarmupStarted) {
+                            replyPathWarmupStarted = true
+                            prewarmReplyPathAfterMicReady()
+                        }
                         // Once a stop has been requested (see stopContinuousSession()) no further
                         // frames are forwarded to the recognizer, even while an in-flight utterance
                         // started before the stop is still being routed.
