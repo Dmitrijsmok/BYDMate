@@ -33,8 +33,6 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         // Pre-duck media volume survives process death here; restoreStuckDuck() reads it
         // at service start (stuck-quiet media after a crash / APK update mid session).
         internal const val KEY_PRE_DUCK_VOLUME = "pre_duck_volume"
-        private const val SOURCE_PROBE_READS = 3
-        private const val DEAD_SOURCE_PEAK = 1
     }
 
     // Depth of nested active ducks (session-level duck, per-listen-window ducks, speak
@@ -94,7 +92,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         // STATE_INITIALIZED alone is not enough on DiLink: some sources can open successfully
         // yet deliver only digital zero. Probe a few 100-ms frames, preserve them for ASR, and
         // automatically continue to the next source only when the candidate is actually dead.
-        val opened = openLiveRecord(minBuf) ?: run {
+        val opened = MicSourceProbe.open(minBuf, SOURCES, SAMPLE_RATE, READ_CHUNK) ?: run {
             runCatching { audioManager.abandonAudioFocus(null) }
             restoreMusic(duckedFrom)
             close(IllegalStateException("mic unavailable or silent on all sources"))
@@ -249,19 +247,26 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         prefs.edit().remove(KEY_PRE_DUCK_VOLUME).apply()
     }
 
-    private data class OpenedRecord(
-        val record: AudioRecord,
-        val prefetchedFrames: List<ShortArray>,
-    )
+}
 
-    private data class MicProbe(
-        val opened: OpenedRecord,
-        val live: Boolean,
-    )
+private data class OpenedRecord(
+    val record: AudioRecord,
+    val prefetchedFrames: List<ShortArray>,
+)
 
-    private fun openLiveRecord(minBuf: Int): OpenedRecord? {
-        for (src in SOURCES) {
-            val probe = probeSource(src, minBuf) ?: continue
+private object MicSourceProbe {
+    private const val SOURCE_PROBE_READS = 3
+    private const val DEAD_SOURCE_PEAK = 1
+    private const val TAG = "AudioCapture"
+
+    fun open(
+        minBuf: Int,
+        sources: IntArray,
+        sampleRate: Int,
+        readChunk: Int,
+    ): OpenedRecord? {
+        for (src in sources) {
+            val probe = probeSource(src, minBuf, sampleRate, readChunk) ?: continue
             if (probe.live) return probe.opened
             runCatching { probe.opened.record.stop() }
             runCatching { probe.opened.record.release() }
@@ -269,8 +274,13 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         return null
     }
 
-    private fun probeSource(src: Int, minBuf: Int): MicProbe? {
-        val record = createRecord(src, minBuf) ?: return null
+    private data class ProbeResult(
+        val opened: OpenedRecord,
+        val live: Boolean,
+    )
+
+    private fun probeSource(src: Int, minBuf: Int, sampleRate: Int, readChunk: Int): ProbeResult? {
+        val record = createRecord(src, minBuf, sampleRate) ?: return null
         if (!startRecord(record, src)) return null
 
         val frames = mutableListOf<ShortArray>()
@@ -280,7 +290,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         var positiveReads = 0
 
         repeat(SOURCE_PROBE_READS) {
-            val frame = readProbeFrame(record) ?: return@repeat
+            val frame = readProbeFrame(record, readChunk) ?: return@repeat
             positiveReads++
             frames += frame
             for (sample in frame) {
@@ -299,14 +309,14 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
             "mic probe: source=${sourceName(src)}($src) reads=$positiveReads/$SOURCE_PROBE_READS " +
                 "peak=$peak rms=$rms live=$live",
         )
-        return MicProbe(OpenedRecord(record, frames), live)
+        return ProbeResult(OpenedRecord(record, frames), live)
     }
 
-    private fun createRecord(src: Int, minBuf: Int): AudioRecord? {
+    private fun createRecord(src: Int, minBuf: Int, sampleRate: Int): AudioRecord? {
         val record = runCatching {
             AudioRecord(
                 src,
-                SAMPLE_RATE,
+                sampleRate,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
                 minBuf,
@@ -330,8 +340,8 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         return started
     }
 
-    private fun readProbeFrame(record: AudioRecord): ShortArray? {
-        val probe = ShortArray(READ_CHUNK)
+    private fun readProbeFrame(record: AudioRecord, readChunk: Int): ShortArray? {
+        val probe = ShortArray(readChunk)
         val n = runCatching {
             record.read(probe, 0, probe.size)
         }.getOrDefault(AudioRecord.ERROR_INVALID_OPERATION)
