@@ -251,76 +251,91 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
 
     private data class OpenedRecord(
         val record: AudioRecord,
-        val source: Int,
         val prefetchedFrames: List<ShortArray>,
+    )
+
+    private data class MicProbe(
+        val opened: OpenedRecord,
+        val live: Boolean,
     )
 
     private fun openLiveRecord(minBuf: Int): OpenedRecord? {
         for (src in SOURCES) {
-            val record = runCatching {
-                AudioRecord(
-                    src,
-                    SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    minBuf,
-                )
-            }.getOrNull()
-            if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
-                record?.release()
-                Log.i(TAG, "mic source ${sourceName(src)}($src): init failed")
-                continue
-            }
-
-            val frames = mutableListOf<ShortArray>()
-            var peak = 0
-            var sampleCount = 0L
-            var sumSquares = 0.0
-            var positiveReads = 0
-            val started = runCatching {
-                record.startRecording()
-                true
-            }.getOrElse {
-                Log.w(TAG, "mic source ${sourceName(src)}($src): start failed", it)
-                false
-            }
-            if (!started) {
-                runCatching { record.release() }
-                continue
-            }
-
-            repeat(SOURCE_PROBE_READS) {
-                val probe = ShortArray(READ_CHUNK)
-                val n = runCatching {
-                    record.read(probe, 0, probe.size)
-                }.getOrDefault(AudioRecord.ERROR_INVALID_OPERATION)
-                if (n > 0) {
-                    positiveReads++
-                    val frame = probe.copyOf(n)
-                    frames += frame
-                    for (sample in frame) {
-                        val abs = kotlin.math.abs(sample.toInt())
-                        if (abs > peak) peak = abs
-                        val value = sample.toDouble()
-                        sumSquares += value * value
-                        sampleCount++
-                    }
-                }
-            }
-
-            val rms = if (sampleCount > 0) sqrt(sumSquares / sampleCount).toInt() else 0
-            val live = positiveReads > 0 && peak > DEAD_SOURCE_PEAK
-            Log.i(
-                TAG,
-                "mic probe: source=${sourceName(src)}($src) reads=$positiveReads/$SOURCE_PROBE_READS " +
-                    "peak=$peak rms=$rms live=$live",
-            )
-            if (live) return OpenedRecord(record, src, frames)
-
-            runCatching { record.stop() }
-            runCatching { record.release() }
+            val probe = probeSource(src, minBuf) ?: continue
+            if (probe.live) return probe.opened
+            runCatching { probe.opened.record.stop() }
+            runCatching { probe.opened.record.release() }
         }
         return null
+    }
+
+    private fun probeSource(src: Int, minBuf: Int): MicProbe? {
+        val record = createRecord(src, minBuf) ?: return null
+        if (!startRecord(record, src)) return null
+
+        val frames = mutableListOf<ShortArray>()
+        var peak = 0
+        var sampleCount = 0L
+        var sumSquares = 0.0
+        var positiveReads = 0
+
+        repeat(SOURCE_PROBE_READS) {
+            val frame = readProbeFrame(record) ?: return@repeat
+            positiveReads++
+            frames += frame
+            for (sample in frame) {
+                val abs = kotlin.math.abs(sample.toInt())
+                if (abs > peak) peak = abs
+                val value = sample.toDouble()
+                sumSquares += value * value
+                sampleCount++
+            }
+        }
+
+        val rms = if (sampleCount > 0) sqrt(sumSquares / sampleCount).toInt() else 0
+        val live = positiveReads > 0 && peak > DEAD_SOURCE_PEAK
+        Log.i(
+            TAG,
+            "mic probe: source=${sourceName(src)}($src) reads=$positiveReads/$SOURCE_PROBE_READS " +
+                "peak=$peak rms=$rms live=$live",
+        )
+        return MicProbe(OpenedRecord(record, frames), live)
+    }
+
+    private fun createRecord(src: Int, minBuf: Int): AudioRecord? {
+        val record = runCatching {
+            AudioRecord(
+                src,
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                minBuf,
+            )
+        }.getOrNull()
+        if (record != null && record.state == AudioRecord.STATE_INITIALIZED) return record
+        record?.release()
+        Log.i(TAG, "mic source ${sourceName(src)}($src): init failed")
+        return null
+    }
+
+    private fun startRecord(record: AudioRecord, src: Int): Boolean {
+        val started = runCatching {
+            record.startRecording()
+            true
+        }.getOrElse {
+            Log.w(TAG, "mic source ${sourceName(src)}($src): start failed", it)
+            false
+        }
+        if (!started) runCatching { record.release() }
+        return started
+    }
+
+    private fun readProbeFrame(record: AudioRecord): ShortArray? {
+        val probe = ShortArray(READ_CHUNK)
+        val n = runCatching {
+            record.read(probe, 0, probe.size)
+        }.getOrDefault(AudioRecord.ERROR_INVALID_OPERATION)
+        return if (n > 0) probe.copyOf(n) else null
     }
 
     private fun sourceName(source: Int): String = when (source) {
