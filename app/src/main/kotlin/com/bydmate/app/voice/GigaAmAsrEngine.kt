@@ -86,12 +86,8 @@ private class RealVadHandle(modelManager: GigaAmModelManager) : VadHandle {
     override fun close() = vad.release()
 }
 
-/** GigaAM v3 Russian nemo-CTC recognizer segmented by a silero VAD, for the continuous voice
- *  session. The recognizer is cached across sessions (see cachedRecognizer below) since
- *  constructing it loads the model from disk; the VAD stays per-collection, created and
- *  released in transcribe()'s finally block, so neither cancellation nor a second collect can
- *  leak or clobber a VAD handle. */
-internal private class SpeechPreRoll(private val maxSamples: Int) {
+/** Rolling raw PCM context from just before Silero declares speech. */
+private class SpeechPreRoll(private val maxSamples: Int) {
     private val chunks = ArrayDeque<FloatArray>()
     private var sampleCount = 0
 
@@ -137,7 +133,12 @@ private fun prependPrefix(prefix: FloatArray, segment: FloatArray): FloatArray {
     }
 }
 
-class GigaAmAsrEngine(
+/** GigaAM v3 Russian nemo-CTC recognizer segmented by a silero VAD, for the continuous voice
+ *  session. The recognizer is cached across sessions (see cachedRecognizer below) since
+ *  constructing it loads the model from disk; the VAD stays per-collection, created and
+ *  released in transcribe()'s finally block, so neither cancellation nor a second collect can
+ *  leak or clobber a VAD handle. */
+internal class GigaAmAsrEngine(
     private val modelManager: GigaAmModelManager,
     private val recognizerFactory: () -> RecognizerHandle = { RealRecognizerHandle(modelManager) },
     private val vadFactory: () -> VadHandle = { RealVadHandle(modelManager) },
