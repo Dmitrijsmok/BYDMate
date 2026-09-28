@@ -138,6 +138,7 @@ private fun prependPrefix(prefix: FloatArray, segment: FloatArray): FloatArray {
  *  constructing it loads the model from disk; the VAD stays per-collection, created and
  *  released in transcribe()'s finally block, so neither cancellation nor a second collect can
  *  leak or clobber a VAD handle. */
+@Suppress("TooManyFunctions")
 internal class GigaAmAsrEngine(
     private val modelManager: GigaAmModelManager,
     private val recognizerFactory: () -> RecognizerHandle = { RealRecognizerHandle(modelManager) },
