@@ -13,6 +13,9 @@ sealed interface ContinuousAsrEvent {
 
 interface ContinuousAsr {
     fun isReady(): Boolean
+    /** True only when native pieces needed before PCM collection are already loaded.
+     *  Fakes/default implementations remain warm whenever their model is ready. */
+    fun isWarm(): Boolean = isReady()
     /** Cold flow: collecting consumes pcm frames (16kHz ShortArray), cancelling stops. */
     fun transcribe(pcm: Flow<ShortArray>): Flow<ContinuousAsrEvent>
     /** Pre-build the recognizer ahead of the first PTT so its cold model load doesn't
