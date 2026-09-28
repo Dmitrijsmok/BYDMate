@@ -160,6 +160,8 @@ internal class GigaAmAsrEngine(
     @Volatile private var cachedVad: VadHandle? = null
     private val vadWarmupInFlight = AtomicBoolean(false)
 
+    override fun isWarm(): Boolean = cachedRecognizer != null && cachedVad != null
+
     /** Drop the cached recognizer so the next session reloads the model from disk. Called when
      *  the model files change (re-download). The old handle is NOT closed here: an in-flight
      *  session may still be decoding with it; the one-handle leak per re-download is bounded
