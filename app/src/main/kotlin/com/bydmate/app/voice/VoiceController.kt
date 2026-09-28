@@ -360,7 +360,8 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             return
         }
         if (continuousAsr.isReady()) {
-            startLocalSessionWhenReady()
+            if (continuousAsr.requiresWarmBeforeListening()) startLocalSessionWhenReady()
+            else startContinuousSession()
         } else {
             // GigaAM model missing: preserve the degraded UX the legacy path produced —
             // overlay + journal ERROR.
