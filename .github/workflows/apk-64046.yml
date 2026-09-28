@@ -40,7 +40,7 @@ jobs:
 
           # 64046 regressions: first-word preservation + zero-toggle update recovery.
           grep -q 'VAD_PRE_ROLL_MS = 400' app/src/main/kotlin/com/bydmate/app/voice/GigaAmAsrEngine.kt
-          grep -q 'private val cachedVad: VadHandle?' app/src/main/kotlin/com/bydmate/app/voice/GigaAmAsrEngine.kt
+          grep -q 'private var cachedVad: VadHandle?' app/src/main/kotlin/com/bydmate/app/voice/GigaAmAsrEngine.kt
           grep -q 'prependPrefix(utterancePrefix, rawSegment)' app/src/main/kotlin/com/bydmate/app/voice/GigaAmAsrEngine.kt
           grep -q 'android.intent.action.MY_PACKAGE_REPLACED' app/src/main/AndroidManifest.xml
           grep -q 'android:directBootAware="true"' app/src/main/AndroidManifest.xml
