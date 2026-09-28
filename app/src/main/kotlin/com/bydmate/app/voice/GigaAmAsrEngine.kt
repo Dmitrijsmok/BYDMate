@@ -143,6 +143,7 @@ internal class GigaAmAsrEngine(
     private val recognizerFactory: () -> RecognizerHandle = { RealRecognizerHandle(modelManager) },
     private val vadFactory: () -> VadHandle = { RealVadHandle(modelManager) },
     private val loadGuard: AsrLoadGuard? = null,
+    private val dilink3Optimizations: Boolean = false,
 ) : ContinuousAsr {
 
     // A tripped guard means the last loads aborted the whole process from native code
@@ -160,7 +161,10 @@ internal class GigaAmAsrEngine(
     @Volatile private var cachedVad: VadHandle? = null
     private val vadWarmupInFlight = AtomicBoolean(false)
 
-    override fun isWarm(): Boolean = cachedRecognizer != null && cachedVad != null
+    override fun isWarm(): Boolean =
+        if (dilink3Optimizations) cachedRecognizer != null && cachedVad != null else isReady()
+
+    override fun requiresWarmBeforeListening(): Boolean = dilink3Optimizations
 
     /** Drop the cached recognizer so the next session reloads the model from disk. Called when
      *  the model files change (re-download). The old handle is NOT closed here: an in-flight
@@ -185,7 +189,7 @@ internal class GigaAmAsrEngine(
     override fun warmUp() {
         if (!isReady()) return
         val recognizerReady = runCatching { obtainRecognizer() }.isSuccess
-        if (recognizerReady) runCatching { ensureCachedVad() }
+        if (dilink3Optimizations && recognizerReady) runCatching { ensureCachedVad() }
     }
 
     /** Single synchronized build point for the shared recognizer: warmUp() and transcribe()
@@ -248,14 +252,18 @@ internal class GigaAmAsrEngine(
         // call site into this engine, so the old unsynchronized check-then-act could have
         // double-loaded the model and orphaned one handle.
         val recognizer = obtainRecognizer()
-        // Take the already-built fresh VAD so PCM collection can begin immediately, then
-        // prepare another unused instance while this session is running.
-        val vad = takeVad()
-        prewarmNextVad()
+        val vad = if (dilink3Optimizations) {
+            // DiLink3: take the already-built fresh VAD so PCM collection starts immediately,
+            // then prepare another unused instance while this session is running.
+            takeVad().also { prewarmNextVad() }
+        } else {
+            // Upstream 3.19 behavior for every other platform.
+            buildVad()
+        }
         try {
             var speaking = false
             var silentMs = 0L
-            val preRoll = SpeechPreRoll(VAD_PRE_ROLL_SAMPLES)
+            val preRoll = if (dilink3Optimizations) SpeechPreRoll(VAD_PRE_ROLL_SAMPLES) else null
             var utterancePrefix = FloatArray(0)
 
             pcm.collect { shorts ->
@@ -267,11 +275,11 @@ internal class GigaAmAsrEngine(
                     if (!speaking) {
                         speaking = true
                         silentMs = 0L
-                        utterancePrefix = preRoll.take()
+                        utterancePrefix = preRoll?.take() ?: FloatArray(0)
                         emit(ContinuousAsrEvent.SpeechStart)
                     }
                 } else {
-                    if (!speaking) preRoll.append(frame)
+                    if (!speaking) preRoll?.append(frame)
                     silentMs += (shorts.size * 1000L) / SAMPLE_RATE
                     emit(ContinuousAsrEvent.SilenceTick(silentMs))
                 }
