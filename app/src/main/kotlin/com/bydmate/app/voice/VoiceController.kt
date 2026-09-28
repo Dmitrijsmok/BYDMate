@@ -78,6 +78,9 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
     @Volatile private var sessionJob: Job? = null
     // Android 10 head units: the press is waiting for the ASR warm-up (startContinuousSessionWhenWarm).
     @Volatile private var warmupJob: Job? = null
+    private val externalAliceDuckLock = Any()
+    @Volatile private var externalAliceDuckSaved: Int? = null
+    private val externalAliceDuckGeneration = AtomicInteger(0)
     @Volatile private var routingJob: Job? = null
     @Volatile private var cancellableAskJob: Job? = null
     // Busy drops are Log.i-only by contract (no journal/earcon/state change), so tests have no
@@ -103,6 +106,71 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
      * Used by VoiceAutomationActions to gate speak/agent_query actions.
      */
     fun sessionActive(): Boolean = listening.value || busy.get()
+
+    /** Preserve the field-proven hand-off used by the physical mic-button Alice route. */
+    fun beginExternalAssistantAudio() {
+        val saved = synchronized(externalAliceDuckLock) {
+            externalAliceDuckSaved ?: runCatching {
+                audioCapture.duckMusicForExternalAssistant()
+            }.getOrNull()?.also { externalAliceDuckSaved = it }
+        }
+        val generation = externalAliceDuckGeneration.incrementAndGet()
+        Log.i(TAG, "ALICE_EXTERNAL_DUCK begin saved=${saved} generation=${generation}")
+        scope.launch {
+            delay(EXTERNAL_ALICE_DUCK_TIMEOUT_MS)
+            if (externalAliceDuckGeneration.get() == generation) {
+                endExternalAliceDuck("safety_timeout")
+            }
+        }
+    }
+
+    fun endExternalAssistantAudio() = endExternalAliceDuck("launcher_finish")
+
+    private fun endExternalAliceDuck(reason: String) {
+        val saved = synchronized(externalAliceDuckLock) {
+            val value = externalAliceDuckSaved
+            externalAliceDuckSaved = null
+            value
+        }
+        externalAliceDuckGeneration.incrementAndGet()
+        if (saved != null) runCatching { audioCapture.restoreMusic(saved) }
+        Log.i(TAG, "ALICE_EXTERNAL_DUCK end reason=${reason} restored=${saved != null}")
+    }
+
+    /**
+     * Provider hand-off: never let Yandex Alice start while Local BYDMate still owns
+     * AudioRecord or TTS.
+     */
+    fun stopForExternalAssistant(): Boolean {
+        val wasActive = _listening.value || sessionJob?.isActive == true ||
+            warmupJob?.isActive == true || ttsEngine.speaking.value
+        warmupJob?.cancel()
+        warmupJob = null
+        if (_listening.value || sessionJob?.isActive == true) {
+            stopContinuousSession("alice")
+        } else {
+            runCatching { ttsEngine.stop() }
+        }
+        return wasActive
+    }
+
+    /**
+     * Safe part of the 64035 latency mechanism: only after a real microphone frame exists,
+     * warm local TTS and the agent in parallel. Never prewarm the network before capture.
+     */
+    private fun prewarmReplyPathAfterMicReady() {
+        Log.i(TAG, "reply prewarm: live microphone confirmed")
+        if (gate.ttsEnabled()) {
+            scope.launch(Dispatchers.IO) {
+                runCatching { ttsEngine.warmUp() }
+                    .onFailure { Log.w(TAG, "reply TTS prewarm failed", it) }
+            }
+        }
+        scope.launch(Dispatchers.IO) {
+            runCatching { agentOrchestrator.prewarm() }
+                .onFailure { Log.w(TAG, "reply agent prewarm failed", it) }
+        }
+    }
 
     /** Test seams, same rationale as [lastSpeakingSeenMs]: deterministic await conditions
      *  instead of fixed sleeps, no public API surface added. */
@@ -303,7 +371,8 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             val warm = continuousAsr.isWarm()
             Log.i(TAG, "warm-up before listening: ${waitedMs}ms warm=$warm")
             Trace.event(TraceArea.VOICE, "warm-wait", "ms" to waitedMs, "warm" to warm, by = cause)
-            if (gate.isEnabled()) {
+            // Cancelled meanwhile (stopForExternalAssistant: the Alice hand-off) = no local session.
+            if (gate.isEnabled() && currentCoroutineContext().isActive) {
                 runCatching { updateListeningOverlay(appStrings.get(R.string.voice_listening)) }
                 startContinuousSession(cause)
             } else {
@@ -343,10 +412,6 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         // below); once a car is known not to take it, the duck stays right here.
         val askFirmwareDuck = autoVoiceDuck.mayApply()
         val syncDuck = if (askFirmwareDuck) null else runCatching { audioCapture.duckMusic() }.getOrNull()
-        // Warm the model and online-voice connections while the driver is still speaking: a cold
-        // turn otherwise pays DNS + TLS on both hosts inside the reply latency.
-        runCatching { if (gate.ttsEnabled()) ttsEngine.prewarmNetwork() }
-        scope.launch { runCatching { agentOrchestrator.prewarm() } }
         sessionJob = scope.launch {
             val session = coroutineContext[Job]
             // Before the orb: the duck must not wait for the overlay (bounded by the duck's
@@ -358,6 +423,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             runCatching { showListeningOverlay(appStrings.get(R.string.voice_listening)) }
             var lastEventMs = System.currentTimeMillis()
             var wasAudible = false   // capture thread only
+            var replyPathWarmupStarted = false
             var micGated = false     // capture thread only
             val echoTail = EchoTailMeter() // capture thread only
             // Silence for the auto-stop: the agent's turn does not count (routing here, playback
@@ -402,6 +468,10 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                     gated
                 }
                     .filter { frame ->
+                        if (!replyPathWarmupStarted) {
+                            replyPathWarmupStarted = true
+                            prewarmReplyPathAfterMicReady()
+                        }
                         // Once a stop has been requested (see stopContinuousSession()) no further
                         // frames are forwarded to the recognizer, even while an in-flight utterance
                         // started before the stop is still being routed.
@@ -602,13 +672,38 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         // AgentOrchestrator.expectsFollowUp.
         val followUp = runCatching { agentOrchestrator.expectsFollowUp() }.getOrDefault(false)
         val res = if (followUp) Resolution.None(VoiceRefusal.AGENT_FOLLOWUP_WINDOW) else resolve(command)
-        heard(decodeMs, res.route, (res as? Resolution.None)?.reason)
-        _state.value = VoiceUiState.Thinking
-        if (res is Resolution.None) {
-            turn = turn.copy(agentReason = res.reason)
-            agentFallback(command, decodeMs)
+        val localReply = if (!followUp && res is Resolution.None) {
+            // Fallback after the built-in dictionary (VehicleQuestion): GigaAM-clipped read-only
+            // vehicle questions stay local. Anything ambiguous continues to the agent path.
+            LocalVehicleQuery.answer(command, gate.vehicleSnapshot())
         } else {
-            apply(res, command, decodeMs)
+            null
+        }
+        if (localReply != null) heard(decodeMs, "local_query")
+        else heard(decodeMs, res.route, (res as? Resolution.None)?.reason)
+        _state.value = VoiceUiState.Thinking
+        when {
+            localReply != null -> {
+                earcon.ok()
+                _state.value = VoiceUiState.AgentAnswer(localReply.text)
+                record(
+                    VoiceJournalEntry(
+                        transcript = command,
+                        route = VoiceJournalEntry.Route.NLU,
+                        detail = withDecodeMs(command, decodeMs),
+                        outcome = VoiceJournalEntry.Outcome.OK,
+                        answer = localReply.text,
+                        asrMs = decodeMs,
+                    ),
+                    "Local vehicle query: kind=${localReply.kind} transcript=\"$command\"",
+                )
+                announce("Голос", localReply.text, localReply.text)
+            }
+            res is Resolution.None -> {
+                turn = turn.copy(agentReason = res.reason)
+                agentFallback(command, decodeMs)
+            }
+            else -> apply(res, command, decodeMs)
         }
     }
 
@@ -1168,6 +1263,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         // Continuous session (Wave B): silence auto-stop. Wave P removed the hard session cap --
         // long conversations must never be cut off; silence is the only automatic exit.
         private const val SILENCE_AUTOSTOP_MS = 30_000L
+        private const val EXTERNAL_ALICE_DUCK_TIMEOUT_MS = 60_000L
 
         // Wave P play_music auto-close: how long to wait for the reply's playback to actually
         // begin (speaking=false -> true) before giving up and closing anyway. Covers offline

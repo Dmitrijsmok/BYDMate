@@ -762,8 +762,15 @@ class TrackingService : Service(), LocationListener {
                         com.bydmate.app.data.repository.SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT,
                         "")
                     if (pref.isNotEmpty()) {
+                        val disabled = pref == "true"
+                        // SteeringWheelKeyService reads this to route the wheel button to Alice
+                        // while the stock assistant is taken over.
+                        getSharedPreferences("voice", Context.MODE_PRIVATE)
+                            .edit()
+                            .putBoolean("alice_native_takeover", disabled)
+                            .apply()
                         com.bydmate.app.data.vehicle.NativeAssistant.setDisabled(
-                            helperClient, packageManager, pref == "true")
+                            helperClient, packageManager, disabled)
                     }
                 }
                 // Power down a cluster compositor left "on" by a car shutdown mid-projection —
