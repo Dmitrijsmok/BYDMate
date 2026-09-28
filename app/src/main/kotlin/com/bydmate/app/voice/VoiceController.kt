@@ -724,12 +724,36 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         // AgentOrchestrator.expectsFollowUp.
         val followUp = runCatching { agentOrchestrator.expectsFollowUp() }.getOrDefault(false)
         val res = if (followUp) Resolution.None(VoiceRefusal.AGENT_FOLLOWUP_WINDOW) else resolve(command)
-        _state.value = VoiceUiState.Thinking
-        if (res is Resolution.None) {
-            turn = turn.copy(agentReason = res.reason)
-            agentFallback(command, decodeMs)
+        val localReply = if (!followUp && res is Resolution.None) {
+            // Latency-critical read-only vehicle questions stay local. Anything ambiguous
+            // continues to the normal agent/OpenRouter path.
+            LocalVehicleQuery.answer(command, gate.vehicleSnapshot())
         } else {
-            apply(res, command, decodeMs)
+            null
+        }
+        _state.value = VoiceUiState.Thinking
+        when {
+            localReply != null -> {
+                earcon.ok()
+                _state.value = VoiceUiState.AgentAnswer(localReply.text)
+                record(
+                    VoiceJournalEntry(
+                        transcript = command,
+                        route = VoiceJournalEntry.Route.NLU,
+                        detail = withDecodeMs(command, decodeMs),
+                        outcome = VoiceJournalEntry.Outcome.OK,
+                        answer = localReply.text,
+                        asrMs = decodeMs,
+                    ),
+                    "Local vehicle query: kind=${localReply.kind} transcript=\"$command\"",
+                )
+                announce("Голос", localReply.text, localReply.text)
+            }
+            res is Resolution.None -> {
+                turn = turn.copy(agentReason = res.reason)
+                agentFallback(command, decodeMs)
+            }
+            else -> apply(res, command, decodeMs)
         }
     }
 
