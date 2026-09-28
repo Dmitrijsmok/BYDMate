@@ -99,7 +99,8 @@ class GigaAmSegmenterTest {
             FakeVadHandle.FrameScript(speech = false, segment = segment),
         ))
         val recognizer = FakeRecognizerHandle("температура снаружи")
-        val engine = GigaAmAsrEngine(readyModelManager(), { recognizer }, { vad })
+        val engine = GigaAmAsrEngine(
+            readyModelManager(), { recognizer }, { vad }, dilink3Optimizations = true)
         val quietOnset = ShortArray(320) { 1000 }
         val speech = ShortArray(320) { 5000 }
         val tail = ShortArray(320)
@@ -246,6 +247,7 @@ class GigaAmSegmenterTest {
                 vadCreations++
                 if (vadCreations == 1) warmedVad else FakeVadHandle()
             },
+            dilink3Optimizations = true,
         )
 
         engine.warmUp()
