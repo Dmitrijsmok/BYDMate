@@ -30,6 +30,18 @@ class SentenceChunker {
                     start = j + 1
                 }
                 i = j
+            } else if (c in SOFT_TERMINATORS &&
+                i - start + 1 >= MIN_SOFT_CHUNK &&
+                i + 1 < buf.length && buf[i + 1].isWhitespace()
+            ) {
+                emit(out, start, i + 1)
+                start = i + 1
+            } else if (i - start + 1 >= MAX_CHUNK && c.isWhitespace()) {
+                // Some models return long list-like answers with no sentence-ending dot until
+                // the very end. Do not make offline TTS synthesize the entire answer before
+                // playback starts: cut at a safe whitespace boundary.
+                emit(out, start, i)
+                start = i + 1
             }
             i++
         }
@@ -50,5 +62,8 @@ class SentenceChunker {
 
     private companion object {
         private val TERMINATORS = setOf('.', '!', '?', '…')
+        private val SOFT_TERMINATORS = setOf(';', ':')
+        private const val MIN_SOFT_CHUNK = 24
+        private const val MAX_CHUNK = 80
     }
 }
