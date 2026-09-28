@@ -73,6 +73,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
 
     private val busy = AtomicBoolean(false)
     @Volatile private var sessionJob: Job? = null
+    @Volatile private var warmupJob: Job? = null
     private val externalAliceDuckLock = Any()
     @Volatile private var externalAliceDuckSaved: Int? = null
     private val externalAliceDuckGeneration = AtomicInteger(0)
@@ -132,7 +133,10 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
      * AudioRecord or TTS.
      */
     fun stopForExternalAssistant(): Boolean {
-        val wasActive = _listening.value || sessionJob?.isActive == true || ttsEngine.speaking.value
+        val wasActive = _listening.value || sessionJob?.isActive == true ||
+            warmupJob?.isActive == true || ttsEngine.speaking.value
+        warmupJob?.cancel()
+        warmupJob = null
         if (_listening.value || sessionJob?.isActive == true) {
             stopContinuousSession()
         } else {
@@ -356,7 +360,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             return
         }
         if (continuousAsr.isReady()) {
-            startContinuousSession()
+            startLocalSessionWhenReady()
         } else {
             // GigaAM model missing: preserve the degraded UX the legacy path produced —
             // overlay + journal ERROR.
@@ -377,6 +381,33 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             scheduleIdleReset()
             scope.launch { announce("Голос", msg, msg) }
         }
+    }
+
+    /**
+     * Do not expose the listening state until both the GigaAM recognizer and the spare Silero
+     * VAD are hot. This keeps native model construction off the microphone acquisition path.
+     */
+    private fun startLocalSessionWhenReady() {
+        if (continuousAsr.isWarm()) {
+            startContinuousSession()
+            return
+        }
+        if (warmupJob?.isActive == true) return
+        warmupJob = scope.launch(Dispatchers.IO) {
+            try {
+                continuousAsr.warmUp()
+                if (canStartAfterWarmup()) startContinuousSession()
+            } finally {
+                warmupJob = null
+            }
+        }
+    }
+
+    private suspend fun canStartAfterWarmup(): Boolean {
+        if (!currentCoroutineContext().isActive) return false
+        if (!gate.isEnabled()) return false
+        if (!continuousAsr.isWarm()) return false
+        return !_listening.value
     }
 
     /** Continuous PTT-toggled session (Wave B): one long-lived mic capture feeds VAD-segmented
