@@ -1,0 +1,82 @@
+name: APK 64046 ASR and Update Recovery
+
+on:
+  push:
+    branches:
+      - release/64046-asr-preroll-update-recovery
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Verify 64046 invariants
+        run: |
+          grep -q 'versionCode = 64046' app/build.gradle.kts
+          grep -q 'versionName = "3.19.0"' app/build.gradle.kts
+
+          # Preserve the four 64045 invariants.
+          grep -q 'BYD_STREAM_NAVI = 14' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt
+          grep -q 'private val playbackWorker = Executors.newSingleThreadExecutor' app/src/main/kotlin/com/bydmate/app/voice/SherpaTtsEngine.kt
+          grep -q 'reply prewarm: live microphone confirmed' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt
+          if grep -q 'ttsEngine.prewarmNetwork()' app/src/main/kotlin/com/bydmate/app/voice/VoiceController.kt; then
+            echo 'Unsafe pre-capture network prewarm is present'
+            exit 1
+          fi
+          grep -q 'android.R.drawable.ic_btn_speak_now' app/src/main/kotlin/com/bydmate/app/ui/overlay/ListeningOverlay.kt
+          grep -q 'alice_native_takeover' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyService.kt
+          grep -q '304 -> if (isDown) VoiceKeyDecision.TRIGGER' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt
+          grep -q '327 -> VoiceKeyDecision.CONSUME' app/src/main/kotlin/com/bydmate/app/cluster/SteeringWheelKeyDecision.kt
+
+          # 64046 regressions: first-word preservation + zero-toggle update recovery.
+          grep -q 'VAD_PRE_ROLL_MS = 400' app/src/main/kotlin/com/bydmate/app/voice/GigaAmAsrEngine.kt
+          grep -q 'private val cachedVad: VadHandle?' app/src/main/kotlin/com/bydmate/app/voice/GigaAmAsrEngine.kt
+          grep -q 'prependPrefix(utterancePrefix, rawSegment)' app/src/main/kotlin/com/bydmate/app/voice/GigaAmAsrEngine.kt
+          grep -q 'android.intent.action.MY_PACKAGE_REPLACED' app/src/main/AndroidManifest.xml
+          grep -q 'android:directBootAware="true"' app/src/main/AndroidManifest.xml
+          grep -q 'Intent.ACTION_MY_PACKAGE_REPLACED' app/src/main/kotlin/com/bydmate/app/service/BootReceiver.kt
+          grep -q 'ALICE4_5_VRASSISTANT_BLOCK startup=' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
+          grep -q 'ensureStarServiceRunning("startup")' app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt
+
+      - name: Targeted voice regression tests
+        run: |
+          ./gradlew :app:testDebugUnitTest             --tests com.bydmate.app.voice.GigaAmSegmenterTest             --tests com.bydmate.app.voice.SherpaTtsEngineTest             --tests com.bydmate.app.voice.VoiceControllerSessionTest             --tests com.bydmate.app.voice.VoiceControllerPlaybackBargeInTest             --tests com.bydmate.app.voice.AudioCaptureDuckTest             --tests com.bydmate.app.cluster.SteeringWheelKeyDecisionVoiceTest             --tests com.bydmate.app.voice.online.TtsRouterTest             --tests com.bydmate.app.voice.online.TtsRouterInFlightTest             --stacktrace
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Stage APK
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/debug/*.apk out/BYDMate-3.19.0-64046-ASR-UpdateRecovery-debug.apk
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: BYDMate-3.19.0-64046-ASR-UpdateRecovery-debug
+          path: out/BYDMate-3.19.0-64046-ASR-UpdateRecovery-debug.apk
+          retention-days: 2
+
+      - name: Export Android signing tools
+        run: |
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          mkdir -p signing-tools/lib signing-tools/lib64
+          cp "$BT/apksigner" "$BT/zipalign" signing-tools/
+          cp "$BT/lib/apksigner.jar" signing-tools/lib/
+          cp "$BT/lib64/libc++_shared.so" signing-tools/lib64/ 2>/dev/null || true
+          chmod +x signing-tools/apksigner signing-tools/zipalign
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-signing-tools-64046
+          path: signing-tools
+          retention-days: 2
