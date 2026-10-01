@@ -25,7 +25,36 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: bydmate-navdebug-keystore-v1
+
+      - name: Ensure persistent debug signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -noprompt \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android -alias androiddebugkey -keypass android \
+              -dname "CN=BYDMate Nav Debug,O=BYDMate,C=LV" \
+              -keyalg RSA -keysize 2048 -validity 10000
+          fi
+
       - uses: gradle/actions/setup-gradle@v5
+
+      - name: Verify debug clone isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'applicationIdSuffix = ".debug"' app/build.gradle.kts
+          grep -q 'versionNameSuffix = "-navdebug"' app/build.gradle.kts
+          grep -q 'if (BuildConfig.DEBUG) "bydmate_dbg" else "bydmate_helper"' \
+            app/src/main/kotlin/com/bydmate/app/helper/HelperBinderProtocol.kt
+          grep -q 'BuildConfig.APPLICATION_ID' \
+            app/src/main/kotlin/com/bydmate/app/helper/HelperBinderProtocol.kt
 
       - name: Navigation regression tests
         run: |
@@ -51,8 +80,10 @@ jobs:
           APK="$(find app/build/outputs/apk/debug -name '*.apk' -print -quit)"
           test -n "$APK"
           mkdir -p bundle/apk bundle/signing-tools/lib
-          cp "$APK" bundle/apk/BYDMate-3.19.4-64049-NavDropdown-ci-debug.apk
-          sha256sum bundle/apk/BYDMate-3.19.4-64049-NavDropdown-ci-debug.apk
+          cp "$APK" bundle/apk/BYDMate-3.19.4-64049-NavDropdown-DebugClone.apk
+          sha256sum bundle/apk/BYDMate-3.19.4-64049-NavDropdown-DebugClone.apk
+          "$BT/aapt" dump badging bundle/apk/BYDMate-3.19.4-64049-NavDropdown-DebugClone.apk | \
+            grep -E "package: name='com\.bydmate\.app\.debug'|application-label:'BYDMate Debug'"
 
           BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
           cp "$BT/apksigner" "$BT/zipalign" "$BT/aapt" bundle/signing-tools/
@@ -61,7 +92,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: BYDMate-3.19.4-64049-NavDropdown-ci
+          name: BYDMate-3.19.4-64049-NavDropdown-DebugClone
           path: bundle
           if-no-files-found: error
           retention-days: 14
