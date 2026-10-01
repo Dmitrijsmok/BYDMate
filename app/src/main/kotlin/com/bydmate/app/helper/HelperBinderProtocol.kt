@@ -1,6 +1,7 @@
 package com.bydmate.app.helper
 
 import android.os.IBinder
+import com.bydmate.app.BuildConfig
 
 /**
  * Wire contract shared by the in-app binder client (HelperClientImpl) and the
@@ -71,8 +72,10 @@ import android.os.IBinder
  * status/value carry the raw autoservice transact result (see HelperDaemon).
  */
 object HelperBinderProtocol {
-    const val SERVICE_NAME = "bydmate_helper"
-    const val PROCESS_NAME = "bydmate_helper"   // app_process --nice-name + ps lookup
+    // Debug builds coexist with the public app, so their shell daemon must not share the
+    // ServiceManager name/process/lock with com.bydmate.app.
+    val SERVICE_NAME: String = if (BuildConfig.DEBUG) "bydmate_dbg" else "bydmate_helper"
+    val PROCESS_NAME: String = SERVICE_NAME   // app_process --nice-name + ps lookup
     const val DESCRIPTOR = "com.bydmate.app.helper.IHelper"
 
     /**
@@ -86,7 +89,8 @@ object HelperBinderProtocol {
      * THIS spawn, the binder's interface descriptor, and — afterwards — the version the daemon
      * reports over TX_GET_VERSION.
      */
-    const val ACTION_BINDER = "com.bydmate.app.helper.BINDER"
+    val ACTION_BINDER: String = "${BuildConfig.APPLICATION_ID}.helper.BINDER"
+    val ACTION_RECOVER_START: String = "${BuildConfig.APPLICATION_ID}.action.RECOVER_START"
     const val RECEIVER_CLASS = "com.bydmate.app.helper.HelperBinderReceiver"
 
     /** Extras of [ACTION_BINDER]: one Bundle (a Binder cannot be an Intent extra directly). */
@@ -542,16 +546,16 @@ object HelperBinderProtocol {
     const val PANE_TYPE_STANDARD = 1
     const val PANE_TYPE_RECENTS = 3
 
-    /** Our own package — target of the narrow grantOverlayPermission appops call. */
-    const val APP_PACKAGE = "com.bydmate.app"
+    /** Our own installed package — debug builds use com.bydmate.app.debug. */
+    val APP_PACKAGE: String = BuildConfig.APPLICATION_ID
 
     /**
      * Flattened ComponentName of our steering-wheel accessibility service — appended
      * (never clobbering existing entries) to Settings.Secure enabled_accessibility_services
      * by the narrow enableAccessibilityService daemon op, since DiLink has no a11y settings UI.
      */
-    const val ACCESSIBILITY_SERVICE_COMPONENT =
-        "com.bydmate.app/com.bydmate.app.cluster.SteeringWheelKeyService"
+    val ACCESSIBILITY_SERVICE_COMPONENT: String =
+        "${BuildConfig.APPLICATION_ID}/com.bydmate.app.cluster.SteeringWheelKeyService"
 
     /**
      * Flattened ComponentName of our notification-listener stub — granted by the narrow
@@ -560,6 +564,6 @@ object HelperBinderProtocol {
      * Settings.Secure enabled_notification_listeners on firmwares without cmd notification.
      * Grants MediaSessionManager.getActiveSessions() access to our process for Yandex Music.
      */
-    const val NOTIFICATION_LISTENER_COMPONENT =
-        "com.bydmate.app/com.bydmate.app.media.MediaSessionListenerService"
+    val NOTIFICATION_LISTENER_COMPONENT: String =
+        "${BuildConfig.APPLICATION_ID}/com.bydmate.app.media.MediaSessionListenerService"
 }
