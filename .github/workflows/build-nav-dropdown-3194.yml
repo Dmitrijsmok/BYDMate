@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: nav-dropdown-3194-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify-and-build:
     runs-on: ubuntu-latest
