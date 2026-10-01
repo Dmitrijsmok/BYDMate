@@ -1125,8 +1125,8 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
      * Home/Work shortcut, which now can land on Maps as well.
      */
     fun autoGoSupported(payload: JSONObject): Boolean =
-        !payload.optBoolean("show", false) && payload.optString("query").isBlank() && !willOpenMaps(payload) &&
-            (payload.optString("shortcut").isNotBlank() || resolveNavigator().first == RouteNavigatorUris.YANDEX)
+        !payload.optBoolean("show", false) && payload.optString("query").isBlank() &&
+            !willOpenMaps(payload) && resolveNavigator().first == RouteNavigatorUris.YANDEX
 
     /** Whether [navigate] will press «Поехали» itself for [payload]: asked for, and possible here. */
     fun autoGoWillRun(payload: JSONObject): Boolean = autoGoRequested(payload) && autoGoSupported(payload)
@@ -1168,6 +1168,18 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
             Log.i(TAG, "navigate: yandex maps not installed, falling back to yandex")
             return RouteNavigatorUris.YANDEX to appStrings.get(R.string.dispatch_maps_fallback)
         }
+        val wazeFellBack = chosen == RouteNavigatorUris.WAZE &&
+            !isPackageInstalled(RouteNavigatorUris.WAZE_PACKAGE)
+        if (wazeFellBack) {
+            Log.i(TAG, "navigate: waze not installed, falling back to yandex")
+            return RouteNavigatorUris.YANDEX to appStrings.get(R.string.dispatch_waze_fallback)
+        }
+        val googleMapsFellBack = chosen == RouteNavigatorUris.GOOGLE_MAPS &&
+            installedGoogleMapsPackage() == null
+        if (googleMapsFellBack) {
+            Log.i(TAG, "navigate: google maps not installed, falling back to yandex")
+            return RouteNavigatorUris.YANDEX to appStrings.get(R.string.dispatch_google_maps_fallback)
+        }
         return chosen to null
     }
 
@@ -1180,6 +1192,24 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         // whole command set, Home/Work shortcut included, into Yandex Maps.
         if (isMapsRequest(payload) || navigator == RouteNavigatorUris.MAPS) {
             return navigateMaps(payload, shortcut)
+        }
+        if (shortcut != null && navigator == RouteNavigatorUris.WAZE) {
+            if (shortcut !in setOf("home", "work")) {
+                return DispatchResult(false, appStrings.get(R.string.dispatch_shortcut_unknown, shortcut))
+            }
+            return startNavigate(
+                navigator,
+                RouteNavigatorUris.MODE_ROUTE,
+                "https://waze.com/ul?favorite=$shortcut&navigate=yes",
+                "navigate_waze_shortcut:$shortcut",
+                fallbackReason,
+            )
+        }
+        if (shortcut != null && navigator == RouteNavigatorUris.GOOGLE_MAPS) {
+            return DispatchResult(
+                false,
+                appStrings.get(R.string.dispatch_google_maps_shortcut_unsupported),
+            )
         }
         // Navigator's own saved Home/Work: exported shortcut actions on its MapActivity
         // resolve the address internally, so no coordinates are needed. Undocumented
@@ -1237,6 +1267,12 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
      */
     fun willOpenMaps(payload: JSONObject): Boolean =
         isMapsRequest(payload) || resolveNavigator().first == RouteNavigatorUris.MAPS
+
+    fun willOpenWaze(payload: JSONObject): Boolean =
+        !isMapsRequest(payload) && resolveNavigator().first == RouteNavigatorUris.WAZE
+
+    fun willOpenGoogleMaps(payload: JSONObject): Boolean =
+        !isMapsRequest(payload) && resolveNavigator().first == RouteNavigatorUris.GOOGLE_MAPS
 
     /**
      * The app="maps" mirror of [sendNavigateIntent] on Yandex Maps' own yandexmaps:// dialect
@@ -1306,8 +1342,10 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         Log.i(TAG, "navigate: app=$navigator mode=$mode uri=${LinkRedaction.forLog(uri)}")
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (navigator == RouteNavigatorUris.DGIS) {
-            intent.setPackage(RouteNavigatorUris.DGIS_PACKAGE)
+        when (navigator) {
+            RouteNavigatorUris.DGIS -> intent.setPackage(RouteNavigatorUris.DGIS_PACKAGE)
+            RouteNavigatorUris.WAZE -> intent.setPackage(RouteNavigatorUris.WAZE_PACKAGE)
+            RouteNavigatorUris.GOOGLE_MAPS -> installedGoogleMapsPackage()?.let(intent::setPackage)
         }
         val result = tryStartActivity(intent, label)
         Log.i(TAG, "navigate: intent sent label=${LinkRedaction.forLog(label)} ok=${result.success}")
@@ -1401,6 +1439,9 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         if (result.success) maybeMinimize(payload)
         return result
     }
+
+    private fun installedGoogleMapsPackage(): String? =
+        RouteNavigatorUris.GOOGLE_MAPS_PACKAGES.firstOrNull(::isPackageInstalled)
 
     private fun isPackageInstalled(pkg: String): Boolean =
         context.packageManager.getLaunchIntentForPackage(pkg) != null
