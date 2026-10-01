@@ -1831,6 +1831,9 @@
     <string name="dispatch_phone_missing">未设置 phone</string>
     <string name="dispatch_dgis_fallback">未安装 2GIS，已打开 Yandex 导航</string>
     <string name="dispatch_maps_fallback">未安装 Yandex 地图，已打开 Yandex 导航</string>
+    <string name="dispatch_waze_fallback">未安装 Waze，已打开 Yandex 导航</string>
+    <string name="dispatch_google_maps_fallback">未安装 Google Maps，已打开 Yandex 导航</string>
+    <string name="dispatch_google_maps_shortcut_unsupported">Google Maps：暂不支持“家/工作地点”快捷路线</string>
     <string name="dispatch_shortcut_unknown">未知 shortcut：%1$s</string>
     <string name="dispatch_coords_missing">未设置 lat/lon</string>
     <string name="dispatch_url_missing">未设置 url</string>
