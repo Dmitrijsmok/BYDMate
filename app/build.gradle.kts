@@ -32,6 +32,7 @@ android {
         targetSdk = 29
         versionCode = 64049
         versionName = "3.19.4"
+        manifestPlaceholders["appLabel"] = "BYDMate"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -51,6 +52,10 @@ android {
 
     buildTypes {
         debug {
+            // Parallel test build: install next to the author's com.bydmate.app without replacing it.
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-navdebug"
+            manifestPlaceholders["appLabel"] = "BYDMate Debug"
             if (keystorePropsFile.exists()) {
                 signingConfig = signingConfigs.getByName("release")
             }
