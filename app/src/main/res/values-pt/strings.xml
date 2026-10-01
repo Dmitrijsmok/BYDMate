@@ -1713,6 +1713,9 @@
     <string name="dispatch_phone_missing">phone não definido</string>
     <string name="dispatch_dgis_fallback">2GIS não está instalado, foi aberto o Yandex Navigator</string>
     <string name="dispatch_maps_fallback">Yandex Maps não está instalado, foi aberto o Yandex Navigator</string>
+    <string name="dispatch_waze_fallback">Waze não está instalado, foi aberto o Yandex Navigator</string>
+    <string name="dispatch_google_maps_fallback">Google Maps não está instalado, foi aberto o Yandex Navigator</string>
+    <string name="dispatch_google_maps_shortcut_unsupported">Google Maps: os atalhos Casa/Trabalho ainda não são compatíveis</string>
     <string name="dispatch_shortcut_unknown">shortcut desconhecido: %1$s</string>
     <string name="dispatch_coords_missing">lat/lon não definidos</string>
     <string name="dispatch_url_missing">url não definida</string>
