@@ -280,7 +280,7 @@ data class SettingsUiState(
     val agentName: String = "",
     val agentPersona: String = AgentPersona.NAVIGATOR.id,
     val agentGender: String = "m",
-    /** #190: which map app the navigate action opens — "yandex" (default) or "dgis". */
+    /** Which map app the navigate action opens. Yandex Navigator remains the default. */
     val routeNavigator: String = com.bydmate.app.data.automation.RouteNavigatorUris.YANDEX,
     /** Long-term facts the agent remembered about the driver (DriverMemory). */
     val agentMemoryFacts: List<String> = emptyList(),
@@ -1585,7 +1585,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
     }
 
     /**
-     * Picks the map app the navigate action opens (#190, #200): "yandex" (default), "dgis" or "maps".
+     * Picks the map app the navigate action opens. Yandex Navigator remains the default.
      * Persisted in the same SharedPreferences("voice") file as the other agent settings, which
      * is where [com.bydmate.app.data.automation.ActionDispatcher] reads it on every route.
      */
