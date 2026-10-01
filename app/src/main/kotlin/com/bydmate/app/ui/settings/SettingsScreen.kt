@@ -3305,23 +3305,27 @@ private fun VoiceSettingsContent(
                 onSelect = { viewModel.setAgentGender(genderIds[it]) },
             )
             SettingDivider()
-            // #190/#200: the map app every route/search command opens (voice agent and automation).
-            val routeNavigatorIds = listOf(
-                com.bydmate.app.data.automation.RouteNavigatorUris.YANDEX,
-                com.bydmate.app.data.automation.RouteNavigatorUris.DGIS,
-                com.bydmate.app.data.automation.RouteNavigatorUris.MAPS,
-            )
-            SettingChipRow(
-                title = stringResource(R.string.settings_route_navigator_label),
-                description = stringResource(R.string.settings_route_navigator_hint),
-                options = listOf(
+            // One compact selector keeps the row usable as supported navigators grow.
+            val routeNavigatorOptions = listOf(
+                com.bydmate.app.data.automation.RouteNavigatorUris.YANDEX to
                     stringResource(R.string.settings_route_navigator_yandex),
-                    stringResource(R.string.settings_route_navigator_dgis),
+                com.bydmate.app.data.automation.RouteNavigatorUris.MAPS to
                     stringResource(R.string.settings_route_navigator_maps),
-                ),
-                selectedIndex = routeNavigatorIds.indexOf(state.routeNavigator).coerceAtLeast(0),
-                onSelect = { viewModel.setRouteNavigator(routeNavigatorIds[it]) },
+                com.bydmate.app.data.automation.RouteNavigatorUris.DGIS to
+                    stringResource(R.string.settings_route_navigator_dgis),
+                com.bydmate.app.data.automation.RouteNavigatorUris.WAZE to
+                    stringResource(R.string.settings_route_navigator_waze),
+                com.bydmate.app.data.automation.RouteNavigatorUris.GOOGLE_MAPS to
+                    stringResource(R.string.settings_route_navigator_google_maps),
             )
+            ConnDropdown(
+                label = stringResource(R.string.settings_route_navigator_label),
+                options = routeNavigatorOptions,
+                selectedId = state.routeNavigator,
+                allowNone = false,
+                onSelect = viewModel::setRouteNavigator,
+            )
+            SettingHint(stringResource(R.string.settings_route_navigator_hint))
         }
     }
 
