@@ -23,27 +23,6 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v5
 
-      - name: Restore permanent signing key
-        shell: bash
-        env:
-          KEYSTORE_B64: ${{ secrets.BYDMATE_KEYSTORE_BASE64 }}
-          STORE_PASSWORD: ${{ secrets.BYDMATE_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.BYDMATE_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.BYDMATE_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          test -n "$KEYSTORE_B64"
-          test -n "$STORE_PASSWORD"
-          test -n "$KEY_ALIAS"
-          test -n "$KEY_PASSWORD"
-          printf '%s' "$KEYSTORE_B64" | base64 --decode > app/bydmate-release.jks
-          cat > keystore.properties <<EOF
-          storeFile=bydmate-release.jks
-          storePassword=$STORE_PASSWORD
-          keyAlias=$KEY_ALIAS
-          keyPassword=$KEY_PASSWORD
-          EOF
-
       - name: Navigation regression tests
         run: |
           ./gradlew :app:testDebugUnitTest \
@@ -58,39 +37,27 @@ jobs:
       - name: detekt
         run: ./gradlew :app:detekt --stacktrace
 
-      - name: Build signed debug APK
+      - name: Build debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
-      - name: Verify permanent APK signer
+      - name: Stage APK and signing tools
         shell: bash
-        env:
-          STORE_PASSWORD: ${{ secrets.BYDMATE_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.BYDMATE_KEY_ALIAS }}
         run: |
           set -euo pipefail
-          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
           APK="$(find app/build/outputs/apk/debug -name '*.apk' -print -quit)"
           test -n "$APK"
-          "$BT/apksigner" verify --verbose --print-certs "$APK"
-          APK_SHA="$("$BT/apksigner" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]')"
-          KEY_SHA="$(LC_ALL=C keytool -list -v -keystore app/bydmate-release.jks -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" | sed -n 's/^[[:space:]]*SHA256: //p' | head -1 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
-          test -n "$APK_SHA"
-          test -n "$KEY_SHA"
-          test "$APK_SHA" = "$KEY_SHA"
-          echo "Verified signer SHA-256: $APK_SHA"
+          mkdir -p bundle/apk bundle/signing-tools/lib
+          cp "$APK" bundle/apk/BYDMate-3.19.4-64049-NavDropdown-ci-debug.apk
+          sha256sum bundle/apk/BYDMate-3.19.4-64049-NavDropdown-ci-debug.apk
 
-      - name: Stage APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p out
-          APK="$(find app/build/outputs/apk/debug -name '*.apk' -print -quit)"
-          cp "$APK" out/BYDMate-3.19.4-64049-NavDropdown-debug.apk
-          sha256sum out/BYDMate-3.19.4-64049-NavDropdown-debug.apk
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          cp "$BT/apksigner" "$BT/zipalign" "$BT/aapt" bundle/signing-tools/
+          cp "$BT/lib/apksigner.jar" bundle/signing-tools/lib/
+          chmod +x bundle/signing-tools/apksigner bundle/signing-tools/zipalign bundle/signing-tools/aapt
 
       - uses: actions/upload-artifact@v7
         with:
-          name: BYDMate-3.19.4-64049-NavDropdown-debug
-          path: out/BYDMate-3.19.4-64049-NavDropdown-debug.apk
+          name: BYDMate-3.19.4-64049-NavDropdown-ci
+          path: bundle
           if-no-files-found: error
           retention-days: 14
