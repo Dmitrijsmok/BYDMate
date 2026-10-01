@@ -1184,33 +1184,16 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
     }
 
     private fun sendNavigateIntent(payload: JSONObject, shortcut: String?): DispatchResult {
-        // #190/#200: which map app the user picked for routes and map search. 2GIS or Maps that
-        // is not installed falls back to Yandex Navigator for this action, and says so in the
-        // result reason.
+        // #190/#200: which map app the user picked for routes and map search. A selected app
+        // that is not installed falls back to Yandex Navigator for this action and says so in
+        // the result reason.
         val (navigator, fallbackReason) = resolveNavigator()
         // app="maps" (voice: «…в Яндекс Картах») or Maps as the settings default mirror the
         // whole command set, Home/Work shortcut included, into Yandex Maps.
         if (isMapsRequest(payload) || navigator == RouteNavigatorUris.MAPS) {
             return navigateMaps(payload, shortcut)
         }
-        if (shortcut != null && navigator == RouteNavigatorUris.WAZE) {
-            if (shortcut !in setOf("home", "work")) {
-                return DispatchResult(false, appStrings.get(R.string.dispatch_shortcut_unknown, shortcut))
-            }
-            return startNavigate(
-                navigator,
-                RouteNavigatorUris.MODE_ROUTE,
-                "https://waze.com/ul?favorite=$shortcut&navigate=yes",
-                "navigate_waze_shortcut:$shortcut",
-                fallbackReason,
-            )
-        }
-        if (shortcut != null && navigator == RouteNavigatorUris.GOOGLE_MAPS) {
-            return DispatchResult(
-                false,
-                appStrings.get(R.string.dispatch_google_maps_shortcut_unsupported),
-            )
-        }
+        alternateNavigatorShortcut(navigator, shortcut, fallbackReason)?.let { return it }
         // Navigator's own saved Home/Work: exported shortcut actions on its MapActivity
         // resolve the address internally, so no coordinates are needed. Undocumented
         // (launcher-shortcut contract); tryStartActivity degrades to a clear error if
@@ -1253,6 +1236,34 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
             RouteNavigatorUris.route(navigator, lat, lon),
             "navigate:$lat,$lon", fallbackReason,
         )
+    }
+
+    private fun alternateNavigatorShortcut(
+        navigator: String,
+        shortcut: String?,
+        fallbackReason: String?,
+    ): DispatchResult? {
+        if (shortcut == null) return null
+        return when (navigator) {
+            RouteNavigatorUris.WAZE -> {
+                if (shortcut !in setOf("home", "work")) {
+                    DispatchResult(false, appStrings.get(R.string.dispatch_shortcut_unknown, shortcut))
+                } else {
+                    startNavigate(
+                        navigator,
+                        RouteNavigatorUris.MODE_ROUTE,
+                        "https://waze.com/ul?favorite=$shortcut&navigate=yes",
+                        "navigate_waze_shortcut:$shortcut",
+                        fallbackReason,
+                    )
+                }
+            }
+            RouteNavigatorUris.GOOGLE_MAPS -> DispatchResult(
+                false,
+                appStrings.get(R.string.dispatch_google_maps_shortcut_unsupported),
+            )
+            else -> null
+        }
     }
 
     /** Per-command target of a navigate payload: Maps only when the driver named it. */
