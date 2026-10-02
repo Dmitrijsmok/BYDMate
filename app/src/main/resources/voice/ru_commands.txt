@@ -29,6 +29,7 @@
 #                       the phrase to the agent
 #   MUSIC               Yandex Music's personal mix («Моя волна»), as the agent's play_music
 #                       starts it with no query
+#   NAVIGATOR           open the map application selected in Voice settings
 # Every template phrase has a row in app/src/test/resources/voice/ru_commands_golden.tsv.
 
 # ---- Verbs ---------------------------------------------------------------------------------
@@ -283,6 +284,12 @@ solo громкость [на] {vol} [<pct_word>] => VOL {vol}
 rule yandex_music: яндекс (музыку|музыка|мьюзик)
 (включи|запусти|открой|поставь) <yandex_music> => MUSIC
 solo <yandex_music> => MUSIC
+
+# ---- Navigator -----------------------------------------------------------------------------
+# A plain launch stays local. Route/search requests still belong to the agent because they may
+# need geocoding, places and destination context.
+(открой|открыть|запусти|запустить|включи|включить) (навигатор|навигацию) => NAVIGATOR
+solo навигатор => NAVIGATOR
 
 # ---- Locks and trunk -----------------------------------------------------------------------
 # "закрой дверь" said to a passenger is not addressed to the car: only "машину" and the lock
