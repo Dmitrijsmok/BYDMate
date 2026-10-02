@@ -30,8 +30,9 @@ android {
         // on DiLink Android 12 (requestLegacyExternalStorage works).
         // targetSdk 30+ would break listFiles() on /storage/emulated/0/energydata/
         targetSdk = 29
-        versionCode = 498
+        versionCode = 64050
         versionName = "3.19.5"
+        manifestPlaceholders["appLabel"] = "BYDMate"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -50,6 +51,15 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Parallel test build: install next to the author's com.bydmate.app without replacing it.
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-navdebug"
+            manifestPlaceholders["appLabel"] = "BYDMate Debug"
+            if (keystorePropsFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
         release {
             signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = true
