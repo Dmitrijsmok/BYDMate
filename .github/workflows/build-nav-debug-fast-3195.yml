@@ -1,0 +1,72 @@
+name: Fast 3.19.5 navigator debug APK
+
+on:
+  push:
+    branches:
+      - feat/navigation-dropdown-v3.19.5
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nav-debug-fast-3195-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: bydmate-navdebug-keystore-v1
+
+      - name: Ensure persistent debug signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -noprompt \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android -alias androiddebugkey -keypass android \
+              -dname "CN=BYDMate Nav Debug,O=BYDMate,C=LV" \
+              -keyalg RSA -keysize 2048 -validity 10000
+          fi
+          keytool -list -v -keystore "$HOME/.android/debug.keystore" \
+            -storepass android -alias androiddebugkey | grep -E 'Owner:|SHA256:'
+
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Verify and stage APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -name '*.apk' -print -quit)"
+          test -n "$APK"
+          mkdir -p out
+          cp "$APK" out/BYDMate-3.19.5-64050-NavDropdown-DebugClone.apk
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          "$BT/aapt" dump badging out/BYDMate-3.19.5-64050-NavDropdown-DebugClone.apk | \
+            grep -E "package: name='com\.bydmate\.app\.debug'|versionCode='64050'|application-label:'BYDMate Debug'"
+          "$BT/apksigner" verify --verbose --print-certs \
+            out/BYDMate-3.19.5-64050-NavDropdown-DebugClone.apk
+          sha256sum out/BYDMate-3.19.5-64050-NavDropdown-DebugClone.apk
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: BYDMate-3.19.5-64050-NavDropdown-DebugClone-fast
+          path: out/BYDMate-3.19.5-64050-NavDropdown-DebugClone.apk
+          retention-days: 14
