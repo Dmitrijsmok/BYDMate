@@ -34,6 +34,7 @@ object RuGoldenCorpus {
         is ParseResult.Volume -> "VOL:" + result.payload
         is ParseResult.Ask -> "ASK:" + result.question.id
         ParseResult.Music -> "MUSIC"
+        ParseResult.Navigator -> "NAVIGATOR"
         ParseResult.Unrecognized -> UNRECOGNIZED
     }
 
