@@ -25,25 +25,29 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: bydmate-navdebug-keystore-v1
-
-      - name: Ensure persistent debug signing key
+      - name: Restore repository signing key
         shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.BYDMATE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.BYDMATE_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.BYDMATE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.BYDMATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.android"
-          if [ ! -f "$HOME/.android/debug.keystore" ]; then
-            keytool -genkeypair -noprompt \
-              -keystore "$HOME/.android/debug.keystore" \
-              -storepass android -alias androiddebugkey -keypass android \
-              -dname "CN=BYDMate Nav Debug,O=BYDMate,C=LV" \
-              -keyalg RSA -keysize 2048 -validity 10000
-          fi
-          keytool -list -v -keystore "$HOME/.android/debug.keystore" \
-            -storepass android -alias androiddebugkey | grep -E 'Owner:|SHA256:'
+          test -n "$KEYSTORE_B64"
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_ALIAS"
+          test -n "$KEY_PASSWORD"
+          KEYSTORE="$RUNNER_TEMP/bydmate-signing.jks"
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$KEYSTORE"
+          cat > keystore.properties <<EOF
+          storeFile=$KEYSTORE
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+          keytool -list -v -keystore "$KEYSTORE" -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" | \
+            grep -E 'Owner:|SHA256:'
 
       - uses: gradle/actions/setup-gradle@v5
 
@@ -57,16 +61,16 @@ jobs:
           APK="$(find app/build/outputs/apk/debug -name '*.apk' -print -quit)"
           test -n "$APK"
           mkdir -p out
-          cp "$APK" out/BYDMate-3.19.5-64050-NavDropdown-DebugClone.apk
+          cp "$APK" out/BYDMate-3.19.5-64051-NavDropdown-DebugClone.apk
           BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
-          "$BT/aapt" dump badging out/BYDMate-3.19.5-64050-NavDropdown-DebugClone.apk | \
-            grep -E "package: name='com\.bydmate\.app\.debug'|versionCode='64050'|application-label:'BYDMate Debug'"
+          "$BT/aapt" dump badging out/BYDMate-3.19.5-64051-NavDropdown-DebugClone.apk | \
+            grep -E "package: name='com\.bydmate\.app\.debug'|versionCode='64051'|application-label:'BYDMate Debug'"
           "$BT/apksigner" verify --verbose --print-certs \
-            out/BYDMate-3.19.5-64050-NavDropdown-DebugClone.apk
-          sha256sum out/BYDMate-3.19.5-64050-NavDropdown-DebugClone.apk
+            out/BYDMate-3.19.5-64051-NavDropdown-DebugClone.apk
+          sha256sum out/BYDMate-3.19.5-64051-NavDropdown-DebugClone.apk
 
       - uses: actions/upload-artifact@v7
         with:
-          name: BYDMate-3.19.5-64050-NavDropdown-DebugClone-fast
-          path: out/BYDMate-3.19.5-64050-NavDropdown-DebugClone.apk
+          name: BYDMate-3.19.5-64051-NavDropdown-GitHubSigned
+          path: out/BYDMate-3.19.5-64051-NavDropdown-DebugClone.apk
           retention-days: 14
