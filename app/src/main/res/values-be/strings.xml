@@ -2099,4 +2099,9 @@
     <string name="auto_ui_test_park">Не выканана: правіла працуе толькі на паркоўцы. Уключыце P.</string>
     <string name="auto_ui_confirm_rule">Правіла «%1$s»</string>
     <string name="auto_ui_confirm_countdown">Адменіцца праз %1$d с</string>
+    <string name="settings_route_navigator_waze">Waze</string>
+    <string name="settings_route_navigator_google_maps">Google Maps</string>
+    <string name="dispatch_waze_fallback">Waze не ўсталяваны, адкрыты Яндэкс Навігатар</string>
+    <string name="dispatch_google_maps_fallback">Google Maps не ўсталяваны, адкрыты Яндэкс Навігатар</string>
+    <string name="dispatch_google_maps_shortcut_unsupported">Google Maps: маршруты Дом/Праца пакуль не падтрымліваюцца</string>
 </resources>
