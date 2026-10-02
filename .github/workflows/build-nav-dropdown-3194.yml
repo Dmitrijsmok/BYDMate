@@ -1,9 +1,6 @@
-name: Build 3.19.4 navigator dropdown
+name: Sign 3.19.5 navigator debug with 64050 key
 
 on:
-  push:
-    branches:
-      - feat/navigation-dropdown-v3.19.4
   workflow_dispatch:
 
 permissions:
@@ -19,6 +16,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: feat/navigation-dropdown-v3.19.5
 
       - uses: actions/setup-java@v5
         with:
@@ -80,21 +79,24 @@ jobs:
           APK="$(find app/build/outputs/apk/debug -name '*.apk' -print -quit)"
           test -n "$APK"
           mkdir -p bundle/apk bundle/signing-tools/lib
-          cp "$APK" bundle/apk/BYDMate-3.19.4-64049-NavDropdown-DebugClone.apk
-          sha256sum bundle/apk/BYDMate-3.19.4-64049-NavDropdown-DebugClone.apk
+          cp "$APK" bundle/apk/BYDMate-3.19.5-64050-NavDropdown-DebugClone.apk
+          sha256sum bundle/apk/BYDMate-3.19.5-64050-NavDropdown-DebugClone.apk
 
           BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
-          "$BT/aapt" dump badging bundle/apk/BYDMate-3.19.4-64049-NavDropdown-DebugClone.apk | \
+          "$BT/aapt" dump badging bundle/apk/BYDMate-3.19.5-64050-NavDropdown-DebugClone.apk | \
             grep -E "package: name='com\.bydmate\.app\.debug'|application-label:'BYDMate Debug'"
           "$BT/apksigner" verify --verbose --print-certs \
-            bundle/apk/BYDMate-3.19.4-64049-NavDropdown-DebugClone.apk
+            bundle/apk/BYDMate-3.19.5-64050-NavDropdown-DebugClone.apk
+          "$BT/apksigner" verify --verbose --print-certs \
+            bundle/apk/BYDMate-3.19.5-64050-NavDropdown-DebugClone.apk | \
+            grep -q 'V2 Signer: certificate SHA-256 digest: b37af5b64b03125b74bc223d436ab00030c2b8bd46710b347982158169111c05'
           cp "$BT/apksigner" "$BT/zipalign" "$BT/aapt" bundle/signing-tools/
           cp "$BT/lib/apksigner.jar" bundle/signing-tools/lib/
           chmod +x bundle/signing-tools/apksigner bundle/signing-tools/zipalign bundle/signing-tools/aapt
 
       - uses: actions/upload-artifact@v7
         with:
-          name: BYDMate-3.19.4-64049-NavDropdown-DebugClone
+          name: BYDMate-3.19.5-64050-NavDropdown-DebugClone
           path: bundle
           if-no-files-found: error
           retention-days: 14
