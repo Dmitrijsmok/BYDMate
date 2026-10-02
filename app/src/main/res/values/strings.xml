@@ -2114,4 +2114,9 @@
     <string name="auto_ui_test_park">Не выполнено: правило работает только на парковке. Включите P.</string>
     <string name="auto_ui_confirm_rule">Правило «%1$s»</string>
     <string name="auto_ui_confirm_countdown">Отменится через %1$d с</string>
+    <string name="settings_route_navigator_waze">Waze</string>
+    <string name="settings_route_navigator_google_maps">Google Maps</string>
+    <string name="dispatch_waze_fallback">Waze не установлен, открыт Яндекс Навигатор</string>
+    <string name="dispatch_google_maps_fallback">Google Maps не установлен, открыт Яндекс Навигатор</string>
+    <string name="dispatch_google_maps_shortcut_unsupported">Google Maps: маршруты Дом/Работа пока не поддерживаются</string>
 </resources>
