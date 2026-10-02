@@ -1947,4 +1947,9 @@
     <string name="auto_ui_test_park">Not run: this rule works only when parked. Shift to P.</string>
     <string name="auto_ui_confirm_rule">Rule «%1$s»</string>
     <string name="auto_ui_confirm_countdown">Cancels in %1$d s</string>
+    <string name="settings_route_navigator_waze">Waze</string>
+    <string name="settings_route_navigator_google_maps">Google Maps</string>
+    <string name="dispatch_waze_fallback">Waze is not installed, Yandex Navigator opened</string>
+    <string name="dispatch_google_maps_fallback">Google Maps is not installed, Yandex Navigator opened</string>
+    <string name="dispatch_google_maps_shortcut_unsupported">Google Maps: Home/Work shortcuts are not supported yet</string>
 </resources>
