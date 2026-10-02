@@ -635,6 +635,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             is ParseResult.RelativeTemp -> Resolution.RelTemp(r.sign)
             is ParseResult.Volume -> Resolution.Vol(r.payload)
             ParseResult.Music -> Resolution.Music
+            ParseResult.Navigator -> Resolution.Navigator
             // A value the car does not report goes to the agent, never a made-up answer; so does
             // every question while the snapshot is not live: it is never cleared on transport
             // loss, and the range, kept elsewhere, would be just as old.
@@ -654,6 +655,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             is Resolution.RelTemp -> dispatchRelativeTemp(res.sign, transcript, decodeMs)
             is Resolution.Vol -> dispatchVolume(res.payload, transcript, decodeMs)
             Resolution.Music -> dispatchMusic(transcript, decodeMs)
+            Resolution.Navigator -> dispatchNavigator(transcript, decodeMs)
             is Resolution.Answer -> answer(res, transcript, decodeMs)
             is Resolution.Auto -> fireAutomation(res.match, transcript, decodeMs)
             is Resolution.None -> agentFallback(transcript, decodeMs)
@@ -838,6 +840,27 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             payload = JSONObject().put("mode", "mybeat").toString())
         if (dispatchMedia(action, "yandex_music=mybeat", transcript, decodeMs)) {
             scheduleSessionClose(REASON_PLAY_MUSIC, waitForSpeech = true)
+        }
+    }
+
+    /** Opens the navigator selected in Voice settings without a cloud-agent round trip. */
+    private suspend fun dispatchNavigator(transcript: String, decodeMs: Long? = null) {
+        val result = actionDispatcher.openSelectedRouteNavigator()
+        if (result.success) {
+            earcon.ok()
+            _state.value = VoiceUiState.Done(transcript)
+            record(nluEntry(transcript, decodeMs, "navigator:open", VoiceJournalEntry.Outcome.OK),
+                "NLU dispatched: navigator:open transcript=\"$transcript\"")
+            announce("Голос", "Услышал: «$transcript». Выполнено", "Готово", done = true)
+            scope.launch { runCatching { agentOrchestrator.noteAction(transcript) } }
+        } else {
+            val reason = result.reason ?: transcript
+            earcon.fail()
+            _state.value = VoiceUiState.Blocked(reason)
+            record(nluEntry(transcript, decodeMs, "navigator:open", VoiceJournalEntry.Outcome.BLOCKED)
+                .copy(reason = reason, refusal = VoiceRefusal.DISPATCH_FAILED),
+                "NLU blocked: navigator:open transcript=\"$transcript\" reason=$reason")
+            announce("Голос", "Услышал: «$transcript». Отказ: $reason", "Не получилось")
         }
     }
 
@@ -1092,6 +1115,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         data class RelTemp(val sign: Int) : Resolution
         data class Vol(val payload: String) : Resolution
         data object Music : Resolution
+        data object Navigator : Resolution
         /** A dictionary question with the value known: [text] is said, nothing is dispatched. */
         data class Answer(val question: VehicleQuestion, val text: String) : Resolution {
             val label: String get() = "ask:${question.id}"
@@ -1103,7 +1127,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         /** The route code of the trace. */
         val route: String get() = when (this) {
             is Cmd -> if (label.startsWith("phrase:")) "phrase" else "nlu"
-            is RelTemp, is Vol, Music, is Answer -> "nlu"
+            is RelTemp, is Vol, Music, Navigator, is Answer -> "nlu"
             is Auto -> "automation"
             is None -> "agent"
         }
