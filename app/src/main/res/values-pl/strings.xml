@@ -2099,4 +2099,9 @@
     <string name="auto_ui_test_park">Nie wykonano: reguła działa tylko na postoju. Włącz P.</string>
     <string name="auto_ui_confirm_rule">Reguła „%1$s”</string>
     <string name="auto_ui_confirm_countdown">Anulowanie za %1$d s</string>
+    <string name="settings_route_navigator_waze">Waze</string>
+    <string name="settings_route_navigator_google_maps">Google Maps</string>
+    <string name="dispatch_waze_fallback">Nie zainstalowano Waze, otwarto Yandex Navigator</string>
+    <string name="dispatch_google_maps_fallback">Nie zainstalowano Google Maps, otwarto Yandex Navigator</string>
+    <string name="dispatch_google_maps_shortcut_unsupported">Google Maps: skróty Dom/Praca nie są jeszcze obsługiwane</string>
 </resources>
