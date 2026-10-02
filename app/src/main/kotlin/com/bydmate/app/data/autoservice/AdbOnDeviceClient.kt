@@ -1,5 +1,7 @@
 package com.bydmate.app.data.autoservice
 
+import com.bydmate.app.BuildConfig
+import com.bydmate.app.helper.HelperBinderProtocol
 import android.content.Context
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -296,15 +298,17 @@ class AdbOnDeviceClientImpl @Inject constructor(
         // Rejects tx=6 (setInt), tx=8 (setBuffer), and arbitrary shell.
         private val WRITE_BARRIER_REGEX = Regex("""^service call autoservice [579] i32 \d+ i32 -?\d+$""")
 
-        // Narrow whitelist for the two self-grants — only our own package.
-        private val PACKAGE_NAME_REGEX = Regex("""^com\.bydmate\.app$""")
+        // Narrow whitelist for the two self-grants — only this installed variant.
+        private val PACKAGE_NAME_REGEX =
+            Regex("^" + Regex.escape(BuildConfig.APPLICATION_ID) + "$")
 
         // Spawn token shape — alphanumeric only, so it can never break out of the spawn
         // command line. HelperBootstrap generates 32 hex characters.
         private val SPAWN_TOKEN_REGEX = Regex("""^[A-Za-z0-9]{16,64}$""")
 
-        // Helper daemon — hardcoded so neither caller can inject paths/cmdlines.
-        private const val HELPER_PROCESS_NAME = "bydmate_helper"
-        private const val HELPER_LOG_PATH = "/data/local/tmp/bydmate_helper.log"
+        // Helper daemon identity is variant-scoped so a debug clone cannot kill/adopt the
+        // public app's shell daemon.
+        private val HELPER_PROCESS_NAME = HelperBinderProtocol.PROCESS_NAME
+        private val HELPER_LOG_PATH = "/data/local/tmp/${HelperBinderProtocol.PROCESS_NAME}.log"
     }
 }
