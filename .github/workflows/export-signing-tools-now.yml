@@ -1,0 +1,30 @@
+name: Export Android signing tools now
+
+on:
+  push:
+    branches:
+      - probe/signing-secrets
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect apksigner and zipalign
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          mkdir -p signing-tools/lib signing-tools/lib64
+          cp "$BT/apksigner" "$BT/zipalign" signing-tools/
+          cp "$BT/lib/apksigner.jar" signing-tools/lib/
+          cp "$BT/lib64/libc++_shared.so" signing-tools/lib64/ 2>/dev/null || true
+          chmod +x signing-tools/apksigner signing-tools/zipalign
+          "$BT/apksigner" version
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-signing-tools-now
+          path: signing-tools/
+          retention-days: 1
