@@ -19,6 +19,12 @@ val keystoreProps = Properties().apply {
     if (keystorePropsFile.exists()) load(FileInputStream(keystorePropsFile))
 }
 
+/**
+ * Persistent key for the parallel debug clone in CI. The workflow creates/restores this file
+ * before Gradle starts. Explicitly wiring it avoids AGP choosing an ephemeral runner debug key.
+ */
+val navDebugKeystoreFile = file(System.getProperty("user.home") + "/.android/debug.keystore")
+
 android {
     namespace = "com.bydmate.app"
     compileSdk = 34
@@ -48,6 +54,14 @@ android {
                 keyPassword = keystoreProps.getProperty("keyPassword")
             }
         }
+        if (navDebugKeystoreFile.exists()) {
+            create("navDebug") {
+                storeFile = navDebugKeystoreFile
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
     }
 
     buildTypes {
@@ -56,8 +70,9 @@ android {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-navdebug"
             manifestPlaceholders["appLabel"] = "BYDMate Debug"
-            if (keystorePropsFile.exists()) {
-                signingConfig = signingConfigs.getByName("release")
+            when {
+                navDebugKeystoreFile.exists() -> signingConfig = signingConfigs.getByName("navDebug")
+                keystorePropsFile.exists() -> signingConfig = signingConfigs.getByName("release")
             }
         }
         release {
