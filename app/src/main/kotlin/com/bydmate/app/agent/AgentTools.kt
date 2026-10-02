@@ -555,7 +555,7 @@ class AgentTools @Inject constructor(
         put(tool(
             "navigate_to",
             "Построить маршрут от текущей позиции: по умолчанию в приложении, выбранном в " +
-                "настройках (Навигатор/2ГИС/Карты), app=\"maps\" - явно в Яндекс Картах, если " +
+                "настройках (Навигатор/Яндекс Карты/2ГИС/Waze/Google Maps), app=\"maps\" - явно в Яндекс Картах, если " +
                 "пользователь просит именно их. Команды поехали домой, до дома, " +
                 "на работу - ЭТОТ инструмент: передай destination \"Дом\" или \"Работа\", маршрут " +
                 "построится по Месту BYDMate или по адресу, сохранённому в самом Навигаторе. " +
@@ -577,7 +577,7 @@ class AgentTools @Inject constructor(
                         "построить, водитель нажмёт Поехали сам"))
                 .put("app", JSONObject().put("type", "string")
                     .put("enum", JSONArray().put("navigator").put("maps"))
-                    .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты, по умолчанию), " +
+                    .put("description", "navigator = приложение из настроек (Навигатор/Яндекс Карты/2ГИС/Waze/Google Maps, по умолчанию), " +
                         "maps = явно Яндекс Карты; maps передавай только когда пользователь явно просит Яндекс Карты")),
             emptyList(),
         ))
@@ -592,7 +592,7 @@ class AgentTools @Inject constructor(
                 .put("description", "Что искать: название места или категория"))
                 .put("app", JSONObject().put("type", "string")
                     .put("enum", JSONArray().put("navigator").put("maps"))
-                    .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты, по умолчанию), " +
+                    .put("description", "navigator = приложение из настроек (Навигатор/Яндекс Карты/2ГИС/Waze/Google Maps, по умолчанию), " +
                         "maps = явно Яндекс Карты; maps передавай только когда пользователь явно просит Яндекс Карты")),
             listOf("query"),
         ))
@@ -609,7 +609,7 @@ class AgentTools @Inject constructor(
                 .put("lon", JSONObject().put("type", "number").put("description", "Долгота"))
                 .put("app", JSONObject().put("type", "string")
                     .put("enum", JSONArray().put("navigator").put("maps"))
-                    .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты, по умолчанию), " +
+                    .put("description", "navigator = приложение из настроек (Навигатор/Яндекс Карты/2ГИС/Waze/Google Maps, по умолчанию), " +
                         "maps = явно Яндекс Карты; maps передавай только когда пользователь явно просит Яндекс Карты")),
             emptyList(),
         ))
