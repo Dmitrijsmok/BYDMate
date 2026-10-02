@@ -1070,6 +1070,38 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
 
     // --- external activities ---
 
+    /**
+     * Opens the map application selected in Voice settings without involving the cloud agent.
+     * This is intentionally an app launch only: route building/search still use the navigate action.
+     */
+    suspend fun openSelectedRouteNavigator(): DispatchResult {
+        val selected = RouteNavigatorUris.normalize(
+            context.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null)
+        )
+        val pkg = when (selected) {
+            RouteNavigatorUris.DGIS -> RouteNavigatorUris.DGIS_PACKAGE
+            RouteNavigatorUris.MAPS ->
+                NavPackages.YANDEX_MAPS.firstOrNull(::isPackageInstalled)
+                    ?: NavPackages.YANDEX_MAPS.first()
+            RouteNavigatorUris.WAZE -> RouteNavigatorUris.WAZE_PACKAGE
+            RouteNavigatorUris.GOOGLE_MAPS ->
+                installedGoogleMapsPackage() ?: RouteNavigatorUris.GOOGLE_MAPS_PACKAGE
+            else ->
+                NavPackages.YANDEX_NAVI.firstOrNull(::isPackageInstalled)
+                    ?: RouteNavigatorUris.YANDEX_PACKAGE
+        }
+        Log.i(TAG, "navigator open: selected=$selected pkg=$pkg")
+        return launchApp(
+            ActionDef(
+                command = "",
+                displayName = "Навигатор",
+                kind = "app_launch",
+                payload = JSONObject().put("packageName", pkg).toString(),
+            )
+        )
+    }
+
     private suspend fun launchApp(action: ActionDef): DispatchResult {
         val payload = parsePayload(action.payload)
         val pkg = payload?.optString("packageName")?.takeIf(String::isNotBlank)
