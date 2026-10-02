@@ -15,6 +15,8 @@ sealed interface ParseResult {
     data class Ask(val question: VehicleQuestion) : ParseResult
     /** Yandex Music's personal mix, started like the agent's play_music with no query. */
     data object Music : ParseResult
+    /** Open the map app selected in Voice settings, fully local and agent-independent. */
+    data object Navigator : ParseResult
     data object Unrecognized : ParseResult
 }
 
