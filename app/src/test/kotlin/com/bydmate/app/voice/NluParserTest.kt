@@ -56,6 +56,13 @@ class NluParserTest {
         assertEquals(listOf("主驾座椅加热1档", "副驾座椅加热1档"), commands("подогрев сидений"))
     }
 
+    @Test fun navigator_launch_is_local() {
+        assertEquals(ParseResult.Navigator, NluParser.parse("открой навигатор"))
+        assertEquals(ParseResult.Navigator, NluParser.parse("запусти навигатор"))
+        assertEquals(ParseResult.Navigator, NluParser.parse("включи навигатор"))
+        assertEquals(ParseResult.Navigator, NluParser.parse("навигатор"))
+    }
+
     @Test fun empty_and_filler_only_are_unrecognized() {
         assertEquals(ParseResult.Unrecognized, NluParser.parse(""))
         assertEquals(ParseResult.Unrecognized, NluParser.parse("пожалуйста спасибо"))
