@@ -249,7 +249,7 @@ utterance	expected	category	danger
 какая погода	UNRECOGNIZED	misc	
 сколько времени	UNRECOGNIZED	misc	
 позвони маме	UNRECOGNIZED	misc	
-открой навигатор	UNRECOGNIZED	misc	
+открой навигатор	NAVIGATOR	misc	
 открой карту	UNRECOGNIZED	misc	
 открой настройки	UNRECOGNIZED	misc	
 поехали домой	UNRECOGNIZED	misc	
@@ -275,7 +275,7 @@ utterance	expected	category	danger
 открой окружение	UNRECOGNIZED	misc	danger
 закрой вкладку	UNRECOGNIZED	misc	
 открой почту	UNRECOGNIZED	misc	
-запусти навигацию	UNRECOGNIZED	misc	
+запусти навигацию	NAVIGATOR	misc	
 открой окна и люк наполовину	UNRECOGNIZED	sunroof	danger
 открой люк наполовину и окна	UNRECOGNIZED	sunroof	danger
 открой окно водителя и закрой люк	主驾打开100+天窗打开0	sunroof	
@@ -580,7 +580,6 @@ utterance	expected	category	danger
 сохрани заряд	UNRECOGNIZED	misc	
 сколько заряда	UNRECOGNIZED	misc	
 включи навигатор	NAVIGATOR	misc
-открой навигатор	NAVIGATOR	misc
 запусти навигатор	NAVIGATOR	misc
 навигатор	NAVIGATOR	misc
 выключи фары	UNRECOGNIZED	misc
