@@ -56,12 +56,15 @@ jobs:
           grep -q 'BuildConfig.APPLICATION_ID' \
             app/src/main/kotlin/com/bydmate/app/helper/HelperBinderProtocol.kt
 
-      - name: Navigation regression tests
+      - name: Navigation and voice regression tests
         run: |
           ./gradlew :app:testDebugUnitTest \
             --tests com.bydmate.app.data.automation.RouteNavigatorUrisTest \
             --tests com.bydmate.app.data.automation.ActionDispatcherNavigateTest \
             --tests com.bydmate.app.agent.AgentToolsNavigateAppTest \
+            --tests com.bydmate.app.voice.NluParserTest \
+            --tests com.bydmate.app.voice.RuCommandGoldenTest \
+            --tests com.bydmate.app.voice.RuCommandGoldenAccuracyTest \
             --stacktrace
 
       - name: Android lint
