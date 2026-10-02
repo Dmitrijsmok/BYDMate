@@ -1,6 +1,9 @@
 name: Sign 3.19.5 navigator debug with 64050 key
 
 on:
+  push:
+    branches:
+      - feat/navigation-dropdown-v3.19.4
   workflow_dispatch:
 
 permissions:
