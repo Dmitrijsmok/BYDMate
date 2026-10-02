@@ -33,6 +33,7 @@ import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.data.local.dao.IdleDrainDao
 import com.bydmate.app.diagnostics.LogRecorder
 import com.bydmate.app.diagnostics.Trace
+import com.bydmate.app.diagnostics.TraceArea
 import com.bydmate.app.BuildConfig
 import com.bydmate.app.data.push.fidRecorderEnabled
 import com.bydmate.app.helper.push.FID_REC_NO_ERROR
@@ -1597,6 +1598,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
         ).edit()
             .putString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, normalized)
             .apply()
+        Trace.event(TraceArea.USER, "navigator-select", "value" to normalized)
     }
 
     /**
