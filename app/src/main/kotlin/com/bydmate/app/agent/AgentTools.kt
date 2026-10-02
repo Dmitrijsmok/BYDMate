@@ -271,6 +271,17 @@ class AgentTools @Inject constructor(
         foregroundPackagesSince(sinceMs).any { it in NavPackages.YANDEX_MAPS }
     }
 
+    internal var wazeForegroundCheck: (Long) -> Boolean = { sinceMs ->
+        com.bydmate.app.data.automation.RouteNavigatorUris.WAZE_PACKAGE in
+            foregroundPackagesSince(sinceMs)
+    }
+
+    internal var googleMapsForegroundCheck: (Long) -> Boolean = { sinceMs ->
+        foregroundPackagesSince(sinceMs).any {
+            it in com.bydmate.app.data.automation.RouteNavigatorUris.GOOGLE_MAPS_PACKAGES
+        }
+    }
+
     /** Test seam - poll interval for the navigate foreground verification. */
     internal var naviVerifyIntervalMs = 500L
 
@@ -286,8 +297,20 @@ class AgentTools @Inject constructor(
         // to (#200), so that is the app whose arrival proves it: waiting for the Navigator on
         // a Maps route (explicit app="maps" or Maps chosen in settings) fails a working route.
         val maps = actionDispatcher.willOpenMaps(payload)
-        val surfaced = if (maps) mapsForegroundCheck else naviForegroundCheck
-        val appName = if (maps) "Яндекс Карты" else "Навигатор"
+        val waze = actionDispatcher.willOpenWaze(payload)
+        val googleMaps = actionDispatcher.willOpenGoogleMaps(payload)
+        val surfaced = when {
+            maps -> mapsForegroundCheck
+            waze -> wazeForegroundCheck
+            googleMaps -> googleMapsForegroundCheck
+            else -> naviForegroundCheck
+        }
+        val appName = when {
+            maps -> "Яндекс Карты"
+            waze -> "Waze"
+            googleMaps -> "Google Maps"
+            else -> "Навигатор"
+        }
         val result = actionDispatcher.dispatch(
             ActionDef(command = "", displayName = displayName, kind = "navigate",
                 payload = payload.toString()), data = null)
