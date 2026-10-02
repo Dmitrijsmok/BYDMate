@@ -10,6 +10,7 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.bydmate.app.diagnostics.Trace
 import com.bydmate.app.diagnostics.TraceArea
+import com.bydmate.app.helper.HelperBinderProtocol
 
 /**
  * Auto-start on boot — uses WorkManager (like BydConnect).
@@ -32,7 +33,7 @@ class BootReceiver : BroadcastReceiver() {
         const val KEY_LAST_BOOT_ACTION = "last_boot_action"
         const val KEY_CHAIN_LOG = "chain_log"
         /** Explicit restart request from the helper daemon after the Android 10 a11y recovery. */
-        const val ACTION_RECOVER_START = "com.bydmate.app.action.RECOVER_START"
+        val ACTION_RECOVER_START: String = HelperBinderProtocol.ACTION_RECOVER_START
     }
 
     override fun onReceive(context: Context, intent: Intent) {
