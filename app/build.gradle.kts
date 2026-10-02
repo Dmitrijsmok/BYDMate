@@ -36,7 +36,7 @@ android {
         // on DiLink Android 12 (requestLegacyExternalStorage works).
         // targetSdk 30+ would break listFiles() on /storage/emulated/0/energydata/
         targetSdk = 29
-        versionCode = 64050
+        versionCode = 64051
         versionName = "3.19.5"
         manifestPlaceholders["appLabel"] = "BYDMate"
 
@@ -71,8 +71,8 @@ android {
             versionNameSuffix = "-navdebug"
             manifestPlaceholders["appLabel"] = "BYDMate Debug"
             when {
-                navDebugKeystoreFile.exists() -> signingConfig = signingConfigs.getByName("navDebug")
                 keystorePropsFile.exists() -> signingConfig = signingConfigs.getByName("release")
+                navDebugKeystoreFile.exists() -> signingConfig = signingConfigs.getByName("navDebug")
             }
         }
         release {
