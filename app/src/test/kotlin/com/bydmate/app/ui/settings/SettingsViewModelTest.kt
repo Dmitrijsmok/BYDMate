@@ -262,6 +262,8 @@ class SettingsViewModelTest {
     // Telegram Bot API stand-in for the auto-backup «Проверить» flow (#237).
     private var telegramBackupSink: com.bydmate.app.data.backup.TelegramBackupSink = mockk(relaxed = true)
 
+    private var initialVoiceSettings: Map<String, String> = emptyMap()
+
     private fun buildViewModel(
         updateChecker: UpdateChecker? = null,
         ttsModelManager: com.bydmate.app.voice.TtsModelManager? = null,
@@ -272,7 +274,7 @@ class SettingsViewModelTest {
     ): SettingsViewModel {
         val ctx: Context = ApplicationProvider.getApplicationContext()
 
-        settingsDao = FakeSettingsDao()
+        settingsDao = FakeSettingsDao().apply { map.putAll(initialVoiceSettings) }
         val settingsRepo = SettingsRepository(settingsDao, mockk<LocalePreferences>(relaxed = true))
 
         val tripDao = object : StubTripDao() {
@@ -2037,4 +2039,56 @@ class SettingsViewModelTest {
         assertEquals("", vm.uiState.value.tgBackupToken)
         assertNull(vm.uiState.value.tgBackupBinding)
     }
+    @Test fun `voice buttons persist independently and clearing Alice retains Local`() = runTest {
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+        vm.saveVoiceButton(com.bydmate.app.cluster.VoiceButtonBinding(304, setOf(327)), false)
+        testDispatcher.scheduler.advanceUntilIdle()
+        vm.saveVoiceButton(com.bydmate.app.cluster.VoiceButtonBinding(383, setOf(384)), true)
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals("304", settingsDao.map[SettingsRepository.KEY_VOICE_KEYCODE])
+        assertEquals("327", settingsDao.map[SettingsRepository.KEY_VOICE_COMPANIONS])
+        assertEquals("383", settingsDao.map[SettingsRepository.KEY_ALICE_KEYCODE])
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        val prefs = ctx.getSharedPreferences("voice", Context.MODE_PRIVATE)
+        assertEquals(383, prefs.getInt(SettingsRepository.KEY_ALICE_KEYCODE, 0))
+        assertEquals("384", prefs.getString(SettingsRepository.KEY_ALICE_COMPANIONS, ""))
+        vm.saveVoiceButton(com.bydmate.app.cluster.VoiceButtonBinding(), true)
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals("0", settingsDao.map[SettingsRepository.KEY_ALICE_KEYCODE])
+        assertEquals("", settingsDao.map[SettingsRepository.KEY_ALICE_COMPANIONS])
+        assertEquals(304, vm.uiState.value.voiceKeycode)
+        assertEquals(setOf(327), vm.uiState.value.voiceCompanions)
+    }
+
+    @Test fun `conflicting voice companion cannot overwrite the other button`() = runTest {
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+        vm.saveVoiceButton(com.bydmate.app.cluster.VoiceButtonBinding(304, setOf(327)), false)
+        testDispatcher.scheduler.advanceUntilIdle()
+        var saved = false
+        vm.saveVoiceButton(com.bydmate.app.cluster.VoiceButtonBinding(383, setOf(327)), true) { saved = true }
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertFalse(saved)
+        assertEquals(0, vm.uiState.value.aliceKeycode)
+        assertEquals("304", settingsDao.map[SettingsRepository.KEY_VOICE_KEYCODE])
+    }
+
+    @Test fun `voice assignments reload from persistent settings after recreation`() = runTest {
+        val first = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+        first.saveVoiceButton(com.bydmate.app.cluster.VoiceButtonBinding(304, setOf(327)), false)
+        testDispatcher.scheduler.advanceUntilIdle()
+        first.saveVoiceButton(com.bydmate.app.cluster.VoiceButtonBinding(383, setOf(384)), true)
+        testDispatcher.scheduler.advanceUntilIdle()
+        val persisted = settingsDao.map.toMap()
+        initialVoiceSettings = persisted
+        val recreated = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(304, recreated.uiState.value.voiceKeycode)
+        assertEquals(setOf(327), recreated.uiState.value.voiceCompanions)
+        assertEquals(383, recreated.uiState.value.aliceKeycode)
+        assertEquals(setOf(384), recreated.uiState.value.aliceCompanions)
+    }
+
 }

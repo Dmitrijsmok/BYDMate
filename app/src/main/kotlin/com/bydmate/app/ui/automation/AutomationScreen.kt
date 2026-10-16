@@ -187,7 +187,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.bydmate.app.R
 import com.bydmate.app.cluster.ClusterProjectionManager
 import com.bydmate.app.cluster.DEFAULT_TRIGGER_KEYCODE
-import com.bydmate.app.cluster.DEFAULT_VOICE_KEYCODE
+import com.bydmate.app.cluster.localVoiceBinding
+import com.bydmate.app.cluster.aliceVoiceBinding
 import com.bydmate.app.cluster.VOLUME_KNOB_PRESS_KEYCODE
 import com.bydmate.app.cluster.knownButtonNameRes
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -2465,8 +2466,7 @@ private fun steeringKeyOccupiedReason(context: Context): (Int) -> String? {
                 keyCode == clusterPrefs.getInt(ClusterProjectionManager.KEY_TRIGGER_KEYCODE, DEFAULT_TRIGGER_KEYCODE) ->
                 context.getString(R.string.automation_steering_key_occupied_projection)
 
-            voicePrefs.getBoolean("voice_enabled", false) &&
-                keyCode == voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE) ->
+            keyCode in (voicePrefs.localVoiceBinding().codes + voicePrefs.aliceVoiceBinding().codes) ->
                 context.getString(R.string.automation_steering_key_occupied_voice)
 
             clusterPrefs.getBoolean(ClusterProjectionManager.KEY_KNOB_PLAY_PAUSE, false) &&

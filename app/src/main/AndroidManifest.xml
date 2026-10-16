@@ -146,7 +146,7 @@
                 <!-- Sent by bydmate_helper (shell uid) after the Android 10 a11y recovery force-stop:
                      TrackingService is not exported, an explicit broadcast to this receiver is the
                      only way back in. Starting our own service is all it can do. -->
-                <action android:name="com.bydmate.app.action.RECOVER_START" />
+                <action android:name="com.bydmate.dilink3.app.action.RECOVER_START" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.HOME" />
             </intent-filter>
@@ -178,7 +178,7 @@
             android:name=".helper.HelperBinderReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.bydmate.app.helper.BINDER" />
+                <action android:name="com.bydmate.dilink3.app.helper.BINDER" />
             </intent-filter>
         </receiver>
 

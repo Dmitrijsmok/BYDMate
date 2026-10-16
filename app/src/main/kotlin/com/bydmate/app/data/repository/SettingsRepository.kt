@@ -157,6 +157,9 @@ open class SettingsRepository @Inject constructor(
         const val KEY_VOICE_ENABLED = "voice_enabled"
         /** "" = follow app language; "RU" or "EN" to override */
         const val KEY_VOICE_KEYCODE = "voice_keycode"
+        const val KEY_VOICE_COMPANIONS = "voice_companions"
+        const val KEY_ALICE_KEYCODE = "alice_keycode"
+        const val KEY_ALICE_COMPANIONS = "alice_companions"
         /** Offline TTS for agent replies; also mirrored into SharedPreferences("voice") for VoiceGate. */
         const val KEY_TTS_ENABLED = "tts_enabled"
         // Wave N: online TTS backends (provider selection is wired in a later task)

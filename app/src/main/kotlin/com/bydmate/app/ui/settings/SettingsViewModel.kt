@@ -84,6 +84,11 @@ import com.bydmate.app.data.vehicle.SeatChannel
 import com.bydmate.app.data.vehicle.SeatChannelStore
 import com.bydmate.app.service.BootReceiver
 import com.bydmate.app.cluster.DEFAULT_VOICE_KEYCODE
+import com.bydmate.app.cluster.VoiceButtonBinding
+import com.bydmate.app.cluster.isVoiceAssignable
+import com.bydmate.app.cluster.reservedVoiceKeys
+import com.bydmate.app.cluster.voiceCompanionsFromCsv
+import com.bydmate.app.cluster.voiceCompanionsToCsv
 import com.bydmate.app.voice.AgentPersona
 import com.bydmate.app.voice.TtsGender
 import com.bydmate.app.voice.VoiceController
@@ -235,6 +240,9 @@ data class SettingsUiState(
     // Voice settings
     val voiceEnabled: Boolean = false,
     val voiceKeycode: Int = 0,
+    val voiceCompanions: Set<Int> = emptySet(),
+    val aliceKeycode: Int = 0,
+    val aliceCompanions: Set<Int> = emptySet(),
     // TTS settings (offline synthesis of agent replies)
     val ttsEnabled: Boolean = false,
     val ttsVoice: String = TtsModelManager.DEFAULT_VOICE_ID,
@@ -420,8 +428,13 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
         appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName ?: "?"
     } catch (_: Exception) { "?" }
 
+    private var automationButtonKeys: Set<Int> = emptySet()
+
     init {
         loadSettings()
+        viewModelScope.launch {
+            ruleDao.getAll().collect { automationButtonKeys = automationKeys(it) }
+        }
         observeAutoBackup()
         loadTariffPeriods()
         observeLogRecorder()
@@ -533,6 +546,10 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 if (it == 0) DEFAULT_VOICE_KEYCODE else it
             }
 
+            val voiceCompanions = voiceCompanionsFromCsv(settingsRepository.getString(SettingsRepository.KEY_VOICE_COMPANIONS, ""))
+            val aliceKeycode = settingsRepository.getString(SettingsRepository.KEY_ALICE_KEYCODE, "0").toIntOrNull() ?: 0
+            val aliceCompanions = voiceCompanionsFromCsv(settingsRepository.getString(SettingsRepository.KEY_ALICE_COMPANIONS, ""))
+
             val ttsEnabled = settingsRepository.isTtsEnabled()
             // Resolve through the catalog so a legacy id (retired "denis"/"dmitri") shows its
             // migrated voice selected in the UI, same as playback already resolves it.
@@ -616,6 +633,9 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     disableNativeAssistant = disableNativeAssistant,
                     voiceEnabled = voiceEnabled,
                     voiceKeycode = voiceKeycode,
+                    voiceCompanions = voiceCompanions,
+                    aliceKeycode = aliceKeycode,
+                    aliceCompanions = aliceCompanions,
                     ttsEnabled = ttsEnabled,
                     ttsVoice = ttsVoice,
                     ttsReadyVoices = ttsReadyVoices,
@@ -1299,15 +1319,51 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
      * Persists the keycode learned from [LearnButtonDialog] into Room and into
      * SharedPreferences("voice") so SteeringWheelKeyService reads the new value immediately.
      */
-    fun saveVoiceKeycode(keycode: Int) {
-        _uiState.update { it.copy(voiceKeycode = keycode) }
-        viewModelScope.launch {
-            settingsRepository.setVoiceKeycode(keycode)
-            // Mirror for SteeringWheelKeyService
-            appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
-                .edit().putInt(SettingsRepository.KEY_VOICE_KEYCODE, keycode).apply()
+    fun saveVoiceKeycode(keycode: Int) = saveVoiceButton(VoiceButtonBinding(keycode), false)
+
+    fun voiceButtonConflict(keycode: Int, alice: Boolean): String? {
+        val state = _uiState.value
+        val other = if (alice) VoiceButtonBinding(state.voiceKeycode, state.voiceCompanions)
+            else VoiceButtonBinding(state.aliceKeycode, state.aliceCompanions)
+        return when {
+            !isVoiceAssignable(keycode) -> appContext.getString(R.string.learn_button_rejected)
+            keycode in other.codes -> appContext.getString(R.string.automation_steering_key_occupied_voice)
+            keycode in reservedVoiceKeys(appContext) -> appContext.getString(R.string.automation_steering_key_occupied_projection)
+            keycode in automationButtonKeys -> appContext.getString(R.string.voice_button_occupied_automation)
+            else -> null
         }
     }
+
+    fun saveVoiceButton(binding: VoiceButtonBinding, alice: Boolean, onSaved: () -> Unit = {}) {
+        viewModelScope.launch {
+            // Validate again at save, including disabled rules. A companion must not steal an action either.
+            automationButtonKeys = automationKeys(ruleDao.getAllList())
+            val conflict = binding.codes.firstNotNullOfOrNull { voiceButtonConflict(it, alice) }
+            val clearingAlice = alice && binding.primary == 0 && binding.companions.isEmpty()
+            val valid = clearingAlice || binding.canAssign(emptySet())
+            if (conflict != null || !valid) {
+                android.widget.Toast.makeText(appContext, conflict ?: appContext.getString(R.string.learn_button_rejected),
+                    android.widget.Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            val key = if (alice) SettingsRepository.KEY_ALICE_KEYCODE else SettingsRepository.KEY_VOICE_KEYCODE
+            val companionsKey = if (alice) SettingsRepository.KEY_ALICE_COMPANIONS else SettingsRepository.KEY_VOICE_COMPANIONS
+            val companions = voiceCompanionsToCsv(binding.companions - binding.primary)
+            settingsRepository.setStrings(mapOf(key to binding.primary.toString(), companionsKey to companions))
+            appContext.getSharedPreferences("voice", Context.MODE_PRIVATE).edit()
+                .putInt(key, binding.primary).putString(companionsKey, companions).apply()
+            _uiState.update {
+                if (alice) it.copy(aliceKeycode = binding.primary, aliceCompanions = binding.companions)
+                else it.copy(voiceKeycode = binding.primary, voiceCompanions = binding.companions)
+            }
+            onSaved()
+        }
+    }
+
+    private fun automationKeys(rules: List<com.bydmate.app.data.local.entity.RuleEntity>): Set<Int> =
+        rules.flatMap { com.bydmate.app.data.local.entity.TriggerDef.listFromJson(it.triggers) }
+            .filter { it.kind == "steering_key" }
+            .mapNotNull { it.value.toIntOrNull() }.toSet()
 
     // --- TTS (offline synthesis of agent replies) ---
 
