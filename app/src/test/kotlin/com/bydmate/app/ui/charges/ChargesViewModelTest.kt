@@ -66,6 +66,8 @@ class ChargesViewModelTest {
             SettingsRepository.KEY_CURRENCY to "BYN"
         )
         override suspend fun get(key: String): String? = map[key]
+        override suspend fun getMany(keys: List<String>): List<SettingEntity> =
+            keys.mapNotNull { k -> map[k]?.let { SettingEntity(k, it) } }
         override fun observe(key: String): Flow<String?> = flowOf(map[key])
         override suspend fun set(entity: SettingEntity) { map[entity.key] = entity.value ?: "" }
         override suspend fun setAll(settings: List<SettingEntity>) { settings.forEach { set(it) } }
@@ -539,6 +541,49 @@ class ChargesViewModelTest {
         testDispatcher.scheduler.advanceUntilIdle()
 
         assertEquals(126.0, vm.uiState.value.equivCycles, 0.1)
+    }
+
+    /** #224: the BMS lifetime counter is divided by the average capacity nominal × (100 + SoH) / 200. */
+    @Test
+    fun `loadLifetimeStats_bmsCounter_divisorCorrectedForSoh`() = runTest {
+        val vm = buildViewModel(
+            autoserviceCharges = emptyList(),
+            batteryReading = BatteryReading(
+                sohPercent = 90f,
+                socPercent = null,
+                lifetimeKwh = 10963f,
+                lifetimeMileageKm = 55000f,
+                voltage12v = 14f,
+                readAtMs = 0L
+            ),
+            batteryCapacityKwh = "87"
+        )
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(10963.0 / 82.65, vm.uiState.value.equivCycles, 0.1)
+    }
+
+    /**
+     * #224: the raw SoH reaches the divisor, as on «Техника». sohFactor drops SoH below 50 % to
+     * 1.0, which would have divided by the full nominal instead of nominal × (100 + 40) / 200.
+     */
+    @Test
+    fun `loadLifetimeStats_bmsCounter_lowSohStillCorrectsDivisor`() = runTest {
+        val vm = buildViewModel(
+            autoserviceCharges = emptyList(),
+            batteryReading = BatteryReading(
+                sohPercent = 40f,
+                socPercent = null,
+                lifetimeKwh = 10963f,
+                lifetimeMileageKm = 55000f,
+                voltage12v = 14f,
+                readAtMs = 0L
+            ),
+            batteryCapacityKwh = "87"
+        )
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(10963.0 / (87.0 * 140.0 / 200.0), vm.uiState.value.equivCycles, 0.1)
     }
 
     @Test

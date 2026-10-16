@@ -9,8 +9,8 @@ import com.bydmate.app.data.automation.AutomationEngine
 import com.bydmate.app.data.automation.DispatchResult
 import com.bydmate.app.data.automation.VoiceFireResult
 import com.bydmate.app.R
-import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.data.local.entity.ActionDef
+import com.bydmate.app.util.appStringsOver
 import io.mockk.clearMocks
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -131,18 +131,19 @@ class VoiceControllerSessionTest {
         every { speaking } returns MutableStateFlow(false)
     }
 
+    @Suppress("LongParameterList") // test factory: every collaborator is an overridable default
     private fun makeController(
         continuousAsr: ContinuousAsr,
         dispatcher: ActionDispatcher,
         agentOrchestrator: AgentOrchestrator = mockk<AgentOrchestrator>().also {
-            coEvery { it.ask(any(), any()) } returns AgentResult.Disabled
+            coEvery { it.ask(any(), any(), any()) } returns AgentResult.Disabled
             coEvery { it.noteAction(any()) } returns Unit
             // Default: no pending agent question (individual tests override AFTER construction).
             coEvery { it.expectsFollowUp() } returns false
         },
         ttsEngine: TtsEngine = quietTtsEngine(),
         audioCapture: AudioCapture = mockk<AudioCapture>(relaxed = true).also {
-            every { it.captureSession(any()) } returns flow { /* fake ignores pcm content */ }
+            every { it.captureSession(any(), any<() -> Any?>()) } returns flow { /* fake ignores pcm content */ }
         },
         journal: VoiceJournal = VoiceJournal(),
         earcon: VoiceEarcon = mockk(relaxed = true),
@@ -152,21 +153,19 @@ class VoiceControllerSessionTest {
         val gate = mockk<VoiceGate>()
         every { gate.isEnabled() } returns true
         every { gate.vehicleSnapshot() } returns null
-        every { gate.preferredLang() } returns null
         every { gate.ttsEnabled() } returns false
 
-        val localePrefs = mockk<LocalePreferences>(relaxed = true)
-        every { localePrefs.getLanguage() } returns "ru"
         val automationEngine = mockk<AutomationEngine>(relaxed = true)
         val automationResolver = mockk<VoiceAutomationResolver>()
         coEvery { automationResolver.match(any()) } returns null
 
-        return VoiceController(audioCapture, dispatcher, localePrefs, earcon, gate,
+        return VoiceController(audioCapture, dispatcher, earcon, gate,
             automationEngine, automationResolver, agentOrchestrator, context,
             ttsEngine, journal, continuousAsr, agentIdentity = agentIdentity,
             ttsModelManager = mockk(relaxed = true),
             ruStressMarker = RuStressMarker { null },
-            selectedTtsVoice = { TtsVoiceCatalog.byId("dmitri") })
+            selectedTtsVoice = { TtsVoiceCatalog.byId("dmitri") },
+            appStrings = appStringsOver(context))
     }
 
     // (a) PTT with isReady=true routes each Utterance into the NLU dispatch path, and the
@@ -274,7 +273,7 @@ class VoiceControllerSessionTest {
         val askCancelled = CompletableDeferred<Unit>()
         val releaseAsk = CompletableDeferred<Unit>()
         val agentOrchestrator = mockk<AgentOrchestrator>()
-        coEvery { agentOrchestrator.ask(any(), any()) } coAnswers {
+        coEvery { agentOrchestrator.ask(any(), any(), any()) } coAnswers {
             askStarted.complete(Unit)
             try {
                 releaseAsk.await()
@@ -319,8 +318,9 @@ class VoiceControllerSessionTest {
         verify(exactly = 1) { ttsEngine.stop() }
         verify(atLeast = 1) { earcon.ok() }
         assertTrue(journal.entries.value.any {
-            it.route == VoiceJournalEntry.Route.NONE &&
+            it.route == VoiceJournalEntry.Route.AGENT &&
                 it.outcome == VoiceJournalEntry.Outcome.OK &&
+                it.refusal == VoiceRefusal.BARGE_IN &&
                 it.detail == "Прерван по имени"
         })
 
@@ -335,7 +335,7 @@ class VoiceControllerSessionTest {
         val askCancelled = CompletableDeferred<Unit>()
         val releaseAsk = CompletableDeferred<Unit>()
         val agentOrchestrator = mockk<AgentOrchestrator>()
-        coEvery { agentOrchestrator.ask(any(), any()) } coAnswers {
+        coEvery { agentOrchestrator.ask(any(), any(), any()) } coAnswers {
             askStarted.complete(Unit)
             try {
                 releaseAsk.await()
@@ -377,7 +377,7 @@ class VoiceControllerSessionTest {
         val askCancelled = CompletableDeferred<Unit>()
         val releaseAsk = CompletableDeferred<Unit>()
         val agentOrchestrator = mockk<AgentOrchestrator>()
-        coEvery { agentOrchestrator.ask(any(), any()) } coAnswers {
+        coEvery { agentOrchestrator.ask(any(), any(), any()) } coAnswers {
             askStarted.complete(Unit)
             try {
                 releaseAsk.await()
@@ -484,7 +484,7 @@ class VoiceControllerSessionTest {
         // deliberately stop the session, not flip false on its own the instant it's collected.
         val rawFrames = MutableSharedFlow<ShortArray>()
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
         val controller = makeController(fakeAsr, dispatcher, ttsEngine = ttsEngine, audioCapture = audioCapture)
 
         controller.onPttPressed()
@@ -525,7 +525,7 @@ class VoiceControllerSessionTest {
         val fakeAsr = FakeContinuousAsr(ready = true)
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         val agentOrchestrator = mockk<AgentOrchestrator>()
-        coEvery { agentOrchestrator.ask(any(), any()) } returns AgentResult.Answer("Уточните, пожалуйста")
+        coEvery { agentOrchestrator.ask(any(), any(), any()) } returns AgentResult.Answer("Уточните, пожалуйста")
         coEvery { agentOrchestrator.noteAction(any()) } returns Unit
         coEvery { agentOrchestrator.expectsFollowUp() } returns false
         val controller = makeController(fakeAsr, dispatcher, agentOrchestrator = agentOrchestrator)
@@ -551,30 +551,28 @@ class VoiceControllerSessionTest {
         val gate = mockk<VoiceGate>()
         every { gate.isEnabled() } returns true
         every { gate.vehicleSnapshot() } returns null
-        every { gate.preferredLang() } returns null
         every { gate.ttsEnabled() } returns false
 
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns flow { }
+        every { audioCapture.captureSession(any(), any<() -> Any?>()) } returns flow { }
 
-        val localePrefs = mockk<LocalePreferences>(relaxed = true)
-        every { localePrefs.getLanguage() } returns "ru"
         val earcon = mockk<VoiceEarcon>(relaxed = true)
 
         val automationResolver = mockk<VoiceAutomationResolver>()
-        coEvery { automationResolver.match(any()) } returns 42L
+        coEvery { automationResolver.match(any()) } returns VoiceAutomationMatch(42L, "rule42")
 
         val agentOrchestrator = mockk<AgentOrchestrator>()
         coEvery { agentOrchestrator.noteAction(any()) } returns Unit
         coEvery { agentOrchestrator.expectsFollowUp() } returns false
 
-        val controller = VoiceController(audioCapture, dispatcher, localePrefs, earcon, gate,
+        val controller = VoiceController(audioCapture, dispatcher, earcon, gate,
             automationEngine, automationResolver, agentOrchestrator, mockk<Context>(relaxed = true),
             quietTtsEngine(), VoiceJournal(), fakeAsr,
             agentIdentity = { AgentIdentity("", AgentPersona.NAVIGATOR) },
             ttsModelManager = mockk(relaxed = true),
             ruStressMarker = RuStressMarker { null },
-            selectedTtsVoice = { TtsVoiceCatalog.byId("dmitri") })
+            selectedTtsVoice = { TtsVoiceCatalog.byId("dmitri") },
+            appStrings = appStringsOver(mockk<Context>(relaxed = true)))
 
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
@@ -591,7 +589,7 @@ class VoiceControllerSessionTest {
         val fakeAsr = FakeContinuousAsr(ready = true)
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns flow { }
+        every { audioCapture.captureSession(any(), any<() -> Any?>()) } returns flow { }
         val controller = makeController(fakeAsr, dispatcher, audioCapture = audioCapture)
 
         controller.onPttPressed()
@@ -599,7 +597,7 @@ class VoiceControllerSessionTest {
         // session coroutine has necessarily reached captureSession() -- poll the verify itself
         // (like awaitVerify elsewhere) instead of asserting once right after the flag.
         // Wave P: no hard session cap; Long.MAX_VALUE means "run until silence or user stops".
-        awaitVerify { verify(exactly = 1) { audioCapture.captureSession(Long.MAX_VALUE) } }
+        awaitVerify { verify(exactly = 1) { audioCapture.captureSession(Long.MAX_VALUE, any<() -> Any?>()) } }
         assertTrue(controller.listening.value)
     }
 
@@ -608,7 +606,7 @@ class VoiceControllerSessionTest {
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         val rawFrames = MutableSharedFlow<ShortArray>(extraBufferCapacity = 8)
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
         val controller = makeController(fakeAsr, dispatcher, audioCapture = audioCapture)
 
         controller.onPttPressed()
@@ -626,7 +624,9 @@ class VoiceControllerSessionTest {
         assertEquals(framesBefore, fakeAsr.recordedFrames.size)
     }
 
-    @Test fun `frames arriving while tts is speaking never reach the recognizer`() {
+    // Name barge-in during speech: the mic is no longer muted while the agent talks. The
+    // playback-overlapped utterances themselves are covered in VoiceControllerPlaybackBargeInTest.
+    @Test fun `frames arriving while tts is speaking still reach the recognizer`() {
         val fakeAsr = FakeContinuousAsr(ready = true)
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         val speaking = MutableStateFlow(false)
@@ -637,67 +637,60 @@ class VoiceControllerSessionTest {
         every { ttsEngine.audible() } answers { speaking.value }
         val rawFrames = MutableSharedFlow<ShortArray>(extraBufferCapacity = 8)
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
         val controller = makeController(fakeAsr, dispatcher, ttsEngine = ttsEngine, audioCapture = audioCapture)
 
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(rawFrames)
 
-        // Simulate TTS actively speaking: a frame emitted now must be dropped before it ever
-        // reaches ContinuousAsr.transcribe().
         speaking.value = true
         rawFrames.tryEmit(shortArrayOf(1, 2, 3))
-        Thread.sleep(150)
-        assertTrue(fakeAsr.recordedFrames.isEmpty())
+        awaitTrue { fakeAsr.recordedFrames.size == 1 }
+        assertTrue(controller.lastSpeakingSeenMs > 0L)
 
-        // TTS finishes; past the 300ms post-speech grace window a frame reaches the recognizer.
+        // Inside the post-speech grace window as well.
         speaking.value = false
-        Thread.sleep(350)
         rawFrames.tryEmit(shortArrayOf(4, 5, 6))
-        awaitTrue { fakeAsr.recordedFrames.isNotEmpty() }
-        assertEquals(1, fakeAsr.recordedFrames.size)
+        awaitTrue { fakeAsr.recordedFrames.size == 2 }
     }
 
     // --- Fix wave 2, finding 3: per-frame grace boundary (no collect()-based watcher) ---
 
-    @Test fun `a frame just inside the post-speech grace window is muted, one after it passes`() {
+    @Test fun `speech starting inside the post-speech grace window is dropped, after it is routed`() {
         val fakeAsr = FakeContinuousAsr(ready = true)
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
+        coEvery { dispatcher.dispatch(any<ActionDef>(), any()) } returns DispatchResult(true)
         val speaking = MutableStateFlow(false)
         val ttsEngine = mockk<TtsEngine>(relaxed = true)
         every { ttsEngine.speaking } returns speaking
         every { ttsEngine.audible() } answers { speaking.value }
         val rawFrames = MutableSharedFlow<ShortArray>(extraBufferCapacity = 8)
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
         val controller = makeController(fakeAsr, dispatcher, ttsEngine = ttsEngine, audioCapture = audioCapture)
 
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(rawFrames)
+        awaitSubscribed(fakeAsr.events)
 
-        // TTS speaks; a frame arriving during that window is dropped and, as a side effect of
-        // the filter itself (there's no background watcher), stamps the grace window's start --
-        // lastSpeakingSeenMs is only ever updated when a frame is actually filtered while
-        // speaking is true. Poll the stamp itself instead of a fixed sleep: it only flips away
-        // from its initial 0 once the filter has actually read speaking=true for this frame, so
-        // this is proof the frame was processed before we flip speaking back to false below.
-        speaking.value = true
-        rawFrames.tryEmit(shortArrayOf(0))
-        awaitTrue { controller.lastSpeakingSeenMs > 0L }
-        speaking.value = false
-
-        // Still inside the grace window: dropped.
+        // Playback just ended: the stamp is fresh, so this frame is still in the grace window.
+        controller.lastSpeakingSeenMs = System.currentTimeMillis()
         rawFrames.tryEmit(shortArrayOf(1))
-        Thread.sleep(50)
-        assertTrue(fakeAsr.recordedFrames.isEmpty())
+        awaitTrue { fakeAsr.recordedFrames.size == 1 }
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.SpeechStart)
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("закрой окна"))
+        awaitTrue { controller.droppedDuringPlaybackForTest() == 1 }
 
-        // Past the grace window: passes through.
-        // Grace was increased to 500ms in Task 2, so wait more than that.
-        Thread.sleep(550)
+        // Past the grace window (stamp moved back instead of sleeping it out): routed as today.
+        controller.lastSpeakingSeenMs = System.currentTimeMillis() - 1_000L
         rawFrames.tryEmit(shortArrayOf(2))
-        awaitTrue { fakeAsr.recordedFrames.isNotEmpty() }
+        awaitTrue { fakeAsr.recordedFrames.size == 2 }
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.SpeechStart)
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("закрой окна"))
+        awaitVerify { coVerify(exactly = 1) { dispatcher.dispatch(match { it.command == "车窗关闭" }, any()) } }
+        assertEquals(1, controller.droppedDuringPlaybackForTest())
     }
 
     // --- Task 6 (wave M): mic mute keys off physical playback (audible()), not the logical
@@ -715,7 +708,7 @@ class VoiceControllerSessionTest {
         every { ttsEngine.audible() } returns false
         val rawFrames = MutableSharedFlow<ShortArray>(extraBufferCapacity = 8)
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
         val controller = makeController(fakeAsr, dispatcher, ttsEngine = ttsEngine, audioCapture = audioCapture)
 
         controller.onPttPressed()
@@ -726,7 +719,7 @@ class VoiceControllerSessionTest {
         awaitTrue { fakeAsr.recordedFrames.isNotEmpty() }
     }
 
-    @Test fun `frames are muted while audible is true even though the logical speaking flag is false`() {
+    @Test fun `speech is playback-overlapped while audible is true even though the logical speaking flag is false`() {
         val fakeAsr = FakeContinuousAsr(ready = true)
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         val speaking = MutableStateFlow(false)
@@ -737,16 +730,20 @@ class VoiceControllerSessionTest {
         every { ttsEngine.audible() } returns true
         val rawFrames = MutableSharedFlow<ShortArray>(extraBufferCapacity = 8)
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
         val controller = makeController(fakeAsr, dispatcher, ttsEngine = ttsEngine, audioCapture = audioCapture)
 
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(rawFrames)
+        awaitSubscribed(fakeAsr.events)
 
         rawFrames.tryEmit(shortArrayOf(1, 2, 3))
-        Thread.sleep(150)
-        assertTrue(fakeAsr.recordedFrames.isEmpty())
+        awaitTrue { fakeAsr.recordedFrames.size == 1 }
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.SpeechStart)
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("закрой окна"))
+        awaitTrue { controller.droppedDuringPlaybackForTest() == 1 }
+        coVerify(exactly = 0) { dispatcher.dispatch(any<ActionDef>(), any()) }
     }
 
     // --- Fix wave 3, finding 1: call-time stamp covers a TTS burst so short it starts AND ends
@@ -754,11 +751,11 @@ class VoiceControllerSessionTest {
     // speaking=true for it. Only stamping lastSpeakingSeenMs when we ourselves call
     // ttsEngine.speak() (announce()/agent answer) can mute the frame that follows.
 
-    @Test fun `a frame arriving right after an agent answer is muted even though speaking never read true on any frame`() {
+    @Test fun `speech right after an agent answer is playback-overlapped even though speaking never read true on any frame`() {
         val fakeAsr = FakeContinuousAsr(ready = true)
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         // speaking never flips true: simulates a TTS burst so short the per-frame filter never
-        // observes it, so only the call-time stamp in agentFallback()'s Answer branch can mute.
+        // observes it, so only the call-time stamp in agentFallback()'s Answer branch can mark it.
         val speaking = MutableStateFlow(false)
         val ttsEngine = mockk<TtsEngine>(relaxed = true)
         every { ttsEngine.speaking } returns speaking
@@ -767,33 +764,31 @@ class VoiceControllerSessionTest {
         every { ttsEngine.speak(any()) } returns true
         val rawFrames = MutableSharedFlow<ShortArray>(extraBufferCapacity = 8)
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
 
         val agentOrchestrator = mockk<AgentOrchestrator>()
-        coEvery { agentOrchestrator.ask(any(), any()) } returns AgentResult.Answer("Готово")
+        coEvery { agentOrchestrator.ask(any(), any(), any()) } returns AgentResult.Answer("Готово")
         coEvery { agentOrchestrator.noteAction(any()) } returns Unit
         coEvery { agentOrchestrator.expectsFollowUp() } returns false
 
         val gate = mockk<VoiceGate>()
         every { gate.isEnabled() } returns true
         every { gate.vehicleSnapshot() } returns null
-        every { gate.preferredLang() } returns null
         every { gate.ttsEnabled() } returns true // must be true so agentFallback() actually speaks
 
-        val localePrefs = mockk<LocalePreferences>(relaxed = true)
-        every { localePrefs.getLanguage() } returns "ru"
         val earcon = mockk<VoiceEarcon>(relaxed = true)
         val automationEngine = mockk<AutomationEngine>(relaxed = true)
         val automationResolver = mockk<VoiceAutomationResolver>()
         coEvery { automationResolver.match(any()) } returns null
 
-        val controller = VoiceController(audioCapture, dispatcher, localePrefs, earcon, gate,
+        val controller = VoiceController(audioCapture, dispatcher, earcon, gate,
             automationEngine, automationResolver, agentOrchestrator, mockk<Context>(relaxed = true),
             ttsEngine, VoiceJournal(), fakeAsr,
             agentIdentity = { AgentIdentity("", AgentPersona.NAVIGATOR) },
             ttsModelManager = mockk(relaxed = true),
             ruStressMarker = RuStressMarker { null },
-            selectedTtsVoice = { TtsVoiceCatalog.byId("dmitri") })
+            selectedTtsVoice = { TtsVoiceCatalog.byId("dmitri") },
+            appStrings = appStringsOver(mockk<Context>(relaxed = true)))
 
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
@@ -807,17 +802,20 @@ class VoiceControllerSessionTest {
         awaitTrue { controller.lastSpeakingSeenMs > 0L }
         assertFalse(speaking.value)
 
-        // Well within TTS_MUTE_GRACE_MS(300ms) of the stamp: must still be muted.
+        // Well within TTS_ECHO_GRACE_MS(500ms) of the stamp: the phrase is playback-overlapped.
         rawFrames.tryEmit(shortArrayOf(7))
-        Thread.sleep(50)
-        assertTrue(fakeAsr.recordedFrames.isEmpty())
+        awaitTrue { fakeAsr.recordedFrames.size == 1 }
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.SpeechStart)
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        awaitTrue { controller.droppedDuringPlaybackForTest() == 1 }
+        coVerify(exactly = 1) { agentOrchestrator.ask(any(), any(), any()) }
     }
 
     // --- Fix wave 4, finding 1: speak() returning false (blank text, or engine not ready -- e.g.
     // voice not downloaded while the settings toggle is on) means no audio was ever enqueued, so
-    // the call-time stamp must NOT fire and the following frame must NOT be muted. ---
+    // the call-time stamp must NOT fire and the following phrase must NOT count as overlapped. ---
 
-    @Test fun `agent answer with speak() returning false does not stamp the mute window, next frame is not muted`() {
+    @Test fun `agent answer with speak() returning false does not stamp the playback window, next phrase is routed`() {
         val fakeAsr = FakeContinuousAsr(ready = true)
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         val speaking = MutableStateFlow(false)
@@ -826,33 +824,31 @@ class VoiceControllerSessionTest {
         every { ttsEngine.speak(any()) } returns false // e.g. voice not downloaded
         val rawFrames = MutableSharedFlow<ShortArray>(extraBufferCapacity = 8)
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
 
         val agentOrchestrator = mockk<AgentOrchestrator>()
-        coEvery { agentOrchestrator.ask(any(), any()) } returns AgentResult.Answer("Готово")
+        coEvery { agentOrchestrator.ask(any(), any(), any()) } returns AgentResult.Answer("Готово")
         coEvery { agentOrchestrator.noteAction(any()) } returns Unit
         coEvery { agentOrchestrator.expectsFollowUp() } returns false
 
         val gate = mockk<VoiceGate>()
         every { gate.isEnabled() } returns true
         every { gate.vehicleSnapshot() } returns null
-        every { gate.preferredLang() } returns null
         every { gate.ttsEnabled() } returns true
 
-        val localePrefs = mockk<LocalePreferences>(relaxed = true)
-        every { localePrefs.getLanguage() } returns "ru"
         val earcon = mockk<VoiceEarcon>(relaxed = true)
         val automationEngine = mockk<AutomationEngine>(relaxed = true)
         val automationResolver = mockk<VoiceAutomationResolver>()
         coEvery { automationResolver.match(any()) } returns null
 
-        val controller = VoiceController(audioCapture, dispatcher, localePrefs, earcon, gate,
+        val controller = VoiceController(audioCapture, dispatcher, earcon, gate,
             automationEngine, automationResolver, agentOrchestrator, mockk<Context>(relaxed = true),
             ttsEngine, VoiceJournal(), fakeAsr,
             agentIdentity = { AgentIdentity("", AgentPersona.NAVIGATOR) },
             ttsModelManager = mockk(relaxed = true),
             ruStressMarker = RuStressMarker { null },
-            selectedTtsVoice = { TtsVoiceCatalog.byId("dmitri") })
+            selectedTtsVoice = { TtsVoiceCatalog.byId("dmitri") },
+            appStrings = appStringsOver(mockk<Context>(relaxed = true)))
 
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
@@ -868,14 +864,19 @@ class VoiceControllerSessionTest {
 
         rawFrames.tryEmit(shortArrayOf(7))
         awaitTrue { fakeAsr.recordedFrames.isNotEmpty() }
+        awaitTrue { controller.routingJobForTest() == null }
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.SpeechStart)
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        awaitVerify { coVerify(exactly = 2) { agentOrchestrator.ask(any(), any(), any()) } }
+        assertEquals(0, controller.droppedDuringPlaybackForTest())
     }
 
-    // --- Fix wave 2, finding 3: shouldMute pins the exact grace-window boundary ---
+    // --- Fix wave 2, finding 3: inPlaybackWindow pins the exact grace-window boundary ---
 
-    @Test fun `shouldMute pins the grace-window boundary precisely`() {
-        // lastSpeakingSeenMs + TTS_MUTE_GRACE_MS(300) = muteUntilMs, computed at the call site.
-        assertTrue(VoiceController.shouldMute(nowMs = 999L, muteUntilMs = 1000L, speaking = false))
-        assertFalse(VoiceController.shouldMute(nowMs = 1000L, muteUntilMs = 1000L, speaking = false))
+    @Test fun `inPlaybackWindow pins the grace-window boundary precisely`() {
+        // lastSpeakingSeenMs + TTS_ECHO_GRACE_MS(500) = windowEndMs, computed at the call site.
+        assertTrue(VoiceController.inPlaybackWindow(nowMs = 999L, windowEndMs = 1000L, audible = false))
+        assertFalse(VoiceController.inPlaybackWindow(nowMs = 1000L, windowEndMs = 1000L, audible = false))
     }
 
     // --- Finding 3: a single utterance's routing crash is journaled, session stays open ---
@@ -956,36 +957,34 @@ class VoiceControllerSessionTest {
         awaitTrue { controller.listening.value }
     }
 
-    // --- shouldMute: pure function, no session/clock needed ---
+    // --- inPlaybackWindow: pure function, no session/clock needed ---
 
-    @Test fun `shouldMute is true strictly before the mute deadline`() {
-        assertTrue(VoiceController.shouldMute(nowMs = 100L, muteUntilMs = 200L, speaking = false))
+    @Test fun `inPlaybackWindow is true strictly before the window end`() {
+        assertTrue(VoiceController.inPlaybackWindow(nowMs = 100L, windowEndMs = 200L, audible = false))
     }
 
-    @Test fun `shouldMute is false at or after the mute deadline`() {
-        assertFalse(VoiceController.shouldMute(nowMs = 200L, muteUntilMs = 200L, speaking = false))
-        assertFalse(VoiceController.shouldMute(nowMs = 300L, muteUntilMs = 200L, speaking = false))
+    @Test fun `inPlaybackWindow is false at or after the window end`() {
+        assertFalse(VoiceController.inPlaybackWindow(nowMs = 200L, windowEndMs = 200L, audible = false))
+        assertFalse(VoiceController.inPlaybackWindow(nowMs = 300L, windowEndMs = 200L, audible = false))
     }
 
-    @Test fun `shouldMute is false when no mute window is set and tts is not speaking`() {
-        assertFalse(VoiceController.shouldMute(nowMs = System.currentTimeMillis(), muteUntilMs = 0L, speaking = false))
+    @Test fun `inPlaybackWindow is false when no window is set and tts is not audible`() {
+        assertFalse(VoiceController.inPlaybackWindow(nowMs = System.currentTimeMillis(), windowEndMs = 0L, audible = false))
     }
 
-    @Test fun `shouldMute is true whenever tts is actively speaking regardless of the mute window`() {
-        assertTrue(VoiceController.shouldMute(nowMs = System.currentTimeMillis(), muteUntilMs = 0L, speaking = true))
+    @Test fun `inPlaybackWindow is true whenever tts is audible regardless of the window end`() {
+        assertTrue(VoiceController.inPlaybackWindow(nowMs = System.currentTimeMillis(), windowEndMs = 0L, audible = true))
     }
 
     // --- Task 4: listening-overlay wiring (show/update/hide test seams) ---
 
-    // #87: the two resource strings the else-branch of onPttPressed picks between.
+    // #87: the resource string the else-branch of onPttPressed announces.
     private val modelMissingMsg = "Голосовая модель не загружена. Скачайте её в Настройках, раздел Голос-агент."
-    private val langNotRuMsg = "Голосовые команды понимают только русскую речь. В Настройках выберите Язык голоса: Русский."
 
     private fun stubbedContext(): Context = mockk<Context>(relaxed = true).also {
         every { it.getString(R.string.voice_listening) } returns "Слушаю"
         every { it.getString(R.string.voice_thinking) } returns "Думаю"
         every { it.getString(R.string.voice_error_model_missing) } returns modelMissingMsg
-        every { it.getString(R.string.voice_error_lang_not_ru) } returns langNotRuMsg
     }
 
     @Test fun `starting a continuous session shows the listening overlay`() {
@@ -1044,7 +1043,7 @@ class VoiceControllerSessionTest {
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         val rawFrames = MutableSharedFlow<ShortArray>(extraBufferCapacity = 8)
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
         val controller = makeController(failingAsr, dispatcher, audioCapture = audioCapture, context = stubbedContext())
         val answers = Collections.synchronizedList(mutableListOf<String>())
         controller.showAnswerHook = { text -> answers.add(text) }
@@ -1072,8 +1071,7 @@ class VoiceControllerSessionTest {
     // (b) GigaAM model not ready (not downloaded, or deleted) while no session is active -- PTT
     // reports the degraded "model not ready" outcome without starting a session: state goes to
     // NotUnderstood, the journal records an ERROR entry, and the overlay/spoken announce is the
-    // voice_error_model_missing resource string (#87: distinct from voice_error_lang_not_ru,
-    // which fires instead when the model is ready but the voice language is not RU).
+    // voice_error_model_missing resource string (#87).
     @Test fun `ptt with continuous engine not ready reports model-not-ready without starting a session`() {
         val fakeAsr = FakeContinuousAsr(ready = false) // simulates the model not being downloaded/deleted
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
@@ -1091,58 +1089,29 @@ class VoiceControllerSessionTest {
         awaitTrue { answers.contains(modelMissingMsg) }
     }
 
-    // (b2) #87's other cause sharing the same else-branch: GigaAM IS ready, but the voice
-    // language (via LocalePreferences, gate.preferredLang() unset) is not RU -- GigaAM only
-    // understands Russian. Must announce voice_error_lang_not_ru, NOT voice_error_model_missing
-    // (the old bug reported "model not loaded" here, sending EN-locale users chasing a phantom
-    // download problem). makeController() hardcodes localePrefs.getLanguage() = "ru" and has no
-    // seam to override it, so this test builds VoiceController directly, like the automation-
-    // resolver and mute-window tests above.
-    @Test fun `ptt with continuous engine ready but voice language non-RU reports lang-not-ru without starting a session`() {
-        val fakeAsr = FakeContinuousAsr(ready = true) // model IS downloaded/ready
+    // (b2) Voice is always Russian (owner decision 2026-09-24): the app UI language plays no
+    // part in starting a session. The controller no longer reads the app locale at all, so this
+    // builds it over an English string set and checks that a ready model starts the session
+    // with no refusal journaled.
+    @Test fun `continuous session starts with the app language set to en`() {
+        val fakeAsr = FakeContinuousAsr(ready = true)
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         val journal = VoiceJournal()
-
-        val gate = mockk<VoiceGate>()
-        every { gate.isEnabled() } returns true
-        every { gate.vehicleSnapshot() } returns null
-        every { gate.preferredLang() } returns null // no override -> currentLang() falls back to locale
-        every { gate.ttsEnabled() } returns false
-
-        val localePrefs = mockk<LocalePreferences>(relaxed = true)
-        every { localePrefs.getLanguage() } returns "en" // non-RU voice language
-        val automationEngine = mockk<AutomationEngine>(relaxed = true)
-        val automationResolver = mockk<VoiceAutomationResolver>()
-        coEvery { automationResolver.match(any()) } returns null
-        val agentOrchestrator = mockk<AgentOrchestrator>()
-        coEvery { agentOrchestrator.noteAction(any()) } returns Unit
-        coEvery { agentOrchestrator.expectsFollowUp() } returns false
-        val earcon = mockk<VoiceEarcon>(relaxed = true)
-
-        val controller = VoiceController(mockk<AudioCapture>(relaxed = true), dispatcher, localePrefs, earcon, gate,
-            automationEngine, automationResolver, agentOrchestrator, stubbedContext(),
-            quietTtsEngine(), journal, fakeAsr,
-            agentIdentity = { AgentIdentity("", AgentPersona.NAVIGATOR) },
-            ttsModelManager = mockk(relaxed = true),
-            ruStressMarker = RuStressMarker { null },
-            selectedTtsVoice = { TtsVoiceCatalog.byId("dmitri") })
-        val answers = Collections.synchronizedList(mutableListOf<String>())
-        controller.showAnswerHook = { text -> answers.add(text) }
+        val enContext = mockk<Context>(relaxed = true).also {
+            every { it.getString(R.string.voice_listening) } returns "Listening"
+            every { it.getString(R.string.voice_thinking) } returns "Thinking"
+            every { it.getString(R.string.voice_error_model_missing) } returns "Voice model is not downloaded."
+        }
+        val controller = makeController(fakeAsr, dispatcher, journal = journal, context = enContext)
+        val shown = Collections.synchronizedList(mutableListOf<String>())
+        controller.showListeningOverlay = { text -> shown.add(text) }
 
         controller.onPttPressed()
 
-        assertEquals(VoiceUiState.NotUnderstood(""), controller.state.value)
-        assertEquals(1, journal.entries.value.size)
-        val entry = journal.entries.value.first()
-        assertEquals(VoiceJournalEntry.Outcome.ERROR, entry.outcome)
-        assertFalse(controller.listening.value)
-        awaitTrue { answers.contains(langNotRuMsg) }
-        assertFalse(answers.contains(modelMissingMsg)) // proves the branch didn't pick the other cause
-        // The journal entry's `detail` argument is hardcoded "" in this branch (see
-        // onPttPressed()) and the literal "lang not supported" tag lives only in the Log.i-only
-        // logMsg argument, never persisted onto VoiceJournalEntry -- `reason` (== msg) is the
-        // actual persisted field that discriminates the two #87 causes.
-        assertEquals(langNotRuMsg, entry.reason)
+        awaitTrue { controller.listening.value }
+        awaitTrue { shown.isNotEmpty() }
+        assertEquals(listOf("Listening"), shown)
+        assertTrue(journal.entries.value.none { it.refusal == VoiceRefusal.MODEL_MISSING })
     }
 
     // (в) TTS voice not downloaded (gate.ttsEnabled() == false, the makeController default) --
@@ -1184,7 +1153,7 @@ class VoiceControllerSessionTest {
         }
         val rawFrames = MutableSharedFlow<ShortArray>(extraBufferCapacity = 8)
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
         val journal = VoiceJournal()
         var hidden = false
         val controller = makeController(fakeAsr, dispatcher, audioCapture = audioCapture, journal = journal, context = stubbedContext())
@@ -1330,7 +1299,7 @@ class VoiceControllerSessionTest {
         // arrives, and the collecting barrier below must not miss its window (an empty flow{}
         // flips collecting true->false before awaitTrue can observe it).
         val rawFrames = MutableSharedFlow<ShortArray>()
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
         val controller = makeController(fakeAsr, dispatcher, audioCapture = audioCapture)
 
         controller.onPttPressed()
@@ -1345,7 +1314,7 @@ class VoiceControllerSessionTest {
 
         verifyOrder {
             audioCapture.duckMusic()       // early duck, before captureSession() is even called
-            audioCapture.captureSession(any())
+            audioCapture.captureSession(any(), any<() -> Any?>())
         }
         verify { audioCapture.restoreMusic(20) }   // finally restored the early-duck volume
     }
@@ -1361,7 +1330,7 @@ class VoiceControllerSessionTest {
         val askCancelled = CompletableDeferred<Unit>()
         val agentOrchestrator = mockk<AgentOrchestrator>()
         // Ask hangs forever — simulates a slow or stuck LLM SSE stream.
-        coEvery { agentOrchestrator.ask(any(), any()) } coAnswers {
+        coEvery { agentOrchestrator.ask(any(), any(), any()) } coAnswers {
             askStarted.complete(Unit)
             try {
                 CompletableDeferred<AgentResult>().await() // blocked until cancelled
@@ -1374,7 +1343,7 @@ class VoiceControllerSessionTest {
         coEvery { agentOrchestrator.expectsFollowUp() } returns false
         val rawFrames = MutableSharedFlow<ShortArray>()
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
         val ttsEngine = quietTtsEngine()
         val controller = makeController(
             fakeAsr, dispatcher,
@@ -1414,7 +1383,7 @@ class VoiceControllerSessionTest {
         }
         val rawFrames = MutableSharedFlow<ShortArray>()
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
         val controller = makeController(fakeAsr, dispatcher, audioCapture = audioCapture)
 
         controller.onPttPressed()
@@ -1444,7 +1413,7 @@ class VoiceControllerSessionTest {
         }
         val rawFrames = MutableSharedFlow<ShortArray>()
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
         val ttsEngine = mockk<TtsEngine>(relaxed = true)
         every { ttsEngine.speaking } returns MutableStateFlow(true)
         val controller = makeController(fakeAsr, dispatcher, audioCapture = audioCapture, ttsEngine = ttsEngine)
@@ -1474,8 +1443,8 @@ class VoiceControllerSessionTest {
         val releaseAsk = CompletableDeferred<Unit>()
         val lateSentenceFired = CompletableDeferred<Unit>()
         val agentOrchestrator = mockk<AgentOrchestrator>()
-        coEvery { agentOrchestrator.ask(any(), any()) } coAnswers {
-            val onSentence = secondArg<(String) -> Unit>()
+        coEvery { agentOrchestrator.ask(any(), any(), any()) } coAnswers {
+            val onSentence = thirdArg<(String) -> Unit>()
             askStarted.complete(Unit)
             // Swallow the hard stop's cancellation, then emit one more sentence — models the
             // real SSE loop running past the cancellation until its next suspension point.
@@ -1488,7 +1457,7 @@ class VoiceControllerSessionTest {
         coEvery { agentOrchestrator.expectsFollowUp() } returns false
         val rawFrames = MutableSharedFlow<ShortArray>()
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
         val ttsEngine = quietTtsEngine()
         val controller = makeController(
             fakeAsr, dispatcher,
@@ -1527,7 +1496,7 @@ class VoiceControllerSessionTest {
         coEvery { dispatcher.dispatch(any<ActionDef>(), any()) } returns DispatchResult(true)
         val rawFrames = MutableSharedFlow<ShortArray>()
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
         val controller = makeController(fakeAsr, dispatcher, audioCapture = audioCapture)
         val answers = mutableListOf<String>()
         controller.showAnswerHook = { text -> answers.add(text) }
@@ -1559,8 +1528,8 @@ class VoiceControllerSessionTest {
         val releaseAsk = CompletableDeferred<Unit>()
         val lateSentenceFired = CompletableDeferred<Unit>()
         val agentOrchestrator = mockk<AgentOrchestrator>()
-        coEvery { agentOrchestrator.ask(any(), any()) } coAnswers {
-            val onSentence = secondArg<(String) -> Unit>()
+        coEvery { agentOrchestrator.ask(any(), any(), any()) } coAnswers {
+            val onSentence = thirdArg<(String) -> Unit>()
             askStarted.complete(Unit)
             // Survives the hard stop's cancellation: models the real SSE loop still running
             // on the HTTP thread and delivering one more sentence long after the stop.
@@ -1573,7 +1542,7 @@ class VoiceControllerSessionTest {
         coEvery { agentOrchestrator.expectsFollowUp() } returns false
         val rawFrames = MutableSharedFlow<ShortArray>()
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any()) } returns rawFrames
+        audioCapture.stubFrames(rawFrames)
         val controller = makeController(
             fakeAsr, dispatcher,
             agentOrchestrator = agentOrchestrator,
@@ -1616,7 +1585,7 @@ class VoiceControllerSessionTest {
         val fakeAsr = FakeContinuousAsr(ready = true)
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         val agent = mockk<AgentOrchestrator>()
-        coEvery { agent.ask(any(), any()) } returns AgentResult.Answer(
+        coEvery { agent.ask(any(), any(), any()) } returns AgentResult.Answer(
             "Включаю", listOf(AgentToolOutcome("play_music", true)))
         coEvery { agent.noteAction(any()) } returns Unit
         coEvery { agent.expectsFollowUp() } returns false
@@ -1645,7 +1614,7 @@ class VoiceControllerSessionTest {
         val fakeAsr = FakeContinuousAsr(ready = true)
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         val agent = mockk<AgentOrchestrator>()
-        coEvery { agent.ask(any(), any()) } returns AgentResult.Answer(
+        coEvery { agent.ask(any(), any(), any()) } returns AgentResult.Answer(
             "Включаю", listOf(AgentToolOutcome("play_music", true)))
         coEvery { agent.noteAction(any()) } returns Unit
         coEvery { agent.expectsFollowUp() } returns false
@@ -1673,7 +1642,7 @@ class VoiceControllerSessionTest {
         val fakeAsr = FakeContinuousAsr(ready = true)
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         val agent = mockk<AgentOrchestrator>()
-        coEvery { agent.ask(any(), any()) } returns AgentResult.Answer(
+        coEvery { agent.ask(any(), any(), any()) } returns AgentResult.Answer(
             "Заряд 80%", listOf(AgentToolOutcome("get_battery", true)))
         coEvery { agent.noteAction(any()) } returns Unit
         coEvery { agent.expectsFollowUp() } returns false
@@ -1695,7 +1664,7 @@ class VoiceControllerSessionTest {
         val fakeAsr = FakeContinuousAsr(ready = true)
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         val agent = mockk<AgentOrchestrator>()
-        coEvery { agent.ask(any(), any()) } returns AgentResult.Answer(
+        coEvery { agent.ask(any(), any(), any()) } returns AgentResult.Answer(
             "Включаю", listOf(AgentToolOutcome("play_music", true)))
         coEvery { agent.noteAction(any()) } returns Unit
         coEvery { agent.expectsFollowUp() } returns false
@@ -1709,10 +1678,12 @@ class VoiceControllerSessionTest {
         awaitSubscribed(fakeAsr.events)
         fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("включи музыку"))
         // The deferred close is now parked on speaking.first { !it }. End the first session via
-        // silence auto-stop; ticks arriving while the utterance is still routing are dropped by
-        // the busy guard, so keep re-emitting until the session actually stops.
+        // silence auto-stop; silence while the utterance is still routing does not count, so
+        // keep re-emitting growing ticks until the session actually stops.
+        var silentMs = 0L
         awaitTrue {
-            fakeAsr.events.tryEmit(ContinuousAsrEvent.SilenceTick(30_000L))
+            silentMs += 30_000L
+            fakeAsr.events.tryEmit(ContinuousAsrEvent.SilenceTick(silentMs))
             !controller.listening.value
         }
 
@@ -1753,5 +1724,73 @@ class VoiceControllerSessionTest {
         assertEquals(1, journal.entries.value.size)
         assertEquals(VoiceJournalEntry.Outcome.ERROR, journal.entries.value.first().outcome)
         awaitTrue { answers.contains(modelMissingMsg) }
+    }
+
+    // --- 64035 safe latency mechanism: no network/model work competes with AudioRecord
+    // startup. Only the first real microphone frame starts local TTS + agent warmup.
+
+    @Test fun `first live mic frame prewarms reply path without early network prewarm`() {
+        val fakeAsr = FakeContinuousAsr(ready = true)
+        val dispatcher = mockk<ActionDispatcher>(relaxed = true)
+        val rawFrames = MutableSharedFlow<ShortArray>(extraBufferCapacity = 8)
+        val audioCapture = mockk<AudioCapture>(relaxed = true)
+        audioCapture.stubFrames(rawFrames)
+        val ttsEngine = mockk<TtsEngine>(relaxed = true)
+        every { ttsEngine.speaking } returns MutableStateFlow(false)
+        every { ttsEngine.audible() } returns false
+
+        val agentOrchestrator = mockk<AgentOrchestrator>(relaxed = true)
+        coEvery { agentOrchestrator.prewarm() } returns Unit
+
+        val gate = mockk<VoiceGate>()
+        every { gate.isEnabled() } returns true
+        every { gate.vehicleSnapshot() } returns null
+        every { gate.ttsEnabled() } returns true
+
+        val earcon = mockk<VoiceEarcon>(relaxed = true)
+        val automationEngine = mockk<AutomationEngine>(relaxed = true)
+        val automationResolver = mockk<VoiceAutomationResolver>()
+        coEvery { automationResolver.match(any()) } returns null
+
+        val context = mockk<Context>(relaxed = true)
+        val controller = VoiceController(audioCapture, dispatcher, earcon, gate,
+            automationEngine, automationResolver, agentOrchestrator, context,
+            ttsEngine, VoiceJournal(), fakeAsr,
+            agentIdentity = { AgentIdentity("", AgentPersona.NAVIGATOR) },
+            ttsModelManager = mockk(relaxed = true),
+            ruStressMarker = RuStressMarker { null },
+            selectedTtsVoice = { TtsVoiceCatalog.byId("dmitri") },
+            appStrings = appStringsOver(context))
+
+        controller.onPttPressed()
+        awaitTrue { controller.listening.value }
+        awaitSubscribed(rawFrames)
+
+        verify(exactly = 0) { ttsEngine.warmUp() }
+        verify(exactly = 0) { ttsEngine.prewarmNetwork() }
+        coVerify(exactly = 0) { agentOrchestrator.prewarm() }
+
+        rawFrames.tryEmit(shortArrayOf(1, 2, 3))
+
+        awaitVerify { verify(exactly = 1) { ttsEngine.warmUp() } }
+        awaitVerify { coVerify(exactly = 1) { agentOrchestrator.prewarm() } }
+        verify(exactly = 0) { ttsEngine.prewarmNetwork() }
+
+        controller.onPttPressed()
+        awaitTrue { !controller.listening.value }
+    }
+
+    @Test fun `ptt session start does not prewarm the tts network when spoken replies are disabled`() {
+        val fakeAsr = FakeContinuousAsr(ready = true)
+        val dispatcher = mockk<ActionDispatcher>(relaxed = true)
+        val ttsEngine = mockk<TtsEngine>(relaxed = true)
+        every { ttsEngine.speaking } returns MutableStateFlow(false)
+        // makeController's default gate.ttsEnabled() is false.
+        val controller = makeController(fakeAsr, dispatcher, ttsEngine = ttsEngine)
+
+        controller.onPttPressed()
+        awaitTrue { controller.listening.value }
+
+        verify(exactly = 0) { ttsEngine.prewarmNetwork() }
     }
 }

@@ -27,6 +27,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
             MediaRecorder.AudioSource.DEFAULT,              // 0
         )
         internal const val DUCK_VOLUME_INDEX = 1
+        internal const val EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX = 4
         private const val TAG = "AudioCapture"
         // Pre-duck media volume survives process death here; restoreStuckDuck() reads it
         // at service start (stuck-quiet media after a crash / APK update mid session).
@@ -60,7 +61,9 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
     // an energy/silence heuristic here. The old RMS gate closed the window ~800 ms in if the user
     // hadn't started talking loudly yet, cutting them off mid-phrase. [maxMs] is only a safety
     // backstop so the mic can't stay open forever (e.g. continuous noise with no VAD endpoint).
-    fun captureSession(maxMs: Long = 8000): Flow<ShortArray> = callbackFlow {
+    // [mark] runs on the capture thread right after each read, so it describes the moment the
+    // audio was captured -- frames can wait in the channel while the consumer blocks (a decode).
+    fun <T> captureSession(maxMs: Long = 8000, mark: () -> T): Flow<MicFrame<T>> = callbackFlow {
         val minBuf = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         ).coerceAtLeast(SAMPLE_RATE) // ~0.5s
@@ -101,7 +104,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
             try {
                 while (!isClosedForSend) {
                     val n = record.read(buf, 0, buf.size)
-                    if (n > 0) trySend(buf.copyOf(n))
+                    if (n > 0) trySend(MicFrame(buf.copyOf(n), mark()))
                     if ((System.nanoTime() - start) / 1_000_000 >= maxMs) break
                 }
             } finally {
@@ -142,6 +145,25 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         prefs.edit().putInt(KEY_PRE_DUCK_VOLUME, saved).apply()
         Log.i(TAG, "duckMusic: $saved -> $target")
         return saved
+    }
+
+    /** Milder, reversible duck used while the external Yandex Alice route owns the mic button. */
+    internal fun duckMusicForExternalAssistant(): Int? = synchronized(duckLock) {
+        if (!audioManager.isMusicActive) return null
+        val saved = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        if (saved <= EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX) return null
+        if (!runCatching {
+                audioManager.setStreamVolume(
+                    AudioManager.STREAM_MUSIC,
+                    EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX,
+                    0,
+                )
+            }.isSuccess) return null
+        duckDepth++
+        pendingRestore = saved
+        prefs.edit().putInt(KEY_PRE_DUCK_VOLUME, saved).apply()
+        Log.i(TAG, "duckExternalAlice: $saved -> $EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX")
+        saved
     }
 
     /** Restore the media volume captured by duckMusic(), or the explicit mid-session override. No-op if nothing was ducked. */
@@ -206,7 +228,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         val saved = prefs.getInt(KEY_PRE_DUCK_VOLUME, -1)
         if (saved < 0) return
         val cur = runCatching { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrNull()
-        if (cur != null && cur <= DUCK_VOLUME_INDEX) {
+        if (cur != null && cur <= maxOf(DUCK_VOLUME_INDEX, EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX)) {
             runCatching { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, saved, 0) }
             Log.i(TAG, "restoreStuckDuck: volume stuck at $cur, restored to $saved")
         } else {
@@ -226,3 +248,6 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         return null
     }
 }
+
+/** One mic read and the caller's [AudioCapture.captureSession] mark taken when it was captured. */
+class MicFrame<T>(val pcm: ShortArray, val mark: T)

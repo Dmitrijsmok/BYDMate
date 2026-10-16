@@ -1,11 +1,13 @@
 package com.bydmate.app.data.autoservice
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -70,7 +72,15 @@ class AdbRestoreManagerTest {
         var classicResults = mutableListOf(false, true)
         var classicCalls = 0
         var helperStarts = 0
+        /** Our accessibility service bound by the framework. */
+        var a11yBound = false
+        var a11yEnableCalls = 0
+        var a11yEnableResult = true
+        var a11yEnableThrows: RuntimeException? = null
+        /** Same as [helperGate], for enableAccessibilityService. */
+        var a11yGate: CompletableDeferred<Unit>? = null
         var now = 1_000_000L
+        var sdk = 30
         var slept = 0L
         val sleeps = mutableListOf<Long>()
         var onAttemptStart: (suspend () -> Unit)? = null
@@ -140,6 +150,19 @@ class AdbRestoreManagerTest {
             return true
         }
 
+        override fun isAccessibilityServiceBound(): Boolean = a11yBound
+
+        override suspend fun enableAccessibilityService(): Boolean {
+            a11yEnableCalls++
+            a11yGate?.let {
+                withContext(NonCancellable) { it.await() }
+                currentCoroutineContext().ensureActive()
+            }
+            a11yEnableThrows?.let { throw it }
+            if (a11yEnableResult) a11yBound = true
+            return a11yEnableResult
+        }
+
         override suspend fun sleep(ms: Long) {
             // The real sleep is delay(), which is a cancellation point; without this the fake
             // would keep running inside a cancelled wave and prove nothing about rollback.
@@ -150,6 +173,7 @@ class AdbRestoreManagerTest {
             onSleep?.let { it(); onSleep = null }
         }
         override fun nowMs(): Long = now
+        override fun sdkInt(): Int = sdk
     }
 
     private fun manager(
@@ -184,6 +208,41 @@ class AdbRestoreManagerTest {
         assertEquals(AdbRestoreState.Disabled, m.state.value)
         assertEquals(0, system.classicCalls)
         assertTrue(system.settingsWrites.isEmpty())
+    }
+
+    @Test
+    fun `Android 10 with the toggle stored on never attempts and reports Unsupported`() = runTest {
+        val system = FakeSystem().apply { sdk = 29 }
+        val prefs = FakePrefs(enabled = true)
+        val m = manager(prefs, system)
+
+        assertEquals(AdbRestoreState.Unsupported, m.state.value)
+        m.attemptIfNeeded("service_start")
+        m.attemptIfNeeded("wifi")
+
+        assertEquals(AdbRestoreState.Unsupported, m.state.value)
+        assertFalse(m.isSupported())
+        assertEquals(0, system.classicCalls)
+        assertEquals(0, system.discoverCalls)
+        assertEquals(0L, system.slept)
+        assertTrue(system.settingsWrites.isEmpty())
+        assertEquals("none", m.lastTrigger)
+        // The stored setting is left as the user set it.
+        assertTrue(prefs.isEnabled())
+    }
+
+    @Test
+    fun `Android 11 with the toggle on attempts as before`() = runTest {
+        val system = FakeSystem().apply { sdk = 30 }
+        val m = manager(FakePrefs(), system)
+
+        assertEquals(AdbRestoreState.Disabled, m.state.value)
+        assertTrue(m.isSupported())
+        m.attemptIfNeeded("service_start")
+
+        assertTrue(system.classicCalls > 0)
+        assertEquals("service_start", m.lastTrigger)
+        assertTrue(m.state.value is AdbRestoreState.Restored)
     }
 
     @Test
@@ -1043,5 +1102,154 @@ class AdbRestoreManagerTest {
         runCurrent()
 
         assertEquals(2, system.helperStarts)
+    }
+
+    @Test
+    fun `restore lists the a11y service for the dialog when it is missing`() = runTest {
+        val system = FakeSystem().apply { classicResults = mutableListOf(false, true) }
+        val m = manager(FakePrefs(), system)
+
+        m.attemptIfNeeded()
+
+        assertTrue(m.state.value is AdbRestoreState.Restored)
+        assertEquals(1, system.a11yEnableCalls)
+    }
+
+    @Test
+    fun `restore leaves an already bound a11y service alone`() = runTest {
+        val system = FakeSystem().apply {
+            classicResults = mutableListOf(false, true)
+            a11yBound = true
+        }
+        val m = manager(FakePrefs(), system)
+
+        m.attemptIfNeeded()
+
+        assertTrue(m.state.value is AdbRestoreState.Restored)
+        assertEquals(0, system.a11yEnableCalls)
+    }
+
+    @Test
+    fun `NotNeeded lists the a11y service when it is missing`() = runTest {
+        val system = FakeSystem().apply { classicResults = mutableListOf(true) }
+        val m = manager(FakePrefs(), system)
+
+        m.attemptIfNeeded("service_start")
+
+        assertEquals(AdbRestoreState.NotNeeded, m.state.value)
+        assertEquals(1, system.a11yEnableCalls)
+    }
+
+    @Test
+    fun `NeedsDialog does not touch the a11y service`() = runTest {
+        val system = FakeSystem().apply {
+            classicResults = mutableListOf(false)
+            settingSticks = false
+        }
+        val m = manager(FakePrefs(), system, scope = backgroundScope)
+
+        m.attemptIfNeeded()
+
+        assertEquals(AdbRestoreState.NeedsDialog, m.state.value)
+        assertEquals(0, system.a11yEnableCalls)
+    }
+
+    @Test
+    fun `toggle off does not touch the a11y service`() = runTest {
+        val system = FakeSystem().apply { classicResults = mutableListOf(true) }
+        val m = manager(FakePrefs(enabled = false), system)
+
+        m.attemptIfNeeded()
+
+        assertEquals(AdbRestoreState.Disabled, m.state.value)
+        assertEquals(0, system.a11yEnableCalls)
+    }
+
+    @Test
+    fun `a refused a11y enable is not retried in the same process`() = runTest {
+        val system = FakeSystem().apply {
+            classicResults = mutableListOf(true)
+            a11yEnableResult = false
+        }
+        val m = manager(FakePrefs(), system)
+
+        m.attemptIfNeeded("service_start")
+        m.attemptIfNeeded("wifi_validated")
+
+        assertEquals(AdbRestoreState.NotNeeded, m.state.value)
+        assertEquals(1, system.a11yEnableCalls)
+    }
+
+    @Test
+    fun `a throwing a11y enable keeps the verdict and is not retried`() = runTest {
+        val system = FakeSystem().apply {
+            classicResults = mutableListOf(true)
+            a11yEnableThrows = RuntimeException("daemon gone")
+        }
+        val m = manager(FakePrefs(), system)
+
+        m.attemptIfNeeded("service_start")
+        assertEquals(AdbRestoreState.NotNeeded, m.state.value)
+        m.attemptIfNeeded("wifi_validated")
+
+        assertEquals(AdbRestoreState.NotNeeded, m.state.value)
+        assertEquals(1, system.a11yEnableCalls)
+    }
+
+    @Test
+    fun `a refused a11y enable after restore keeps Restored`() = runTest {
+        val system = FakeSystem().apply {
+            classicResults = mutableListOf(false, true)
+            a11yEnableResult = false
+        }
+        val m = manager(FakePrefs(), system)
+
+        m.attemptIfNeeded()
+
+        assertTrue(m.state.value is AdbRestoreState.Restored)
+        assertEquals(1, system.a11yEnableCalls)
+    }
+
+    @Test
+    fun `a cancellation inside the a11y enable keeps unwinding`() = runTest {
+        val system = FakeSystem().apply { classicResults = mutableListOf(true) }
+        val m = manager(FakePrefs(), system, backgroundScope)
+        val gate = CompletableDeferred<Unit>()
+        system.a11yGate = gate
+        var thrown: Throwable? = null
+
+        val job = launch { thrown = runCatching { m.attemptIfNeeded("service_start") }.exceptionOrNull() }
+        runCurrent()
+        assertEquals(1, system.a11yEnableCalls)
+
+        // Toggle off while the daemon op is in flight, then the op returns into a dead coroutine.
+        m.setEnabled(false)
+        job.cancel()
+        gate.complete(Unit)
+        runCurrent()
+
+        // Swallowed, the attempt would go on into afterAttempt and return normally.
+        assertTrue("expected CancellationException, got $thrown", thrown is CancellationException)
+        assertEquals(AdbRestoreState.Disabled, m.state.value)
+    }
+
+    @Test
+    fun `toggle off during the helper bootstrap skips the a11y enable`() = runTest {
+        val system = FakeSystem().apply { classicResults = mutableListOf(false, true) }
+        val m = manager(FakePrefs(), system, backgroundScope)
+        val gate = CompletableDeferred<Unit>()
+        system.helperGate = gate
+
+        launch { m.attemptIfNeeded() }
+        runCurrent()
+        assertEquals(1, system.helperStarts)
+
+        // Not a cancellation: the attempt's own coroutine lives on, only the toggle changed.
+        m.setEnabled(false)
+        gate.complete(Unit)
+        runCurrent()
+
+        assertEquals(0, system.a11yEnableCalls)
+        assertEquals(AdbRestoreState.Disabled, m.state.value)
     }
 }

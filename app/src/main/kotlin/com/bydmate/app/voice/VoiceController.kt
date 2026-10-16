@@ -4,18 +4,21 @@ import android.content.Context
 import android.util.Log
 import com.bydmate.app.agent.AgentOrchestrator
 import com.bydmate.app.agent.AgentResult
+import com.bydmate.app.agent.AgentTrace
 import com.bydmate.app.data.automation.ActionDispatcher
 import com.bydmate.app.data.automation.AutomationEngine
 import com.bydmate.app.data.automation.VoiceFireResult
 import com.bydmate.app.R
-import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.data.local.entity.ActionDef
 import com.bydmate.app.ui.overlay.ListeningOverlay
+import com.bydmate.app.util.AppStrings
 import com.bydmate.app.util.appLocalizedContext
+import com.bydmate.app.voice.online.TtsRouter
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
@@ -25,20 +28,22 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class VoiceController @Inject constructor(
+@Suppress("LargeClass") // the whole voice session: capture marks, ASR events, routing, agent turns
+class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hilt-injected dependencies
     private val audioCapture: AudioCapture,
     private val actionDispatcher: ActionDispatcher,
-    private val localePreferences: LocalePreferences,
     private val earcon: VoiceEarcon,
     private val gate: VoiceGate,
     private val automationEngine: AutomationEngine,
@@ -52,7 +57,9 @@ class VoiceController @Inject constructor(
     private val ttsModelManager: TtsModelManager,
     private val ruStressMarker: RuStressMarker,
     private val selectedTtsVoice: () -> TtsVoice,
+    private val appStrings: AppStrings,
     private val echoFilter: SelfEchoFilter = SelfEchoFilter(),
+    private val userPhrases: VoiceUserPhrases = VoiceUserPhrases(),
 ) {
     // Process-lifetime scope (@Singleton): intentionally never cancelled.
     private val scope = CoroutineScope(SupervisorJob())
@@ -66,12 +73,22 @@ class VoiceController @Inject constructor(
 
     private val busy = AtomicBoolean(false)
     @Volatile private var sessionJob: Job? = null
+    @Volatile private var warmupJob: Job? = null
+    private val externalAliceDuckLock = Any()
+    @Volatile private var externalAliceDuckSaved: Int? = null
+    private val externalAliceDuckGeneration = AtomicInteger(0)
     @Volatile private var routingJob: Job? = null
     @Volatile private var cancellableAskJob: Job? = null
     // Busy drops are Log.i-only by contract (no journal/earcon/state change), so tests have no
     // observable signal that the sequential collect consumed a dropped utterance; this counter
     // is that signal. @Volatile: written by the collect coroutine, read from the test thread.
     @Volatile private var droppedWhileBusy = 0
+
+    /** The utterance being routed: when routing started (dispatch latency in the journal) and,
+     *  once no local resolver claimed it, why it went to the agent. Routing is sequential (one
+     *  routingJob at a time), so a single slot is enough. */
+    private data class Turn(val startedAtMs: Long = 0L, val agentReason: String? = null)
+    @Volatile private var turn = Turn()
 
     /**
      * Returns true when any voice session is active: the continuous GigaAM session (sets both
@@ -80,6 +97,71 @@ class VoiceController @Inject constructor(
      * Used by VoiceAutomationActions to gate speak/agent_query actions.
      */
     fun sessionActive(): Boolean = listening.value || busy.get()
+
+    /** Preserve the field-proven hand-off used by the physical mic-button Alice route. */
+    fun beginExternalAssistantAudio() {
+        val saved = synchronized(externalAliceDuckLock) {
+            externalAliceDuckSaved ?: runCatching {
+                audioCapture.duckMusicForExternalAssistant()
+            }.getOrNull()?.also { externalAliceDuckSaved = it }
+        }
+        val generation = externalAliceDuckGeneration.incrementAndGet()
+        Log.i(TAG, "ALICE_EXTERNAL_DUCK begin saved=${saved} generation=${generation}")
+        scope.launch {
+            delay(EXTERNAL_ALICE_DUCK_TIMEOUT_MS)
+            if (externalAliceDuckGeneration.get() == generation) {
+                endExternalAliceDuck("safety_timeout")
+            }
+        }
+    }
+
+    fun endExternalAssistantAudio() = endExternalAliceDuck("launcher_finish")
+
+    private fun endExternalAliceDuck(reason: String) {
+        val saved = synchronized(externalAliceDuckLock) {
+            val value = externalAliceDuckSaved
+            externalAliceDuckSaved = null
+            value
+        }
+        externalAliceDuckGeneration.incrementAndGet()
+        if (saved != null) runCatching { audioCapture.restoreMusic(saved) }
+        Log.i(TAG, "ALICE_EXTERNAL_DUCK end reason=${reason} restored=${saved != null}")
+    }
+
+    /**
+     * Provider hand-off: never let Yandex Alice start while Local BYDMate still owns
+     * AudioRecord or TTS.
+     */
+    fun stopForExternalAssistant(): Boolean {
+        val wasActive = _listening.value || sessionJob?.isActive == true ||
+            warmupJob?.isActive == true || ttsEngine.speaking.value
+        warmupJob?.cancel()
+        warmupJob = null
+        if (_listening.value || sessionJob?.isActive == true) {
+            stopContinuousSession()
+        } else {
+            runCatching { ttsEngine.stop() }
+        }
+        return wasActive
+    }
+
+    /**
+     * Safe part of the 64035 latency mechanism: only after a real microphone frame exists,
+     * warm local TTS and the agent in parallel. Never prewarm the network before capture.
+     */
+    private fun prewarmReplyPathAfterMicReady() {
+        Log.i(TAG, "reply prewarm: live microphone confirmed")
+        if (gate.ttsEnabled()) {
+            scope.launch(Dispatchers.IO) {
+                runCatching { ttsEngine.warmUp() }
+                    .onFailure { Log.w(TAG, "reply TTS prewarm failed", it) }
+            }
+        }
+        scope.launch(Dispatchers.IO) {
+            runCatching { agentOrchestrator.prewarm() }
+                .onFailure { Log.w(TAG, "reply agent prewarm failed", it) }
+        }
+    }
 
     /** Test seams, same rationale as [lastSpeakingSeenMs]: deterministic await conditions
      *  instead of fixed sleeps, no public API surface added. */
@@ -92,23 +174,57 @@ class VoiceController @Inject constructor(
     // half-commanded. processingUtterance is retained as a flag for the barge-in / busy-drop path.
     @Volatile private var processingUtterance = false
     private val stopRequested = AtomicBoolean(false)
-    // Anti-self-trigger mute window for the continuous session's mic capture. Stamped two ways:
+    // Playback window of the continuous session: while our own TTS is audible and for
+    // TTS_ECHO_GRACE_MS after it, the mic hears the agent's voice too. Frames still reach the
+    // recognizer (a name barge-in must be heard while the agent talks), but an utterance that
+    // overlaps the window is never routed as a command, see onPlaybackOverlapped(). Stamped two ways:
     // (1) at call time, right after ttsEngine.speak() returns true (announce()/agent answer) --
     // this is the floor, since we always know when we start our own TTS, and it also covers a
     // short utterance that starts AND ends entirely between two mic frames, which would otherwise
     // never be observed. speak() returning false (blank text, or engine not ready -- e.g. voice
-    // not downloaded) means no audio was actually enqueued, so no stamp: muting the mic for a
-    // no-op would swallow the start of the user's next phrase for nothing.
-    // (2) inline in the mic filter for every frame where ttsEngine.speaking reads
+    // not downloaded) means no audio was actually enqueued, so no stamp: a playback window for a
+    // no-op would drop the user's next phrase for nothing.
+    // (2) in the capture-time frame mark for every frame where ttsEngine.audible() reads
     // true, which extends the stamp across longer utterances (no collect()-based watcher --
     // collecting a StateFlow can conflate a fast true->false->true transition away, silently
-    // missing a mute window; reading .value per frame always reflects that exact instant).
-    // shouldMute() stays muted for TTS_MUTE_GRACE_MS after this timestamp.
-    // 0 outside a continuous session -- shouldMute() then always reports false, so the legacy
+    // missing a window; reading .value per frame always reflects that exact instant).
+    // inPlaybackWindow() stays true for TTS_ECHO_GRACE_MS after this timestamp.
+    // 0 outside a continuous session -- inPlaybackWindow() then always reports false, so the legacy
     // one-shot path (whose mic already closed before it speaks) is never affected.
     // internal (not private): lets tests await the exact moment either stamp fires as a
     // deterministic condition, instead of a fixed sleep -- no public API surface added.
     @Volatile internal var lastSpeakingSeenMs: Long = 0L
+
+    // Test seam: the clock of the playback window, the self-name guard and the barge-in logs.
+    internal var clock: () -> Long = System::currentTimeMillis
+
+    // Set by the mic filter from each frame's capture-time mark (see FrameMark), read by the ASR
+    // event handler. frameInPlayback: the latest frame was captured inside the playback window.
+    // segmentOverlapsPlayback: a frame of the current speech segment was -- taken from the frame
+    // that triggered SpeechStart, then OR-ed per frame, so a phrase the agent started talking over
+    // is echo-contaminated the same way. frameSelfNameGuard / segmentSelfNameGuarded: the same
+    // for the self-name guard. audibleSinceMs: start of the current audible run, 0 while silent
+    // (barge-in log only).
+    @Volatile private var frameInPlayback = false
+    @Volatile private var frameSelfNameGuard = false
+    @Volatile private var segmentOverlapsPlayback = false
+    @Volatile private var segmentSelfNameGuarded = false
+    @Volatile private var audibleSinceMs = 0L
+    // Self-trigger guard: the reply being played names the agent, and its echo can start an
+    // overlapped utterance with that name, so a leading name does not barge in while it is up.
+    // TTS reports no per-sentence playback, so the guard follows the whole reply: armed when a
+    // text with the name is handed to TTS and held SELF_NAME_SPEAK_HOLD_MS past it (the named
+    // sentence may still wait for synthesis), held SPEAK_START_GRACE_MS past every other own
+    // text handed over while it is up, and for SELF_NAME_GRACE_MS past the last frame captured
+    // while TTS was audible or speaking. Released when a new reply starts or a name barges in:
+    // a reply arms it only if its own text names the agent.
+    // The deadline in clock() ms, 0 = released.
+    private val selfNameGuardUntilMs = AtomicLong(0L)
+    // Wave P play_music auto-close waiting for the reply to end; a name barge-in cancels it.
+    @Volatile private var musicCloseJob: Job? = null
+    // Same role as droppedWhileBusy, for utterances dropped as playback-overlapped.
+    @Volatile private var droppedDuringPlayback = 0
+    internal fun droppedDuringPlaybackForTest(): Int = droppedDuringPlayback
 
     // After a terminal state (Done/NotUnderstood/Blocked) the voice UI state auto-returns to Idle
     // so it never sticks (the "не распознал" red used to stay forever). Kept short so it
@@ -157,9 +273,9 @@ class VoiceController @Inject constructor(
             // never get stamped at all, since speaking never reads true on any frame. Only
             // stamp when speak() actually enqueued playback -- see lastSpeakingSeenMs above.
             val phrase = agentIdentity().persona.spokenPhrase(spoken)
+            releaseSelfNameGuardForNewReply()
             if (runCatching { ttsEngine.speak(phrase) }.getOrDefault(false)) {
-                echoFilter.noteSpoken(phrase)
-                lastSpeakingSeenMs = System.currentTimeMillis()
+                noteOwnSpeech(phrase)
                 didSpeak = true
             }
         }
@@ -170,38 +286,57 @@ class VoiceController @Inject constructor(
         scheduleClear(overlay, didSpeak)
     }
 
-    /** Records one journal entry + a matching logcat line for a terminal voice-session outcome.
-     *  The Chinese command string (if any) belongs only in [logMsg], never in [detail] or
-     *  [VoiceJournalEntry.transcript] — those stay user-displayable for the debug journal screen. */
-    private fun record(
-        route: VoiceJournalEntry.Route,
-        transcript: String,
-        detail: String,
-        outcome: VoiceJournalEntry.Outcome,
-        reason: String? = null,
-        logMsg: String,
-        tools: List<com.bydmate.app.agent.AgentToolOutcome> = emptyList(),
-        answer: String? = null,
-    ) {
-        journal.add(
-            VoiceJournalEntry(
-                timestampMs = System.currentTimeMillis(),
-                transcript = transcript,
-                route = route,
-                detail = detail,
-                outcome = outcome,
-                reason = reason,
-                tools = tools,
-                answer = answer,
-            )
-        )
-        Log.i(TAG, logMsg)
+    /** Everything the agent hands to TTS: the echo filter's memory, the playback-window stamp
+     *  (see [lastSpeakingSeenMs]) and the self-name guard (see [selfNameGuardUntilMs]). */
+    private fun noteOwnSpeech(text: String) {
+        echoFilter.noteSpoken(text)
+        val now = clock()
+        val named = AgentNameMatcher.matches(text, agentIdentity().name)
+        selfNameGuardUntilMs.updateAndGet {
+            when {
+                named -> maxOf(it, now + SELF_NAME_SPEAK_HOLD_MS)
+                it != 0L -> maxOf(it, now + SPEAK_START_GRACE_MS)
+                else -> it
+            }
+        }
+        if (named) Log.i(TAG, "Self-name guard armed: the reply names the agent")
+        lastSpeakingSeenMs = now
     }
 
-    // Fix D: prefer the Settings language override (via gate); fall back to app locale.
-    fun currentLang(): VoiceLang =
-        gate.preferredLang()
-            ?: if ((localePreferences.getLanguage() ?: "ru") == "en") VoiceLang.EN else VoiceLang.RU
+    /** A new reply supersedes the previous one: its guard must not carry over (see [selfNameGuardUntilMs]). */
+    private fun releaseSelfNameGuardForNewReply() {
+        if (selfNameGuardUntilMs.getAndSet(0L) != 0L) Log.i(TAG, "Self-name guard released: a new reply starts")
+    }
+
+    /** Capture-time mark of one mic frame (see [AudioCapture.captureSession]). */
+    private class FrameMark(val inPlayback: Boolean, val selfNameGuard: Boolean)
+
+    /** Whether the self-name guard covers a frame captured at [now]: held while TTS is audible
+     *  or speaking, released once its deadline has passed (see [selfNameGuardUntilMs]). */
+    private fun selfNameGuardAt(now: Long, audible: Boolean): Boolean {
+        if (selfNameGuardUntilMs.get() == 0L) return false
+        if (audible || ttsEngine.speaking.value) {
+            selfNameGuardUntilMs.updateAndGet { if (it == 0L) 0L else maxOf(it, now + SELF_NAME_GRACE_MS) }
+            return true
+        }
+        val until = selfNameGuardUntilMs.get()
+        if (until == 0L) return false
+        if (now < until) return true
+        if (selfNameGuardUntilMs.compareAndSet(until, 0L)) Log.i(TAG, "Self-name guard released: the reply naming the agent is over")
+        return false
+    }
+
+    /** Records one journal entry + matching logcat lines for a terminal voice-session outcome.
+     *  The Chinese command string (if any) belongs only in [logMsg], never in the entry — its
+     *  fields stay user-displayable for the debug journal screen. An entry with [asrMs] belongs
+     *  to a routed utterance and gets its dispatch latency stamped here. */
+    private fun record(entry: VoiceJournalEntry, logMsg: String) {
+        val startedAt = turn.startedAtMs
+        val e = if (entry.asrMs != null && startedAt > 0L) entry.copy(dispatchMs = entry.timestampMs - startedAt) else entry
+        journal.add(e)
+        Log.i(TAG, logLine(e))
+        Log.i(TAG, logDetail(logMsg))
+    }
 
     /** Supertonic voices need a side-loaded dictionary for uppercase stress marking. This runs
      *  out-of-band so a missing network/dict never blocks recognition; [TtsModelManager] itself
@@ -215,47 +350,65 @@ class VoiceController @Inject constructor(
     }
 
     /** PTT toggle (Wave B): no session running -> start one (continuous GigaAM session when the
-     *  model is ready and the language is RU, else the GigaAM model is missing or the language is
-     *  non-RU (GigaAM does not support it) -> report the specific cause without starting a
-     *  session (#87): "model missing" when GigaAM isn't downloaded, "language not RU" when it
-     *  is; a continuous session already listening -> stop it immediately (barge-in stops TTS
-     *  too). */
+     *  model is ready, whatever the app language: voice is always Russian), else report the
+     *  missing model without starting a session (#87); a continuous session already listening
+     *  -> stop it immediately (barge-in stops TTS too). */
     fun onPttPressed() {
         if (!gate.isEnabled()) return
         if (_listening.value) {
             stopContinuousSession()
             return
         }
-        if (continuousAsr.isReady() && currentLang() == VoiceLang.RU) {
-            startContinuousSession()
+        if (continuousAsr.isReady()) {
+            if (continuousAsr.requiresWarmBeforeListening()) startLocalSessionWhenReady()
+            else startContinuousSession()
         } else {
-            // GigaAM model missing (or non-RU language, which GigaAM does not support):
-            // preserve the degraded UX the legacy path produced — overlay + journal ERROR.
+            // GigaAM model missing: preserve the degraded UX the legacy path produced —
+            // overlay + journal ERROR.
             if (!busy.compareAndSet(false, true)) return
             // A prior continuous-session hard stop (stopContinuousSession()) leaves stopRequested
             // set; only startContinuousSession() used to clear it. Without this reset, announce()
             // below would silently suppress this branch's overlay+speech forever for a user who
             // can never start a continuous session again to reset the flag (I-1).
             stopRequested.set(false)
-            // Two distinct causes share this branch (#87): the GigaAM model genuinely
-            // missing vs. a non-RU voice language (GigaAM is Russian-only) — the old
-            // single "model not loaded" text sent EN-locale users chasing a phantom
-            // download problem.
-            val langBlocked = continuousAsr.isReady() && currentLang() != VoiceLang.RU
-            val msg = context.getString(
-                if (langBlocked) R.string.voice_error_lang_not_ru
-                else R.string.voice_error_model_missing
-            )
+            val msg = appStrings.get(R.string.voice_error_model_missing)
             _state.value = VoiceUiState.NotUnderstood("")
             record(
-                VoiceJournalEntry.Route.NONE, "", "", VoiceJournalEntry.Outcome.ERROR,
-                msg,
-                "GigaAM ${if (langBlocked) "lang not supported" else "model not ready"} lang=${currentLang()}"
+                VoiceJournalEntry(transcript = "", route = VoiceJournalEntry.Route.REFUSED, detail = "",
+                    outcome = VoiceJournalEntry.Outcome.ERROR, reason = msg, refusal = VoiceRefusal.MODEL_MISSING),
+                "GigaAM model not ready"
             )
             busy.set(false)
             scheduleIdleReset()
             scope.launch { announce("Голос", msg, msg) }
         }
+    }
+
+    /**
+     * Do not expose the listening state until both the GigaAM recognizer and the spare Silero
+     * VAD are hot. This keeps native model construction off the microphone acquisition path.
+     */
+    private fun startLocalSessionWhenReady() {
+        if (continuousAsr.isWarm()) {
+            startContinuousSession()
+            return
+        }
+        if (warmupJob?.isActive == true) return
+        warmupJob = scope.launch(Dispatchers.IO) {
+            try {
+                continuousAsr.warmUp()
+                if (canStartAfterWarmup()) startContinuousSession()
+            } finally {
+                warmupJob = null
+            }
+        }
+    }
+
+    private suspend fun canStartAfterWarmup(): Boolean {
+        if (!currentCoroutineContext().isActive) return false
+        if (!gate.isEnabled()) return false
+        if (!continuousAsr.isWarm()) return false
+        return !_listening.value
     }
 
     /** Continuous PTT-toggled session (Wave B): one long-lived mic capture feeds VAD-segmented
@@ -268,6 +421,12 @@ class VoiceController @Inject constructor(
         // Barge-in: kill any ongoing TTS so it neither talks over the user nor bleeds into capture.
         runCatching { ttsEngine.stop() }
         lastSpeakingSeenMs = 0L
+        frameInPlayback = false
+        frameSelfNameGuard = false
+        segmentOverlapsPlayback = false
+        segmentSelfNameGuarded = false
+        audibleSinceMs = 0L
+        selfNameGuardUntilMs.set(0L)
         processingUtterance = false
         routingJob = null
         cancellableAskJob = null
@@ -282,67 +441,125 @@ class VoiceController @Inject constructor(
         val earlyDuck = runCatching { audioCapture.duckMusic() }.getOrNull()
         sessionJob = scope.launch {
             val session = coroutineContext[Job]
-            runCatching { showListeningOverlay(context.getString(R.string.voice_listening)) }
+            runCatching { showListeningOverlay(appStrings.get(R.string.voice_listening)) }
             var lastEventMs = System.currentTimeMillis()
-            var wasAudible = false
+            var wasAudible = false   // capture thread only
+            var replyPathWarmupStarted = false
+            // Silence for the auto-stop, counted the way it was while playback muted the mic:
+            // the agent's turn (routing, then a frame captured in the playback window) does not
+            // count, and the countdown starts over once the turn is over, so neither a long
+            // thinking phase nor a long answer eats the driver's waiting time after it. Derived
+            // from GigaAM's cumulative SilenceTick, which restarts at every SpeechStart.
+            var silentMs = 0L
+            var lastTickSilentMs = 0L
+            var inAgentTurn = false
             try {
-                val pcm = audioCapture.captureSession(maxMs = Long.MAX_VALUE) // Wave P: no session cap; silence auto-stop below is the only auto-exit
-                    .filter {
+                // Wave P: no session cap; silence auto-stop below is the only auto-exit.
+                // The mark runs on the capture thread when the frame is read, not when it is
+                // processed: frames pile up in the capture channel while GigaAM decodes, and a
+                // frame the agent's voice was captured in must stay marked however late it comes.
+                val pcm = audioCapture.captureSession(maxMs = Long.MAX_VALUE) {
+                    // Read the real, physical playback signal each frame (see
+                    // lastSpeakingSeenMs above for why not a collect()-based watcher):
+                    // audible(), not the logical speaking flag, which is deliberately held
+                    // true across a whole streamed reply (including silent tool rounds) so
+                    // this mark would otherwise flag the mic as overlapped while the agent "thinks".
+                    val audible = ttsEngine.audible()
+                    val now = clock()
+                    if (audible) {
+                        lastSpeakingSeenMs = now
+                        if (!wasAudible) audibleSinceMs = now
+                    } else if (wasAudible) {
+                        // Transition from audible to silent: notify echo filter
+                        echoFilter.onPlaybackEnd()
+                        audibleSinceMs = 0L
+                    }
+                    wasAudible = audible
+                    FrameMark(
+                        inPlayback = inPlaybackWindow(now, lastSpeakingSeenMs + TTS_ECHO_GRACE_MS, audible),
+                        selfNameGuard = selfNameGuardAt(now, audible),
+                    )
+                }
+                    .filter { frame ->
+                        if (!replyPathWarmupStarted) {
+                            replyPathWarmupStarted = true
+                            prewarmReplyPathAfterMicReady()
+                        }
                         // Once a stop has been requested (see stopContinuousSession()) no further
                         // frames are forwarded to the recognizer, even while an in-flight utterance
                         // started before the stop is still being routed.
                         if (stopRequested.get()) return@filter false
-                        // Read the real, physical playback signal each frame (see
-                        // lastSpeakingSeenMs above for why not a collect()-based watcher):
-                        // audible(), not the logical speaking flag, which is deliberately held
-                        // true across a whole streamed reply (including silent tool rounds) so
-                        // this filter would otherwise deafen the mic while the agent "thinks".
-                        val speaking = ttsEngine.audible()
-                        val now = System.currentTimeMillis()
-                        if (speaking) lastSpeakingSeenMs = now
-                        else if (wasAudible) {
-                            // Transition from audible to silent: notify echo filter
-                            echoFilter.onPlaybackEnd()
-                        }
-                        wasAudible = speaking
-                        !shouldMute(now, lastSpeakingSeenMs + TTS_MUTE_GRACE_MS, speaking)
+                        // Frames in the playback window pass too: the utterance they belong to is
+                        // marked instead, see onPlaybackOverlapped().
+                        frameInPlayback = frame.mark.inPlayback
+                        frameSelfNameGuard = frame.mark.selfNameGuard
+                        if (frame.mark.inPlayback) segmentOverlapsPlayback = true
+                        if (frame.mark.selfNameGuard) segmentSelfNameGuarded = true
+                        true
                     }
+                    .map { it.pcm }
                 continuousAsr.transcribe(pcm).collect { ev ->
                     when (ev) {
                         is ContinuousAsrEvent.SpeechStart -> {
                             lastEventMs = System.currentTimeMillis()
+                            segmentOverlapsPlayback = frameInPlayback
+                            segmentSelfNameGuarded = frameSelfNameGuard
+                            lastTickSilentMs = 0L
+                            // A muted frame never started speech before the name barge-in.
+                            if (!frameInPlayback) silentMs = 0L
                             // The live VAD now detects speech while a routing child is in
                             // flight; clobbering Thinking here would violate the busy-drop
                             // contract (no state change while an utterance is being routed).
-                            if (!processingUtterance) _state.value = VoiceUiState.Listening
+                            // Speech inside the playback window is most likely the agent's own
+                            // voice: the state stays put, a real barge-in sets it.
+                            if (!processingUtterance && !frameInPlayback) _state.value = VoiceUiState.Listening
                         }
                         is ContinuousAsrEvent.SilenceTick -> {
                             lastEventMs = System.currentTimeMillis()
-                            if (ev.silentMs >= SILENCE_AUTOSTOP_MS && !processingUtterance) throw StopSession
+                            val tickMs = if (ev.silentMs >= lastTickSilentMs) ev.silentMs - lastTickSilentMs else ev.silentMs
+                            lastTickSilentMs = ev.silentMs
+                            // Frames flow during playback, so a quiet reply counts as silence
+                            // for the VAD: never auto-stop while the agent is still talking.
+                            val agentTurn = processingUtterance || frameInPlayback
+                            if (agentTurn) {
+                                inAgentTurn = true
+                            } else {
+                                if (inAgentTurn) {
+                                    inAgentTurn = false
+                                    silentMs = 0L
+                                    Log.i(TAG, "Silence auto-stop countdown restarted: the agent's turn is over")
+                                }
+                                silentMs += tickMs
+                            }
+                            if (silentMs >= SILENCE_AUTOSTOP_MS && !agentTurn) throw StopSession
                         }
                         is ContinuousAsrEvent.Utterance -> {
                             val decodeMs = System.currentTimeMillis() - lastEventMs
+                            val overlapped = segmentOverlapsPlayback
+                            val selfNameGuarded = segmentSelfNameGuarded
+                            segmentOverlapsPlayback = false
+                            segmentSelfNameGuarded = false
+                            if (overlapped) {
+                                // The driver took the turn: the silence wait starts over.
+                                if (onPlaybackOverlapped(ev, decodeMs, selfNameGuarded)) silentMs = 0L
+                                return@collect
+                            }
                             if (processingUtterance) {
                                 if (AgentNameMatcher.matches(ev.text, agentIdentity().name)) {
                                     cancellableAskJob?.takeIf { it.isActive }?.let { ask ->
                                         Log.i(TAG, "Barge-in by name")
                                         ask.cancel()
-                                        runCatching { ttsEngine.stop() }
-                                        earcon.ok()
-                                        _state.value = VoiceUiState.Listening
-                                        runCatching { updateListeningOverlay(context.getString(R.string.voice_listening)) }
-                                        record(VoiceJournalEntry.Route.NONE, ev.text, "Прерван по имени",
-                                            VoiceJournalEntry.Outcome.OK, null, "Barge-in by name")
+                                        bargeIn(ev.text, "Barge-in by name")
                                     } ?: Log.i(TAG, "Barge-in by name ignored: no cancellable ask")
                                     return@collect
                                 }
-                                Log.i(TAG, "Utterance dropped while busy: ${ev.text}")
+                                Log.i(TAG, busyDropLine(ev.text))
                                 droppedWhileBusy++
                                 return@collect
                             }
                             processingUtterance = true
                             val job = launch(start = CoroutineStart.LAZY) {
-                                runCatching { updateListeningOverlay(context.getString(R.string.voice_thinking)) }
+                                runCatching { updateListeningOverlay(appStrings.get(R.string.voice_thinking)) }
                                 try {
                                     routeUtterance(ev.text, decodeMs)
                                 } catch (t: Throwable) {
@@ -352,13 +569,15 @@ class VoiceController @Inject constructor(
                                     if (t is CancellationException) throw t
                                     earcon.fail()
                                     _state.value = VoiceUiState.NotUnderstood(ev.text)
-                                    record(VoiceJournalEntry.Route.NONE, ev.text, withDecodeMs(ev.text, decodeMs), VoiceJournalEntry.Outcome.ERROR, null,
+                                    record(VoiceJournalEntry(transcript = ev.text, route = VoiceJournalEntry.Route.REFUSED,
+                                        detail = withDecodeMs(ev.text, decodeMs), outcome = VoiceJournalEntry.Outcome.ERROR,
+                                        reason = t.message, refusal = VoiceRefusal.INTERNAL_ERROR, asrMs = decodeMs),
                                         "Continuous session utterance failed: decodeMs=$decodeMs ${t.message}")
                                     announce("Голос", "Отказ: ${t.message ?: "внутренняя ошибка"}", "Ошибка")
                                 } finally {
                                     routingJob = null
                                     processingUtterance = false
-                                    runCatching { updateListeningOverlay(context.getString(R.string.voice_listening)) }
+                                    runCatching { updateListeningOverlay(appStrings.get(R.string.voice_listening)) }
                                     if (stopRequested.get()) session?.cancel()
                                 }
                             }
@@ -378,7 +597,8 @@ class VoiceController @Inject constructor(
                 // (caught above, session stays open), this tears the whole session down.
                 if (t is CancellationException) throw t
                 Log.w(TAG, "Continuous session failed: ${t.message}")
-                record(VoiceJournalEntry.Route.NONE, "", "", VoiceJournalEntry.Outcome.ERROR, null,
+                record(VoiceJournalEntry(transcript = "", route = VoiceJournalEntry.Route.REFUSED, detail = "",
+                    outcome = VoiceJournalEntry.Outcome.ERROR, reason = t.message, refusal = VoiceRefusal.ASR_FAILED),
                     "Continuous session failed: ${t.message}")
                 announce("Голос", "Отказ: ${t.message ?: "внутренняя ошибка"}", "Ошибка")
             } finally {
@@ -396,6 +616,59 @@ class VoiceController @Inject constructor(
                 busy.set(false)
             }
         }
+    }
+
+    /** An utterance whose audio overlapped our own playback: the mic heard the agent as well, so
+     *  it is never routed as a command, and the text after a leading name is not trusted either.
+     *  A leading agent name barges in whether or not an ask is still in flight -- the last
+     *  sentences keep playing after routing has finished -- unless [selfNameGuarded] (a frame of
+     *  it was captured while the self-name guard was up). Anything else is dropped.
+     *  @return true when it barged in. */
+    private fun onPlaybackOverlapped(ev: ContinuousAsrEvent.Utterance, decodeMs: Long, selfNameGuarded: Boolean): Boolean {
+        val transcript = ev.text
+        val name = agentIdentity().name
+        val nameAt = AgentNameMatcher.nameIndex(transcript, name)
+        val named = nameAt == 0
+        val selfName = named && selfNameGuarded
+        val decision = when {
+            !named -> "dropped"
+            selfName -> "dropped (self-name guard: the reply being played names the agent)"
+            else -> "barge-in"
+        }
+        Log.i(TAG, playbackOverlapLine(transcript, nameAt, ev.audioMs, decision, decodeMs))
+        if (!named || selfName) {
+            droppedDuringPlayback++
+            return false
+        }
+        val rest = AgentNameMatcher.stripLeadingName(transcript, name)
+        if (rest != transcript) Log.i(TAG, logDetail("Barge-in remainder not routed (echo-contaminated): \"$rest\""))
+        val now = clock()
+        val since = audibleSinceMs
+        val ask = cancellableAskJob?.takeIf { it.isActive }
+        Log.i(TAG, "Barge-in by name during playback: audibleForMs=${if (since > 0L) now - since else -1} " +
+            "sinceLastAudioMs=${now - lastSpeakingSeenMs} askActive=${ask != null} routing=$processingUtterance")
+        ask?.cancel()
+        bargeIn(transcript, "Barge-in by name during playback")
+        return true
+    }
+
+    /** Name barge-in: silence the agent and hand the turn back to the driver. The caller has
+     *  already cancelled the in-flight ask, if there was one. */
+    private fun bargeIn(transcript: String, logMsg: String) {
+        // Before stop(): the play_music auto-close resumes on the very speaking=false it causes.
+        musicCloseJob?.takeIf { it.isActive }?.let {
+            it.cancel()
+            Log.i(TAG, "play_music auto-close cancelled by barge-in: the driver stays in the dialog")
+        }
+        runCatching { ttsEngine.stop() }
+        // The interrupted reply is over: the next one arms the guard only if it names the agent.
+        if (selfNameGuardUntilMs.getAndSet(0L) != 0L) Log.i(TAG, "Self-name guard released by barge-in")
+        earcon.ok()
+        _state.value = VoiceUiState.Listening
+        runCatching { updateListeningOverlay(appStrings.get(R.string.voice_listening)) }
+        record(VoiceJournalEntry(transcript = transcript, route = VoiceJournalEntry.Route.AGENT,
+            detail = "Прерван по имени", outcome = VoiceJournalEntry.Outcome.OK,
+            refusal = VoiceRefusal.BARGE_IN), logMsg)
     }
 
     /** User contract: orb button is a hard OFF switch. Cancels everything immediately, regardless
@@ -427,6 +700,7 @@ class VoiceController @Inject constructor(
     private suspend fun routeUtterance(transcript: String, decodeMs: Long) {
         // Orb dialog: show "Ты: <phrase>" (clearing any prior answer) and cancel a pending clear so a
         // fresh turn keeps the block visible. The pill has already flipped to "Думаю" at the call site.
+        turn = Turn(startedAtMs = System.currentTimeMillis())
         showHeardHook(transcript)
         val command = AgentNameMatcher.stripLeadingName(transcript, agentIdentity().name)
         cancelScheduledClear()
@@ -437,18 +711,50 @@ class VoiceController @Inject constructor(
         // A silent drop: no earcon, no state change, no spoken "Не понял" -- speaking that phrase
         // would itself be noteSpoken'd and risk being echo-caught again, looping the agent's own voice.
         if (transcript == command && echoFilter.isEcho(transcript)) {
-            record(VoiceJournalEntry.Route.NONE, transcript, withDecodeMs(transcript, decodeMs),
-                VoiceJournalEntry.Outcome.NOT_UNDERSTOOD, "Эхо своей речи",
+            record(VoiceJournalEntry(transcript = transcript, route = VoiceJournalEntry.Route.REFUSED,
+                detail = withDecodeMs(transcript, decodeMs), outcome = VoiceJournalEntry.Outcome.NOT_UNDERSTOOD,
+                reason = "Эхо своей речи", refusal = VoiceRefusal.ECHO, asrMs = decodeMs),
                 "Echo filtered: transcript=\"$transcript\"")
             return
         }
 
-        // An unanswered clarifying question from the agent outranks NLU: the phrase
-        // is the ANSWER ("водителя", "назови её Дом") and must reach ask() verbatim.
+        // An unanswered clarifying question from the agent outranks every local resolver: the
+        // phrase is the ANSWER ("водителя", "закрой все окна" to "что выполнять?") and must reach
+        // ask() verbatim. A question the agent asked after acting is not a clarification, see
+        // AgentOrchestrator.expectsFollowUp.
         val followUp = runCatching { agentOrchestrator.expectsFollowUp() }.getOrDefault(false)
-        val res = if (followUp) null else resolve(command, currentLang())
+        val res = if (followUp) Resolution.None(VoiceRefusal.AGENT_FOLLOWUP_WINDOW) else resolve(command)
+        val localReply = if (!followUp && res is Resolution.None) {
+            // Latency-critical read-only vehicle questions stay local. Anything ambiguous
+            // continues to the normal agent/OpenRouter path.
+            LocalVehicleQuery.answer(command, gate.vehicleSnapshot())
+        } else {
+            null
+        }
         _state.value = VoiceUiState.Thinking
-        if (res != null) apply(res, command, decodeMs) else agentFallback(command, decodeMs)
+        when {
+            localReply != null -> {
+                earcon.ok()
+                _state.value = VoiceUiState.AgentAnswer(localReply.text)
+                record(
+                    VoiceJournalEntry(
+                        transcript = command,
+                        route = VoiceJournalEntry.Route.NLU,
+                        detail = withDecodeMs(command, decodeMs),
+                        outcome = VoiceJournalEntry.Outcome.OK,
+                        answer = localReply.text,
+                        asrMs = decodeMs,
+                    ),
+                    "Local vehicle query: kind=${localReply.kind} transcript=\"$command\"",
+                )
+                announce("Голос", localReply.text, localReply.text)
+            }
+            res is Resolution.None -> {
+                turn = turn.copy(agentReason = res.reason)
+                agentFallback(command, decodeMs)
+            }
+            else -> apply(res, command, decodeMs)
+        }
     }
 
     /** Appends the continuous-session decode latency to a journal detail string; a no-op
@@ -457,25 +763,40 @@ class VoiceController @Inject constructor(
     private fun withDecodeMs(text: String, decodeMs: Long?): String =
         if (decodeMs != null) "$text decodeMs=$decodeMs" else text
 
-    /** Side-effect-free resolution of a transcript to an actionable command (built-in catalog first,
-     *  then user automations). Returns null when nothing matches — used both for early-fire probing
-     *  of partials and for routing the final. */
-    private suspend fun resolve(text: String, lang: VoiceLang): Resolution? =
-        when (val r = NluParser.parse(text, lang)) {
-            is ParseResult.Command -> Resolution.Cmd(r.commands)
+    /** Side-effect-free resolution of a transcript to an actionable command. Precedence (the
+     *  agent follow-up window, checked by the caller, outranks all of them):
+     *  1. an automation phrase equal to the whole utterance, word for word after normalization;
+     *  2. the user's own phrase for a built-in command, equal to the whole utterance;
+     *  3. the built-in NluParser on the full utterance;
+     *  4. the agent (Resolution.None, with the parser's reason).
+     *  A user-made phrase goes first so the user can take over a phrase the parser gets wrong;
+     *  it never fires from inside a longer utterance, so «открой окно» never swallows
+     *  «открой окно наполовину», «не открывай окно» or «открой окно на палец». */
+    private suspend fun resolve(text: String): Resolution {
+        automationResolver.match(text)?.let { return Resolution.Auto(it) }
+        userPhrases.match(text)?.let { return Resolution.Cmd(listOf(it.command), "phrase:${it.id}") }
+        return parse(text)
+    }
+
+    private fun parse(text: String): Resolution = when (val o = NluOutcome.of(NluParser.parse(text))) {
+        is NluOutcome.Refused -> Resolution.None(o.reason)
+        is NluOutcome.Understood -> when (val r = o.result) {
+            is ParseResult.Command -> Resolution.Cmd(r.commands, VoiceCommandLabels.of(r.commands))
             is ParseResult.RelativeTemp -> Resolution.RelTemp(r.sign)
             is ParseResult.Volume -> Resolution.Vol(r.payload)
-            ParseResult.Unrecognized -> automationResolver.match(text)?.let { Resolution.Auto(it) }
+            ParseResult.Unrecognized -> Resolution.None(VoiceRefusal.UNRECOGNIZED)
         }
+    }
 
     /** Execute a resolved command and set the terminal voice UI state. decodeMs is null for the
      *  legacy one-shot path (no per-utterance decode timing there). */
     private suspend fun apply(res: Resolution, transcript: String, decodeMs: Long? = null) {
         when (res) {
-            is Resolution.Cmd -> execute(res.commands, transcript, decodeMs)
+            is Resolution.Cmd -> execute(res.commands, transcript, decodeMs, res.label)
             is Resolution.RelTemp -> dispatchRelativeTemp(res.sign, transcript, decodeMs)
             is Resolution.Vol -> dispatchVolume(res.payload, transcript, decodeMs)
-            is Resolution.Auto -> fireAutomation(res.ruleId, transcript, decodeMs)
+            is Resolution.Auto -> fireAutomation(res.match, transcript, decodeMs)
+            is Resolution.None -> agentFallback(transcript, decodeMs)
         }
     }
 
@@ -519,7 +840,12 @@ class VoiceController @Inject constructor(
         clearJob?.cancel()
     }
 
-    private suspend fun execute(commands: List<String>, transcript: String, decodeMs: Long? = null) {
+    private suspend fun execute(
+        commands: List<String>,
+        transcript: String,
+        decodeMs: Long? = null,
+        label: String = VoiceCommandLabels.of(commands),
+    ) {
         val snapshot = gate.vehicleSnapshot()
         val cmdLog = commands.joinToString("+")
         // Fail CLOSED on unknown speed for window- and sunroof-open commands (both speed-gated
@@ -533,8 +859,8 @@ class VoiceController @Inject constructor(
             earcon.fail()
             val reason = ActionDispatcher.BlockReason.SpeedUnknown.toText(context)
             _state.value = VoiceUiState.Blocked(reason)
-            record(VoiceJournalEntry.Route.NLU, transcript, withDecodeMs(transcript, decodeMs), VoiceJournalEntry.Outcome.BLOCKED, reason,
-                "NLU blocked (speed unknown): cmd=$cmdLog transcript=\"$transcript\"")
+            record(nluEntry(transcript, decodeMs, label, VoiceJournalEntry.Outcome.BLOCKED)
+                .copy(reason = reason, refusal = VoiceRefusal.gate("speed_unknown")), "NLU blocked (speed unknown): cmd=$cmdLog transcript=\"$transcript\"")
             announce("Голос", "Услышал: «$transcript». Отказ: $reason", "Не получилось")
             return
         }
@@ -558,7 +884,7 @@ class VoiceController @Inject constructor(
         if (failReason == null) {
             earcon.ok()
             _state.value = VoiceUiState.Done(transcript)
-            record(VoiceJournalEntry.Route.NLU, transcript, withDecodeMs(transcript, decodeMs), VoiceJournalEntry.Outcome.OK, null,
+            record(nluEntry(transcript, decodeMs, label, VoiceJournalEntry.Outcome.OK),
                 "NLU dispatched: cmd=$cmdLog transcript=\"$transcript\"")
             announce("Голос", "Услышал: «$transcript». Выполнено", "Готово")
             // Fire-and-forget: the note must never make the voice announce path wait on the
@@ -567,8 +893,8 @@ class VoiceController @Inject constructor(
         } else {
             earcon.fail()
             _state.value = VoiceUiState.Blocked(failReason)
-            record(VoiceJournalEntry.Route.NLU, transcript, withDecodeMs(transcript, decodeMs), VoiceJournalEntry.Outcome.BLOCKED, failReason,
-                "NLU blocked: cmd=$cmdLog transcript=\"$transcript\" reason=$failReason")
+            record(nluEntry(transcript, decodeMs, label, VoiceJournalEntry.Outcome.BLOCKED)
+                .copy(reason = failReason, refusal = VoiceRefusal.DISPATCH_FAILED), "NLU blocked: cmd=$cmdLog transcript=\"$transcript\" reason=$failReason")
             announce("Голос", "Услышал: «$transcript». Отказ: $failReason", "Не получилось")
         }
     }
@@ -581,8 +907,8 @@ class VoiceController @Inject constructor(
             earcon.fail()
             val reason = "Не знаю текущую температуру"
             _state.value = VoiceUiState.Blocked(reason)
-            record(VoiceJournalEntry.Route.NLU, transcript, withDecodeMs(transcript, decodeMs), VoiceJournalEntry.Outcome.BLOCKED, reason,
-                "NLU blocked (acTemp unknown): transcript=\"$transcript\"")
+            record(nluEntry(transcript, decodeMs, "ac_temp_step=$sign", VoiceJournalEntry.Outcome.BLOCKED)
+                .copy(reason = reason, refusal = VoiceRefusal.gate("ac_temp_unknown")), "NLU blocked (acTemp unknown): transcript=\"$transcript\"")
             announce("Голос", "Услышал: «$transcript». Отказ: $reason", "Не получилось")
             return
         }
@@ -600,7 +926,7 @@ class VoiceController @Inject constructor(
         if (result.success) {
             earcon.ok()
             _state.value = VoiceUiState.Done(transcript)
-            record(VoiceJournalEntry.Route.NLU, transcript, withDecodeMs(transcript, decodeMs), VoiceJournalEntry.Outcome.OK, null,
+            record(nluEntry(transcript, decodeMs, "media_volume=$payload", VoiceJournalEntry.Outcome.OK),
                 "NLU dispatched: cmd=media_volume payload=$payload transcript=\"$transcript\"")
             announce("Голос", "Услышал: «$transcript». Выполнено", "Готово")
             scope.launch { runCatching { agentOrchestrator.noteAction(transcript) } }
@@ -608,13 +934,18 @@ class VoiceController @Inject constructor(
             val reason = result.reason ?: transcript
             earcon.fail()
             _state.value = VoiceUiState.Blocked(reason)
-            record(VoiceJournalEntry.Route.NLU, transcript, withDecodeMs(transcript, decodeMs), VoiceJournalEntry.Outcome.BLOCKED, reason,
-                "NLU blocked: cmd=media_volume payload=$payload transcript=\"$transcript\" reason=$reason")
+            record(nluEntry(transcript, decodeMs, "media_volume=$payload", VoiceJournalEntry.Outcome.BLOCKED)
+                .copy(reason = reason, refusal = VoiceRefusal.DISPATCH_FAILED), "NLU blocked: cmd=media_volume payload=$payload transcript=\"$transcript\" reason=$reason")
             announce("Голос", "Услышал: «$transcript». Отказ: $reason", "Не получилось")
         }
     }
 
-    private suspend fun fireAutomation(ruleId: Long, transcript: String, decodeMs: Long? = null) {
+    private suspend fun fireAutomation(match: VoiceAutomationMatch, transcript: String, decodeMs: Long? = null) {
+        val ruleId = match.ruleId
+        fun entry(outcome: VoiceJournalEntry.Outcome, reason: String? = null, refusal: String? = null) =
+            VoiceJournalEntry(transcript = transcript, route = VoiceJournalEntry.Route.AUTOMATION,
+                detail = withDecodeMs(transcript, decodeMs), outcome = outcome, reason = reason,
+                command = match.ruleName, refusal = refusal, asrMs = decodeMs)
         when (val r = automationEngine.fireVoiceRule(ruleId, gate.vehicleSnapshot())) {
             is VoiceFireResult.Fired ->
                 if (r.success) {
@@ -622,19 +953,19 @@ class VoiceController @Inject constructor(
                     // scope, not that they already finished (they may still contain a delay);
                     // say "Выполняю", not "Выполнено".
                     earcon.ok(); _state.value = VoiceUiState.Done(transcript)
-                    record(VoiceJournalEntry.Route.NLU, transcript, withDecodeMs(transcript, decodeMs), VoiceJournalEntry.Outcome.OK, null,
+                    record(entry(VoiceJournalEntry.Outcome.OK),
                         "NLU automation fired: ruleId=$ruleId transcript=\"$transcript\"")
                     announce("Голос", "Услышал: «$transcript». Выполняю", "Выполняю")
                     scope.launch { runCatching { agentOrchestrator.noteAction(transcript) } }
                 } else {
                     earcon.fail(); _state.value = VoiceUiState.Blocked(transcript)
-                    record(VoiceJournalEntry.Route.NLU, transcript, withDecodeMs(transcript, decodeMs), VoiceJournalEntry.Outcome.BLOCKED, transcript,
+                    record(entry(VoiceJournalEntry.Outcome.BLOCKED, transcript, VoiceRefusal.DISPATCH_FAILED),
                         "NLU automation fire failed: ruleId=$ruleId transcript=\"$transcript\"")
                     announce("Голос", "Услышал: «$transcript». Отказ: $transcript", "Не получилось")
                 }
             VoiceFireResult.Confirming -> {
                 earcon.ok(); _state.value = VoiceUiState.Done(transcript)
-                record(VoiceJournalEntry.Route.NLU, transcript, withDecodeMs(transcript, decodeMs), VoiceJournalEntry.Outcome.OK, null,
+                record(entry(VoiceJournalEntry.Outcome.OK),
                     "NLU automation confirming: ruleId=$ruleId transcript=\"$transcript\"")
                 announce("Голос", "Услышал: «$transcript». Выполнено", "Готово")
                 scope.launch { runCatching { agentOrchestrator.noteAction(transcript) } }
@@ -644,20 +975,20 @@ class VoiceController @Inject constructor(
                 // context follows the head unit's system locale, not the app language (#162).
                 val reason = context.appLocalizedContext().getString(R.string.voice_block_park_required)
                 earcon.fail(); _state.value = VoiceUiState.Blocked(reason)
-                record(VoiceJournalEntry.Route.NLU, transcript, withDecodeMs(transcript, decodeMs), VoiceJournalEntry.Outcome.BLOCKED, reason,
+                record(entry(VoiceJournalEntry.Outcome.BLOCKED, reason, VoiceRefusal.gate("park_required")),
                     "NLU automation blocked (park required): ruleId=$ruleId transcript=\"$transcript\"")
                 announce("Голос", "Услышал: «$transcript». Отказ: $reason", "Не получилось")
             }
             VoiceFireResult.SpeedUnknown -> {
                 val reason = ActionDispatcher.BlockReason.SpeedUnknown.toText(context)
                 earcon.fail(); _state.value = VoiceUiState.Blocked(reason)
-                record(VoiceJournalEntry.Route.NLU, transcript, withDecodeMs(transcript, decodeMs), VoiceJournalEntry.Outcome.BLOCKED, reason,
+                record(entry(VoiceJournalEntry.Outcome.BLOCKED, reason, VoiceRefusal.gate("speed_unknown")),
                     "NLU automation blocked (speed unknown): ruleId=$ruleId transcript=\"$transcript\"")
                 announce("Голос", "Услышал: «$transcript». Отказ: $reason", "Не получилось")
             }
             VoiceFireResult.NotFound -> {
                 earcon.fail(); _state.value = VoiceUiState.NotUnderstood(transcript)
-                record(VoiceJournalEntry.Route.NONE, transcript, withDecodeMs(transcript, decodeMs), VoiceJournalEntry.Outcome.NOT_UNDERSTOOD, null,
+                record(entry(VoiceJournalEntry.Outcome.NOT_UNDERSTOOD, refusal = VoiceRefusal.RULE_NOT_FOUND),
                     "NLU automation rule not found: ruleId=$ruleId transcript=\"$transcript\"")
                 if (transcript.isNotBlank()) {
                     announce("Голос", "Не понял: «$transcript»", "Не понял")
@@ -670,17 +1001,26 @@ class VoiceController @Inject constructor(
      *  unconfigured-off agent degrades to the pre-agent NotUnderstood behaviour. The agent's
      *  own tools re-check every dispatcher safety gate — nothing here bypasses them. */
     private suspend fun agentFallback(transcript: String, decodeMs: Long? = null) {
+        // Why no local resolver took the phrase: the agent entries below carry it.
+        val why = turn.agentReason ?: VoiceRefusal.UNRECOGNIZED
         if (transcript.isBlank()) {
             earcon.fail()
             _state.value = VoiceUiState.NotUnderstood(transcript)
-            record(VoiceJournalEntry.Route.NONE, transcript, withDecodeMs(transcript, decodeMs), VoiceJournalEntry.Outcome.NOT_UNDERSTOOD, null,
-                "Agent skipped: blank transcript")
+            record(VoiceJournalEntry(transcript = transcript, route = VoiceJournalEntry.Route.REFUSED,
+                detail = withDecodeMs(transcript, decodeMs), outcome = VoiceJournalEntry.Outcome.NOT_UNDERSTOOD,
+                refusal = VoiceRefusal.ASR_EMPTY, asrMs = decodeMs), "Agent skipped: blank transcript")
             announce("Голос", "Не понял", "Не понял")
             return
         }
+        releaseSelfNameGuardForNewReply()
         val queue = if (gate.ttsEnabled()) runCatching { ttsEngine.startQueue() }.getOrNull() else null
         val streamed = StringBuilder()
         var queuedAny = false
+        // Whether the filler alone reached the TTS queue. Audible, but not an answer sentence:
+        // must not suppress the earcon+legacy-speak fallback below (queuedAny gates that), or the
+        // driver hears only the filler when the real answer fails to enqueue. Still counts toward
+        // "something was said aloud" for the dialog dwell timer (didSpeak below).
+        var fillerQueued = false
         var r: AgentResult? = null
         coroutineScope {
             // LAZY so the body cannot run before askJob is assigned: the callback below gates
@@ -689,16 +1029,30 @@ class VoiceController @Inject constructor(
             // which would un-mute late callbacks from this already-hard-stopped turn.
             lateinit var askJob: Job
             askJob = launch(start = CoroutineStart.LAZY) {
-                r = agentOrchestrator.ask(transcript) { sentence ->
+                r = agentOrchestrator.ask(
+                    transcript,
+                    // The filler is speech only: queued for TTS, never shown in the orb's answer
+                    // row. With TTS off (no queue) there is no filler at all.
+                    onFiller = queue?.let { q ->
+                        { phrase ->
+                            // Same hard stop gate as the sentence callback below.
+                            if (!stopRequested.get() && !askJob.isCancelled &&
+                                runCatching { q.enqueue(phrase) }.getOrDefault(false)
+                            ) {
+                                noteOwnSpeech(phrase)
+                                fillerQueued = true
+                            }
+                        }
+                    },
+                ) { sentence ->
                     // Hard stop gate: the SSE loop can emit one more sentence between the ask
                     // job's cancellation and its next suspension point; this callback is
                     // non-suspend, so it must check for itself (the TTS queue is already
                     // superseded by tts.stop(), but the orb dialog repaint is not).
                     if (stopRequested.get() || askJob.isCancelled) return@ask
                     if (queue != null && runCatching { queue.enqueue(sentence) }.getOrDefault(false)) {
-                        echoFilter.noteSpoken(sentence)
+                        noteOwnSpeech(sentence)
                         queuedAny = true
-                        lastSpeakingSeenMs = System.currentTimeMillis()
                     }
                     if (streamed.isNotEmpty()) streamed.append(' ')
                     streamed.append(sentence)
@@ -719,16 +1073,18 @@ class VoiceController @Inject constructor(
             // that will never finish. Drop it so the driver is not left reading a stub while
             // the orb is already listening again.
             runCatching { clearDialogHook() }
-            record(VoiceJournalEntry.Route.AGENT, transcript, withDecodeMs(transcript, decodeMs),
-                VoiceJournalEntry.Outcome.ERROR, null, "Agent ask cancelled by name barge-in")
+            record(VoiceJournalEntry(transcript = transcript, route = VoiceJournalEntry.Route.AGENT,
+                detail = withDecodeMs(transcript, decodeMs), outcome = VoiceJournalEntry.Outcome.ERROR,
+                refusal = VoiceRefusal.BARGE_IN, asrMs = decodeMs), "Agent ask cancelled by name barge-in")
             return
         }
         // Hard stop gate: if the orb went off between ask.join() returning and this point,
         // the answer must not resurrect state, TTS, or the orb dialog (the path below has
         // no suspension point that would deliver the cancellation).
         if (stopRequested.get()) {
-            record(VoiceJournalEntry.Route.AGENT, transcript, withDecodeMs(transcript, decodeMs),
-                VoiceJournalEntry.Outcome.ERROR, null, "Agent answer suppressed: hard stop")
+            record(VoiceJournalEntry(transcript = transcript, route = VoiceJournalEntry.Route.AGENT,
+                detail = withDecodeMs(transcript, decodeMs), outcome = VoiceJournalEntry.Outcome.ERROR,
+                refusal = VoiceRefusal.HARD_STOP, asrMs = decodeMs), "Agent answer suppressed: hard stop")
             return
         }
         when (result) {
@@ -745,16 +1101,16 @@ class VoiceController @Inject constructor(
                 // driver sees WHICH tools ran and whether each succeeded (no emoji — DiLink).
                 val toolsNote = if (result.tools.isEmpty()) "" else
                     " [инструменты: " + result.tools.joinToString(", ") { "${it.name}:${if (it.ok) "ok" else "err"}" } + "]"
-                record(VoiceJournalEntry.Route.AGENT, transcript, withDecodeMs(result.text + toolsNote, decodeMs), VoiceJournalEntry.Outcome.OK, null,
-                    "Agent answered: transcript=\"$transcript\" tools=${result.tools.size}",
-                    tools = result.tools, answer = result.text)
-                var didSpeak = queuedAny
+                record(VoiceJournalEntry(transcript = transcript, route = VoiceJournalEntry.Route.AGENT,
+                    detail = withDecodeMs(result.text + toolsNote, decodeMs), outcome = VoiceJournalEntry.Outcome.OK,
+                    tools = result.tools, answer = result.text, refusal = why, asrMs = decodeMs),
+                    "Agent answered: transcript=\"$transcript\" tools=${result.tools.size}")
+                var didSpeak = queuedAny || fillerQueued
                 if (!queuedAny && gate.ttsEnabled()) {
                     // See announce() for why this is stamped at call time, not only per-frame,
                     // and only when speak() actually enqueued playback.
                     if (runCatching { ttsEngine.speak(result.text) }.getOrDefault(false)) {
-                        echoFilter.noteSpoken(result.text)
-                        lastSpeakingSeenMs = System.currentTimeMillis()
+                        noteOwnSpeech(result.text)
                         didSpeak = true
                     }
                 }
@@ -767,7 +1123,7 @@ class VoiceController @Inject constructor(
                 // no session to close) is untouched.
                 val closingJob = sessionJob
                 if (closingJob != null && result.tools.any { it.name == "play_music" && it.ok }) {
-                    scope.launch {
+                    musicCloseJob = scope.launch {
                         // speak()/enqueue() returns before the TTS worker flips speaking=true, so
                         // waiting for !speaking alone completes immediately and would cut the reply
                         // before it starts. Wait (bounded) for playback to begin, then for it to
@@ -784,13 +1140,16 @@ class VoiceController @Inject constructor(
             }
             AgentResult.Disabled -> {
                 earcon.fail(); _state.value = VoiceUiState.NotUnderstood(transcript)
-                record(VoiceJournalEntry.Route.NONE, transcript, withDecodeMs(transcript, decodeMs), VoiceJournalEntry.Outcome.NOT_UNDERSTOOD, null,
-                    "Agent disabled: transcript=\"$transcript\"")
+                record(VoiceJournalEntry(transcript = transcript, route = VoiceJournalEntry.Route.REFUSED,
+                    detail = withDecodeMs(transcript, decodeMs), outcome = VoiceJournalEntry.Outcome.NOT_UNDERSTOOD,
+                    refusal = why, asrMs = decodeMs), "Agent disabled: transcript=\"$transcript\"")
                 announce("Голос", "Не понял: «$transcript»", "Не понял")
             }
             is AgentResult.Error -> {
                 earcon.fail(); _state.value = VoiceUiState.Blocked(result.message)
-                record(VoiceJournalEntry.Route.AGENT, transcript, withDecodeMs(result.message, decodeMs), VoiceJournalEntry.Outcome.ERROR, result.message,
+                record(VoiceJournalEntry(transcript = transcript, route = VoiceJournalEntry.Route.AGENT,
+                    detail = withDecodeMs(result.message, decodeMs), outcome = VoiceJournalEntry.Outcome.ERROR,
+                    reason = result.message, refusal = why, asrMs = decodeMs),
                     "Agent error: ${result.message} transcript=\"$transcript\"")
                 announce("Голос", "Услышал: «$transcript». Отказ: ${result.message}", "Не получилось")
             }
@@ -800,14 +1159,50 @@ class VoiceController @Inject constructor(
     /** A resolved, actionable command. Decoupled from ParseResult/automation so a transcript can be
      *  resolved once (side-effect-free) and applied later — the basis of early-fire vs final routing. */
     private sealed interface Resolution {
-        data class Cmd(val commands: List<String>) : Resolution
+        /** [label] is the readable command for the journal ("phrase:<id>" for a user phrase). */
+        data class Cmd(val commands: List<String>, val label: String) : Resolution
         data class RelTemp(val sign: Int) : Resolution
         data class Vol(val payload: String) : Resolution
-        data class Auto(val ruleId: Long) : Resolution
+        data class Auto(val match: VoiceAutomationMatch) : Resolution
+        /** Nothing local claimed the phrase: it goes to the agent; [reason] is a VoiceRefusal code. */
+        data class None(val reason: String) : Resolution
     }
+
+    /** Journal entry of a built-in command (parser or user phrase) outcome. */
+    private fun nluEntry(transcript: String, decodeMs: Long?, command: String, outcome: VoiceJournalEntry.Outcome) =
+        VoiceJournalEntry(transcript = transcript, route = VoiceJournalEntry.Route.NLU,
+            detail = withDecodeMs(transcript, decodeMs), outcome = outcome, command = command, asrMs = decodeMs)
 
     companion object {
         private const val TAG = "VoiceController"
+
+        // Longest value one logcat summary field may carry (an automation name, an utterance).
+        private const val LOG_FIELD_CHARS = 200
+
+        /** The one-line logcat summary of a journal entry: every value flattened to one line,
+         *  quotes escaped and capped, so a name with a newline or a quote cannot break it. */
+        internal fun logLine(e: VoiceJournalEntry): String {
+            fun v(s: String?) = s?.let { AgentTrace.clip(VoiceJournalDump.oneLine(it), LOG_FIELD_CHARS) } ?: "-"
+            return "heard=\"${v(e.transcript)}\" route=${e.route.code} cmd=${v(e.command)} reason=${v(e.refusal)}"
+        }
+
+        /** The free-form detail line next to [logLine]: it may quote the transcript or an
+         *  automation name, so it is flattened and capped the same way. */
+        internal fun logDetail(msg: String): String =
+            AgentTrace.clip(VoiceJournalDump.oneLine(msg), LOG_DETAIL_CHARS)
+
+        private const val LOG_DETAIL_CHARS = 500
+
+        /** An utterance heard while another one is routed: its transcript is capped like any detail. */
+        internal fun busyDropLine(transcript: String): String = logDetail("Utterance dropped while busy: $transcript")
+
+        /** An utterance that overlapped our playback. The measurements go before the transcript
+         *  so the detail cap can only cut the transcript: segmentMs and nameAt (word index,
+         *  -1 = none) measure on the car how often the agent's own voice opens the segment and
+         *  pushes a real name past the first word. */
+        internal fun playbackOverlapLine(transcript: String, nameAt: Int, segmentMs: Long, decision: String, decodeMs: Long): String =
+            logDetail("Playback-overlapped utterance: nameMatch=${nameAt == 0} nameAt=$nameAt segmentMs=$segmentMs " +
+                "decodeMs=$decodeMs decision=$decision heard=\"$transcript\"")
 
         // Dwell on a terminal state before auto-returning to Idle. Short on purpose —
         // long enough to read "не распознал", short enough to feel instant.
@@ -825,21 +1220,30 @@ class VoiceController @Inject constructor(
         // Continuous session (Wave B): silence auto-stop. Wave P removed the hard session cap --
         // long conversations must never be cut off; silence is the only automatic exit.
         private const val SILENCE_AUTOSTOP_MS = 30_000L
+        private const val EXTERNAL_ALICE_DUCK_TIMEOUT_MS = 60_000L
 
         // Wave P play_music auto-close: how long to wait for the reply's playback to actually
         // begin (speaking=false -> true) before giving up and closing anyway. Covers offline
         // synth latency and the online 2 s per-sentence timeout with margin.
         private const val SPEAK_START_GRACE_MS = 5_000L
 
-        // Anti-self-trigger TTS mute window grace period, applied after ttsEngine.speaking
-        // transitions to false (see the speakingWatcher in startContinuousSession()).
-        private const val TTS_MUTE_GRACE_MS = 500L
+        // Playback window grace period after our own audio was last audible (or enqueued): the
+        // tail of the agent's voice can still reach the mic (see lastSpeakingSeenMs).
+        private const val TTS_ECHO_GRACE_MS = 500L
 
-        /** Pure so it is unit-testable without a real clock/session: whether capture should
-         *  currently be muted -- either TTS is actively speaking right now, or we're still
-         *  inside the post-speech grace window. */
-        internal fun shouldMute(nowMs: Long, muteUntilMs: Long, speaking: Boolean): Boolean =
-            speaking || nowMs < muteUntilMs
+        // Self-name guard hold after the last frame TTS was audible or speaking in (see
+        // selfNameGuardUntilMs): the echo tail, as long as SelfEchoFilter's short-echo window.
+        private const val SELF_NAME_GRACE_MS = 1_500L
+
+        // Self-name guard hold after a text with the name is handed to TTS: the longest online
+        // synthesis TtsRouter allows before that sentence starts playing, plus a margin.
+        private const val SELF_NAME_SPEAK_HOLD_MS = TtsRouter.SYNTH_TIMEOUT_MS + 2_000L
+
+        /** Pure so it is unit-testable without a real clock/session: whether the mic currently
+         *  hears our own playback -- either TTS is audible right now, or we're still inside the
+         *  post-speech grace window. */
+        internal fun inPlaybackWindow(nowMs: Long, windowEndMs: Long, audible: Boolean): Boolean =
+            audible || nowMs < windowEndMs
     }
 }
 

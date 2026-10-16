@@ -28,6 +28,8 @@ interface AdbOnDeviceClient {
     /** Initiates the ADB handshake. Suspends until handshake completes or fails. */
     suspend fun connect(): Result<Unit>
     suspend fun isConnected(): Boolean
+    /** Why the last connect attempt failed; null after a successful one or before any. No side effects. */
+    fun lastConnectFailure(): AdbConnectFailure?
     /** Executes a one-shot shell command and returns stdout, or null on failure. */
     suspend fun exec(cmd: String): String?
     /**
@@ -123,6 +125,8 @@ class AdbOnDeviceClientImpl @Inject constructor(
     override suspend fun isConnected(): Boolean = withContext(Dispatchers.IO) {
         protocol?.isConnected() ?: false
     }
+
+    override fun lastConnectFailure(): AdbConnectFailure? = protocol?.lastConnectFailure
 
     override suspend fun exec(cmd: String): String? = withContext(Dispatchers.IO) {
         // Structural barrier against accidental WRITE — only allow GETs to autoservice.
@@ -293,14 +297,14 @@ class AdbOnDeviceClientImpl @Inject constructor(
         private val WRITE_BARRIER_REGEX = Regex("""^service call autoservice [579] i32 \d+ i32 -?\d+$""")
 
         // Narrow whitelist for the two self-grants — only our own package.
-        private val PACKAGE_NAME_REGEX = Regex("""^com\.bydmate\.app$""")
+        private val PACKAGE_NAME_REGEX = Regex("""^com\.bydmate\.dilink3\.app$""")
 
         // Spawn token shape — alphanumeric only, so it can never break out of the spawn
         // command line. HelperBootstrap generates 32 hex characters.
         private val SPAWN_TOKEN_REGEX = Regex("""^[A-Za-z0-9]{16,64}$""")
 
         // Helper daemon — hardcoded so neither caller can inject paths/cmdlines.
-        private const val HELPER_PROCESS_NAME = "bydmate_helper"
-        private const val HELPER_LOG_PATH = "/data/local/tmp/bydmate_helper.log"
+        private const val HELPER_PROCESS_NAME = "bydm_d3_helper"
+        private const val HELPER_LOG_PATH = "/data/local/tmp/bydm_d3_helper.log"
     }
 }

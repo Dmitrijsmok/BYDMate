@@ -53,3 +53,8 @@ docs/superpowers/**/handoff-*
 # Local Claude Code tooling (never committed)
 .claude/
 .mcp.json
+
+# Kotlin 2.x compiler daemon working dir (sessions markers, error logs)
+.kotlin/
+
+docs/BYDMate_PRIVATE_AUTHOR_FEEDBACK.md

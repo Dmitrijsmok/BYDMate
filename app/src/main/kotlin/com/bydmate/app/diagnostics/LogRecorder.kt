@@ -378,6 +378,8 @@ class LogRecorder internal constructor(
             "AdbRestore:*", "AdbProtocolClient:*",
             // Window channel probe verdicts (percent family vs CTRL, #79/#64).
             "WindowChannelRouter:*",
+            // Offline dictionary: load result, self-test and the per-phrase miss line.
+            "NluParser:*",
             // Firmware fid catalog: where it came from and every address it moved.
             "FidCatalog:*",
             // Agent wave: one line per model round, tool call and finished turn.
@@ -390,7 +392,21 @@ class LogRecorder internal constructor(
             // Trip recorder: open/close lines carry the outside temperature of both ends.
             "TripRecorder:*",
             // Tariff periods: period saves, recalculation totals and the per-trip price choice.
-            "TARIFF:*"
+            "TARIFF:*",
+            // Post-3.17.5 wave: auto backup (scheduler, worker, runner), backup restore path,
+            // post-restore check and the APK cleanup after an update. Their acceptance lines
+            // never reached the recorded log because the tags were missing here.
+            "AutoBackup:*", "BackupManager:*", "PostRestoreCheck:*", "UpdateApkCleanup:*",
+            // Voice speed wave: which TTS source spoke and its per-sentence synth time, LLM
+            // retries, the per-round token usage line (prompt cache hits via cached_tokens) and
+            // the push-to-talk connection prewarm.
+            "TtsRouter:*", "LlmAgentBackend:*", "OpenRouterClient:*", "HttpPrewarm:*",
+            // Drive mode switch: one line per attempt (flag, target before/after, speed, verdict).
+            "DriveModeChannel:*",
+            // Telegram reports: build (items taken / skipped, length), send, outbox add/drain/drop.
+            "TgReport:*",
+            // Power-off report in the helper daemon: arm, power off/on, send attempts, outcome.
+            "OffReport:*"
         )
     }
 }

@@ -136,7 +136,8 @@ class NativeParsReader @Inject constructor(
         }
         android.util.Log.i(
             "TechPanel",
-            "tech: ins=${raw("insulationKohm")} mF=${raw("motorTempFront")} mR=${raw("motorTempRear")} " +
+            "tech: soc=${raw("soc")} remain=${raw("batteryRemainKwh")} " +
+                "ins=${raw("insulationKohm")} mF=${raw("motorTempFront")} mR=${raw("motorTempRear")} " +
                 "iF=${raw("inverterTempFront")} iR=${raw("inverterTempRear")} " +
                 "V=${raw("hvVoltage")} I=${raw("hvCurrent")} " +
                 "chg=${raw("bmsMaxChargeKw")} dis=${raw("bmsMaxDischargeKw")} " +
@@ -387,6 +388,8 @@ class NativeParsReader @Inject constructor(
             batteryPowerW       = batteryPowerW,
             bmsMaxChargeKw      = field<Double>("bmsMaxChargeKw")
                 ?.let { FieldGuards.double("bmsMaxChargeKw", it) },
+            bmsMaxDischargeAllowKw = field<Double>("bmsMaxDischargeAllowKw")
+                ?.let { FieldGuards.double("bmsMaxDischargeAllowKw", it) },
             bmsMaxDischargeKw   = ranged("bmsMaxDischargeKw"),
             motorRpmFront       = ranged("motorRpmFront"),
             motorRpmRear        = ranged("motorRpmRear"),
@@ -401,6 +404,13 @@ class NativeParsReader @Inject constructor(
             pedalBrake          = ranged("pedalBrake"),
             chargerConnectState = field<Int>("chargerConnectState"),
             chargeConnectIndicator = field<Int>("chargeConnectIndicator"),
+            driveModeTarget     = field<Int>("driveModeTarget"),
+            seatbeltRL          = field<Int>("seatbeltRL"),
+            seatbeltRM          = field<Int>("seatbeltRM"),
+            seatbeltRR          = field<Int>("seatbeltRR"),
+            rearBeltSettingRL   = field<Int>("rearBeltSettingRL"),
+            rearBeltSettingRM   = field<Int>("rearBeltSettingRM"),
+            rearBeltSettingRR   = field<Int>("rearBeltSettingRR"),
         )
     }
 

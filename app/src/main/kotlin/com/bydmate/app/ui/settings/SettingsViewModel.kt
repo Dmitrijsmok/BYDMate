@@ -6,25 +6,30 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.FileProvider
 import android.os.Environment
-import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.ContextCompat
-import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import android.content.Intent
-import android.net.Uri
 import android.util.Log
 import android.os.SystemClock
 import com.bydmate.app.agent.AgentOrchestrator
 import com.bydmate.app.agent.AgentResult
 import com.bydmate.app.agent.LlmConnectionResolver
 import com.bydmate.app.data.autoservice.AdbOnDeviceClient
+import com.bydmate.app.data.backup.AutoBackupPeriod
+import com.bydmate.app.data.backup.AutoBackupRunner
+import com.bydmate.app.data.backup.AutoBackupScheduler
+import com.bydmate.app.data.backup.BackupPart
 import com.bydmate.app.data.backup.BackupManager
+import com.bydmate.app.data.backup.TelegramBackupSink
+import com.bydmate.app.data.backup.TelegramChat
+import com.bydmate.app.data.backup.TelegramError
+import com.bydmate.app.data.backup.TelegramSinkException
+import com.bydmate.app.data.telegram.ReportField
 import com.bydmate.app.data.local.EnergyDataReader
 import com.bydmate.app.data.local.HistoryImporter
 import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.data.local.dao.IdleDrainDao
-import com.bydmate.app.data.local.dao.TripPointDao
 import com.bydmate.app.diagnostics.LogRecorder
 import com.bydmate.app.BuildConfig
 import com.bydmate.app.data.push.fidRecorderEnabled
@@ -39,14 +44,15 @@ import com.bydmate.app.data.local.entity.PlaceEntity
 import com.bydmate.app.data.local.entity.TariffPeriodEntity
 import com.bydmate.app.domain.cost.CostCalculator
 import com.bydmate.app.domain.cost.MeasuredLosses
-import com.bydmate.app.domain.cost.TariffSchedule
 import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.data.repository.PlaceRepository
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.data.repository.TripRepository
 import com.bydmate.app.service.TrackingService
 import com.bydmate.app.service.UpdateChecker
+import com.bydmate.app.util.applyAppLanguage
 import com.bydmate.app.util.CrashLog
+import com.bydmate.app.util.AppStrings
 import com.bydmate.app.util.appLocalizedContext
 import com.bydmate.app.R
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -57,14 +63,18 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -73,12 +83,17 @@ import com.bydmate.app.data.vehicle.DumpFidsResult
 import com.bydmate.app.data.vehicle.SeatChannel
 import com.bydmate.app.data.vehicle.SeatChannelStore
 import com.bydmate.app.service.BootReceiver
-import com.bydmate.app.ui.widget.WidgetController
 import com.bydmate.app.cluster.DEFAULT_VOICE_KEYCODE
+import com.bydmate.app.cluster.VoiceButtonBinding
+import com.bydmate.app.cluster.isVoiceAssignable
+import com.bydmate.app.cluster.reservedVoiceKeys
+import com.bydmate.app.cluster.voiceCompanionsFromCsv
+import com.bydmate.app.cluster.voiceCompanionsToCsv
 import com.bydmate.app.voice.AgentPersona
 import com.bydmate.app.voice.TtsGender
 import com.bydmate.app.voice.VoiceController
 import com.bydmate.app.voice.VoiceJournal
+import com.bydmate.app.voice.VoiceJournalDump
 import com.bydmate.app.voice.RuStressMarker
 import com.bydmate.app.voice.TtsEngine
 import com.bydmate.app.voice.TtsModelManager
@@ -88,9 +103,11 @@ import com.bydmate.app.voice.ContinuousAsr
 import com.bydmate.app.voice.online.TtsRouter
 import java.io.File
 import java.io.FileWriter
+import java.security.SecureRandom
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 
 /**
@@ -98,6 +115,15 @@ import javax.inject.Inject
  * Contains current setting values and export operation status.
  */
 /** Numbers behind a refused model download, in MB, ready for the error string. */
+/** A finished manual save (#238): the file in Download and the Telegram line; null = no bot connected. */
+data class SavedBackup(val file: File, val telegramStatus: String?)
+
+/** A backup picked for restore and the parts its manifest lists (#238). */
+data class RestoreChoice(val file: File, val parts: Set<BackupPart>)
+
+/** The bot backups go to and the chat it sends them into. */
+data class TgBackupBinding(val botName: String, val chatName: String)
+
 data class SpaceShortfall(val requiredMb: Long, val availableMb: Long) {
     companion object {
         private const val BYTES_PER_MB = 1024L * 1024L
@@ -118,7 +144,6 @@ data class SettingsUiState(
     val units: String = SettingsRepository.DEFAULT_UNITS,
     val currency: String = SettingsRepository.DEFAULT_CURRENCY,
     val currencySymbol: String = "BYN",
-    val exportStatus: String? = null,
     val importStatus: String? = null,
     val appVersion: String = "0.0.0",
     val updateStatus: String? = null,
@@ -177,14 +202,47 @@ data class SettingsUiState(
     val webhookSaveStatus: String? = null,
     /** Status of the last config backup/restore operation. Red if starts with error prefix. */
     val configStatus: String? = null,
+    /** Backups offered by the restore picker, newest first. Null = picker closed. */
+    val restoreCandidates: List<File>? = null,
+    /** Non-null = the «Что восстановить» dialog is open. */
+    val restoreChoice: RestoreChoice? = null,
+    /** A restore runs: save and restore stay disabled until it ends (the app restarts on success). */
+    val restoreInProgress: Boolean = false,
+    /** Result of the last manual save; non-null = the «Поделиться» dialog is open. */
+    val savedBackup: SavedBackup? = null,
+    /** Parts the manual save offers checked: the last choice (#238). */
+    val manualBackupParts: Set<BackupPart> = BackupPart.DEFAULT,
+    // Automatic backup (#237)
+    val autoBackupPeriod: AutoBackupPeriod = AutoBackupPeriod.OFF,
+    val autoBackupParts: Set<BackupPart> = BackupPart.DEFAULT,
+    /** 0 = never ran. */
+    val autoBackupLastTs: Long = 0L,
+    val autoBackupLastResult: String = "",
+    val tgBackupToken: String = "",
+    /** Progress or error of the last «Проверить»; null = nothing to say. */
+    val tgBackupStatus: String? = null,
+    val tgBackupChecking: Boolean = false,
+    /**
+     * One-time code the user sends to the bot to bind their chat; lives until a successful binding.
+     * Non-null = the stepper is on «Код».
+     */
+    val tgBackupCode: String? = null,
+    /** Bot found by the last «Проверить»; the code step names it. */
+    val tgBackupBotName: String = "",
+    /** Non-null = a bot is connected, the stepper is on «Готово». */
+    val tgBackupBinding: TgBackupBinding? = null,
+    /** Power-off Telegram report (3.19): the switch and its items. */
+    val tgReportOffEnabled: Boolean = false,
+    val tgReportOffFields: Set<ReportField> = ReportField.DEFAULT,
     /** Status of the last fid-catalog dump. Null = idle. Red if starts with error prefix. */
     val fidDumpStatus: String? = null,
     val mapTileSource: String = SettingsRepository.DEFAULT_MAP_TILE_SOURCE,
     // Voice settings
     val voiceEnabled: Boolean = false,
-    /** "RU", "EN", or "" (follow app language) */
-    val voiceLang: String = "",
     val voiceKeycode: Int = 0,
+    val voiceCompanions: Set<Int> = emptySet(),
+    val aliceKeycode: Int = 0,
+    val aliceCompanions: Set<Int> = emptySet(),
     // TTS settings (offline synthesis of agent replies)
     val ttsEnabled: Boolean = false,
     val ttsVoice: String = TtsModelManager.DEFAULT_VOICE_ID,
@@ -256,7 +314,7 @@ data class SettingsUiState(
 }
 
 @HiltViewModel
-class SettingsViewModel @Inject constructor(
+class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // Hilt-injected dependencies
     @ApplicationContext private val appContext: Context,
     private val settingsRepository: SettingsRepository,
     private val tripRepository: TripRepository,
@@ -265,7 +323,6 @@ class SettingsViewModel @Inject constructor(
     private val historyImporter: HistoryImporter,
     private val energyDataReader: EnergyDataReader,
     private val idleDrainDao: IdleDrainDao,
-    private val tripPointDao: TripPointDao,
     private val insightsManager: InsightsManager,
     private val adbOnDeviceClient: AdbOnDeviceClient,
     private val localePreferences: LocalePreferences,
@@ -299,14 +356,31 @@ class SettingsViewModel @Inject constructor(
     private val fidCatalogManager: com.bydmate.app.data.nativestack.FidCatalogManager,
     private val writeAllowlist: com.bydmate.app.data.vehicle.WriteAllowlist,
     private val ruleDao: com.bydmate.app.data.local.dao.RuleDao,
+    private val automationEngine: com.bydmate.app.data.automation.AutomationEngine,
     private val voiceJournal: VoiceJournal,
     private val tariffPeriodDao: TariffPeriodDao,
     private val costCalculator: CostCalculator,
     private val blindSpotController: com.bydmate.app.camera.BlindSpotController,
+    private val adbVerdictMonitor: com.bydmate.app.data.autoservice.AdbVerdictMonitor,
+    private val telegramBackupSink: TelegramBackupSink,
+    private val autoBackupScheduler: AutoBackupScheduler,
+    private val appStrings: AppStrings,
+    private val telegramReporter: com.bydmate.app.data.telegram.TelegramReporter,
 ) : ViewModel() {
+
+    /** ADB control-channel verdict for the line under the ADB-restore toggle. */
+    val adbVerdict: StateFlow<com.bydmate.app.data.autoservice.AdbVerdict?> = adbVerdictMonitor.verdict
+    val adbChecking: StateFlow<Boolean> = adbVerdictMonitor.checking
+
+    fun recheckAdb() = adbVerdictMonitor.recheck("settings")
+
+    fun enableAdbRestore() = adbVerdictMonitor.enableRestoreAndRecheck()
 
     private val _appLanguage = MutableStateFlow(localePreferences.getLanguage() ?: "ru")
     val appLanguage: StateFlow<String> = _appLanguage.asStateFlow()
+
+    private val _fontScale = MutableStateFlow(localePreferences.getFontScale())
+    val fontScale: StateFlow<Float> = _fontScale.asStateFlow()
 
     private val _agentName = MutableStateFlow(
         appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
@@ -320,18 +394,19 @@ class SettingsViewModel @Inject constructor(
     )
     val agentPersona: StateFlow<String> = _agentPersona.asStateFlow()
 
+    /** MainActivity listens to the same prefs file and re-provides the density on change. */
+    fun setFontScale(scale: Float) {
+        localePreferences.setFontScale(scale)
+        _fontScale.value = scale
+    }
+
     fun setAppLanguage(lang: String) {
-        localePreferences.setLanguage(lang)
-        AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(lang))
+        applyAppLanguage(appContext, localePreferences, lang)
         _appLanguage.value = lang
         // Auto-select CNY when switching to Chinese
         if (lang == "zh") {
             saveCurrency("CNY")
         }
-        // Force overlay teardown so the next attach picks up the new locale.
-        // applicationContext keeps a stale Configuration after setApplicationLocales,
-        // which leaves the floating widget rendering against the old language.
-        WidgetController.relocale(appContext)  // C-5: pass context from VM, not from widgetView
     }
 
     /** Forget the remembered seat write-channel; next seat command re-probes primary→fallback. */
@@ -353,8 +428,14 @@ class SettingsViewModel @Inject constructor(
         appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName ?: "?"
     } catch (_: Exception) { "?" }
 
+    private var automationButtonKeys: Set<Int> = emptySet()
+
     init {
         loadSettings()
+        viewModelScope.launch {
+            ruleDao.getAll().collect { automationButtonKeys = automationKeys(it) }
+        }
+        observeAutoBackup()
         loadTariffPeriods()
         observeLogRecorder()
         refreshFidRecorder()
@@ -461,10 +542,13 @@ class SettingsViewModel @Inject constructor(
 
             // Voice settings
             val voiceEnabled = settingsRepository.isVoiceEnabled()
-            val voiceLang = settingsRepository.getVoiceLang()
             val voiceKeycode = settingsRepository.getVoiceKeycode().let {
                 if (it == 0) DEFAULT_VOICE_KEYCODE else it
             }
+
+            val voiceCompanions = voiceCompanionsFromCsv(settingsRepository.getString(SettingsRepository.KEY_VOICE_COMPANIONS, ""))
+            val aliceKeycode = settingsRepository.getString(SettingsRepository.KEY_ALICE_KEYCODE, "0").toIntOrNull() ?: 0
+            val aliceCompanions = voiceCompanionsFromCsv(settingsRepository.getString(SettingsRepository.KEY_ALICE_COMPANIONS, ""))
 
             val ttsEnabled = settingsRepository.isTtsEnabled()
             // Resolve through the catalog so a legacy id (retired "denis"/"dmitri") shows its
@@ -548,8 +632,10 @@ class SettingsViewModel @Inject constructor(
                     mapTileSource = mapTileSource,
                     disableNativeAssistant = disableNativeAssistant,
                     voiceEnabled = voiceEnabled,
-                    voiceLang = voiceLang,
                     voiceKeycode = voiceKeycode,
+                    voiceCompanions = voiceCompanions,
+                    aliceKeycode = aliceKeycode,
+                    aliceCompanions = aliceCompanions,
                     ttsEnabled = ttsEnabled,
                     ttsVoice = ttsVoice,
                     ttsReadyVoices = ttsReadyVoices,
@@ -584,9 +670,19 @@ class SettingsViewModel @Inject constructor(
      */
     fun setDisableNativeAssistant(disabled: Boolean) {
         _uiState.update { it.copy(disableNativeAssistant = disabled) }
+        appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("alice_native_takeover", disabled)
+            .apply()
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, disabled.toString())
             helperClient.setAppHidden("com.byd.autovoice", disabled)
+            helperClient.setAppHidden("com.byd.vrassistant", disabled)
+            // DiLink 3 can leave the steering-wheel accessibility binding stale after package
+            // state changes. Re-assert our key filter immediately when takeover is enabled.
+            if (disabled && _uiState.value.voiceEnabled) {
+                ensureVoiceKeyService("native-assistant-disabled")
+            }
         }
     }
 
@@ -658,7 +754,7 @@ class SettingsViewModel @Inject constructor(
             if (occupant != null && occupant.id != period.id) {
                 Log.w(CostCalculator.TAG, "period save rejected start=${period.startTs} taken by id=${occupant.id}")
                 _uiState.update {
-                    it.copy(tariffPeriodError = appContext.getString(R.string.settings_tariff_period_date_taken))
+                    it.copy(tariffPeriodError = appStrings.get(R.string.settings_tariff_period_date_taken))
                 }
                 return@launch
             }
@@ -702,7 +798,7 @@ class SettingsViewModel @Inject constructor(
             it.copy(
                 tariffPeriods = schedule.periods.sortedByDescending { p -> p.startTs },
                 measuredLosses = costCalculator.measuredLosses(),
-                tariffRecalcStatus = appContext.getString(
+                tariffRecalcStatus = appStrings.get(
                     R.string.settings_tariff_recalc_done, result.charges, result.trips
                 ),
             )
@@ -727,128 +823,6 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_CURRENCY, code)
         }
-    }
-
-    /**
-     * Export all trips and charges to CSV files in the Downloads directory.
-     * Creates two files: bydmate_trips_<timestamp>.csv and bydmate_charges_<timestamp>.csv.
-     */
-    fun exportCsv() {
-        viewModelScope.launch {
-            _uiState.update { it.copy(exportStatus = appContext.getString(R.string.settings_export_in_progress)) }
-
-            try {
-                val downloadsDir = Environment.getExternalStoragePublicDirectory(
-                    Environment.DIRECTORY_DOWNLOADS
-                )
-                if (!downloadsDir.exists()) {
-                    downloadsDir.mkdirs()
-                }
-
-                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-
-                // Export trips
-                val trips = tripRepository.getAllTrips().firstOrNull() ?: emptyList()
-                val tripsFile = File(downloadsDir, "bydmate_trips_$timestamp.csv")
-                FileWriter(tripsFile).use { writer ->
-                    writer.append("id,start_ts,end_ts,distance_km,kwh_consumed,kwh_per_100km,soc_start,soc_end,temp_avg_c,avg_speed_kmh,bat_temp_avg,bat_temp_max,bat_temp_min,cost,exterior_temp,tariff_rate\n")
-                    for (trip in trips) {
-                        writer.append("${trip.id},${trip.startTs},${trip.endTs ?: ""},")
-                        writer.append("${trip.distanceKm ?: ""},${trip.kwhConsumed ?: ""},")
-                        writer.append("${trip.kwhPer100km ?: ""},${trip.socStart ?: ""},")
-                        writer.append("${trip.socEnd ?: ""},${trip.tempAvgC ?: ""},")
-                        writer.append("${trip.avgSpeedKmh ?: ""},${trip.batTempAvg ?: ""},")
-                        writer.append("${trip.batTempMax ?: ""},${trip.batTempMin ?: ""},")
-                        val tripRate = trip.cost?.let { c ->
-                            trip.kwhConsumed?.takeIf { it > 0.0 }?.let { kwh -> c / kwh }
-                        }
-                        writer.append("${trip.cost ?: ""},${trip.exteriorTemp ?: ""},")
-                        writer.append("${tripRate ?: ""}\n")
-                    }
-                }
-
-                // Export charges — the period gives the rate and the losses behind each cost
-                val schedule = costCalculator.schedule()
-                val charges = chargeRepository.getAllCharges().firstOrNull() ?: emptyList()
-                val chargesFile = File(downloadsDir, "bydmate_charges_$timestamp.csv")
-                FileWriter(chargesFile).use { writer ->
-                    writer.append("id,start_ts,end_ts,soc_start,soc_end,kwh_charged,kwh_charged_soc,max_power_kw,type,cost,lat,lon,bat_temp_avg,bat_temp_max,bat_temp_min,avg_power_kw,status,cell_voltage_min,cell_voltage_max,voltage_12v,exterior_temp,merged_count,meter_kwh,cost_manual,tariff_rate,loss_pct\n")
-                    for (charge in charges) {
-                        writer.append("${charge.id},${charge.startTs},${charge.endTs ?: ""},")
-                        writer.append("${charge.socStart ?: ""},${charge.socEnd ?: ""},")
-                        writer.append("${charge.kwhCharged ?: ""},${charge.kwhChargedSoc ?: ""},")
-                        writer.append("${charge.maxPowerKw ?: ""},${charge.type ?: ""},")
-                        writer.append("${charge.cost ?: ""},${charge.lat ?: ""},")
-                        writer.append("${charge.lon ?: ""},${charge.batTempAvg ?: ""},")
-                        writer.append("${charge.batTempMax ?: ""},${charge.batTempMin ?: ""},")
-                        writer.append("${charge.avgPowerKw ?: ""},${charge.status},")
-                        writer.append("${charge.cellVoltageMin ?: ""},${charge.cellVoltageMax ?: ""},")
-                        writer.append("${charge.voltage12v ?: ""},${charge.exteriorTemp ?: ""},")
-                        val chargePeriod = schedule.periodAt(charge.startTs)
-                        val lossPct = chargePeriod?.let { TariffSchedule.lossPctFor(it, charge.type) }
-                        val paidKwh = chargePeriod?.let {
-                            TariffSchedule.energyPaid(it, charge.type, charge.kwhCharged, charge.meterKwh)
-                        }
-                        val chargeRate = charge.cost?.let { c ->
-                            paidKwh?.takeIf { it > 0.0 }?.let { paid -> c / paid }
-                        }
-                        writer.append("${charge.mergedCount},${charge.meterKwh ?: ""},")
-                        writer.append("${charge.costManual},${chargeRate ?: ""},")
-                        writer.append("${lossPct ?: ""}\n")
-                    }
-                }
-
-                // Export tariff periods — the price history behind every cost above
-                val periodsFile = File(downloadsDir, "bydmate_tariff_periods_$timestamp.csv")
-                FileWriter(periodsFile).use { writer ->
-                    writer.append("id,start_ts,home_rate,dc_rate,ac_loss_pct,dc_loss_pct,trip_rule,currency\n")
-                    for (p in schedule.periods) {
-                        writer.append("${p.id},${p.startTs},${p.homeRate},${p.dcRate},")
-                        writer.append("${p.acLossPct},${p.dcLossPct},${p.tripRule},")
-                        writer.append("${_uiState.value.currency}\n")
-                    }
-                }
-
-                // Export GPS track points
-                val tripPoints = tripPointDao.getAll()
-                val pointsFile = File(downloadsDir, "bydmate_trip_points_$timestamp.csv")
-                FileWriter(pointsFile).use { writer ->
-                    writer.append("id,trip_id,timestamp,lat,lon,speed_kmh\n")
-                    for (p in tripPoints) {
-                        writer.append("${p.id},${p.tripId},${p.timestamp},")
-                        writer.append("${p.lat},${p.lon},${p.speedKmh ?: ""}\n")
-                    }
-                }
-
-                // Export idle drains (parked battery drain)
-                val idleDrains = idleDrainDao.getAll()
-                val drainsFile = File(downloadsDir, "bydmate_idle_drains_$timestamp.csv")
-                FileWriter(drainsFile).use { writer ->
-                    writer.append("id,start_ts,end_ts,soc_start,soc_end,kwh_consumed\n")
-                    for (d in idleDrains) {
-                        writer.append("${d.id},${d.startTs},${d.endTs ?: ""},")
-                        writer.append("${d.socStart ?: ""},${d.socEnd ?: ""},${d.kwhConsumed ?: ""}\n")
-                    }
-                }
-
-                val tripCount = trips.size
-                val chargeCount = charges.size
-                _uiState.update {
-                    it.copy(
-                        exportStatus = appContext.getString(R.string.settings_export_done, tripCount, chargeCount, tripPoints.size, idleDrains.size) + "\n-> ${downloadsDir.absolutePath}"
-                    )
-                }
-            } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(exportStatus = appContext.getString(R.string.settings_error_with_message, e.message ?: "?"))
-                }
-            }
-        }
-    }
-
-    /** Clear the export status message. */
-    fun clearExportStatus() {
-        _uiState.update { it.copy(exportStatus = null) }
     }
 
     /** Import trip history from BYD energydata database. */
@@ -1030,7 +1004,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val conn = runCatching { llmConnectionResolver.get(connId) }.getOrNull()
             val text = if (conn == null) {
-                appContext.getString(R.string.settings_conn_not_configured)
+                appStrings.get(R.string.settings_conn_not_configured)
             } else {
                 val start = SystemClock.elapsedRealtime()
                 val messages = JSONArray().put(
@@ -1039,7 +1013,7 @@ class SettingsViewModel @Inject constructor(
                 val result = openRouterClient.chatRaw(conn.baseUrl, conn.apiKey, conn.model, messages, null)
                 val elapsedSec = (SystemClock.elapsedRealtime() - start) / 1000.0
                 result.fold(
-                    onSuccess = { appContext.getString(R.string.settings_conn_check_ok, elapsedSec) },
+                    onSuccess = { appStrings.get(R.string.settings_conn_check_ok, elapsedSec) },
                     onFailure = { networkErrorMessage(it) },
                 )
             }
@@ -1057,14 +1031,14 @@ class SettingsViewModel @Inject constructor(
         var depth = 0
         while (cur != null && depth < 5) {
             when (cur) {
-                is java.net.UnknownHostException -> return appContext.getString(R.string.settings_error_dns)
-                is java.net.SocketTimeoutException -> return appContext.getString(R.string.settings_error_timeout)
-                is LlmHttpException -> return appContext.getString(R.string.settings_error_with_message, "HTTP ${cur.code}")
+                is java.net.UnknownHostException -> return appStrings.get(R.string.settings_error_dns)
+                is java.net.SocketTimeoutException -> return appStrings.get(R.string.settings_error_timeout)
+                is LlmHttpException -> return appStrings.get(R.string.settings_error_with_message, "HTTP ${cur.code}")
             }
             cur = cur.cause
             depth++
         }
-        return appContext.getString(R.string.settings_error_with_message, t.message ?: "?")
+        return appStrings.get(R.string.settings_error_with_message, t.message ?: "?")
     }
 
     /** Fetches model list from the custom connection's base URL and shows the picker dialog. */
@@ -1160,7 +1134,7 @@ class SettingsViewModel @Inject constructor(
             settingsRepository.setString(SettingsRepository.KEY_ALICE_API_KEY, state.aliceApiKey)
             val enabled = state.aliceEndpoint.isNotBlank() && state.aliceApiKey.isNotBlank()
             settingsRepository.setString(SettingsRepository.KEY_ALICE_ENABLED, enabled.toString())
-            _uiState.update { it.copy(aliceEnabled = enabled, aliceSaveStatus = appContext.getString(R.string.settings_saved)) }
+            _uiState.update { it.copy(aliceEnabled = enabled, aliceSaveStatus = appStrings.get(R.string.settings_saved)) }
             delay(2000)
             _uiState.update { it.copy(aliceSaveStatus = null) }
         }
@@ -1207,7 +1181,7 @@ class SettingsViewModel @Inject constructor(
             _uiState.update {
                 it.copy(
                     abrpTelemetryEnabled = enabled,
-                    abrpSaveStatus = appContext.getString(R.string.settings_saved),
+                    abrpSaveStatus = appStrings.get(R.string.settings_saved),
                 )
             }
             delay(2000)
@@ -1250,7 +1224,7 @@ class SettingsViewModel @Inject constructor(
                 ?.let { com.bydmate.app.data.remote.WebhookTelemetryClient.isAllowedWebhookUrl(it) } == true
             if (!valid) {
                 _uiState.update {
-                    it.copy(webhookSaveStatus = appContext.getString(R.string.settings_webhook_invalid_url))
+                    it.copy(webhookSaveStatus = appStrings.get(R.string.settings_webhook_invalid_url))
                 }
                 delay(2000)
                 _uiState.update { it.copy(webhookSaveStatus = null) }
@@ -1264,7 +1238,7 @@ class SettingsViewModel @Inject constructor(
                 it.copy(
                     webhookUrl = url,
                     webhookEnabled = enabled,
-                    webhookSaveStatus = appContext.getString(R.string.settings_webhook_saved),
+                    webhookSaveStatus = appStrings.get(R.string.settings_webhook_saved),
                 )
             }
             delay(2000)
@@ -1315,11 +1289,7 @@ class SettingsViewModel @Inject constructor(
             // FIRST — HelperClient only resolves an existing binder, so without ensureRunning()
             // the call silently no-ops when the daemon is not up. Only needed on enable.
             if (enabled) {
-                if (helperBootstrap.ensureRunning()) {
-                    helperClient.enableAccessibilityService()
-                } else {
-                    Log.e(TAG, "helper daemon not running; cannot self-enable a11y for voice PTT")
-                }
+                ensureVoiceKeyService("voice-enabled")
                 // Pre-warm the recognizer so the first PTT after enabling voice doesn't pay the
                 // cold model-load cost (Task 5). No-op if the model isn't downloaded yet.
                 viewModelScope.launch(Dispatchers.IO) { runCatching { continuousAsr.warmUp() } }
@@ -1327,30 +1297,73 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun setVoiceLanguage(lang: String) {
-        _uiState.update { it.copy(voiceLang = lang) }
-        viewModelScope.launch {
-            settingsRepository.setVoiceLang(lang)
-            // Mirror into SharedPreferences("voice") so VoiceGate.preferredLang()
-            // and SteeringWheelKeyService can read it without querying Room.
-            appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
-                .edit().putString("voice_lang", lang).apply()
+    private suspend fun ensureVoiceKeyService(reason: String) {
+        if (!helperBootstrap.ensureRunning()) {
+            Log.e(TAG, "$reason: helper daemon not running; cannot self-enable a11y for voice PTT")
+            return
         }
+        if (!helperClient.enableAccessibilityService()) {
+            Log.e(TAG, "$reason: accessibility re-assert failed")
+            return
+        }
+        if (Build.VERSION.SDK_INT > 29) return
+        repeat(10) {
+            if (com.bydmate.app.cluster.SteeringWheelKeyService.isConnected) return
+            delay(250L)
+        }
+        Log.w(TAG, "$reason: a11y still unbound; invoking Android 10 self-recovery")
+        helperClient.recoverAccessibilityService()
     }
 
     /**
      * Persists the keycode learned from [LearnButtonDialog] into Room and into
      * SharedPreferences("voice") so SteeringWheelKeyService reads the new value immediately.
      */
-    fun saveVoiceKeycode(keycode: Int) {
-        _uiState.update { it.copy(voiceKeycode = keycode) }
-        viewModelScope.launch {
-            settingsRepository.setVoiceKeycode(keycode)
-            // Mirror for SteeringWheelKeyService
-            appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
-                .edit().putInt(SettingsRepository.KEY_VOICE_KEYCODE, keycode).apply()
+    fun saveVoiceKeycode(keycode: Int) = saveVoiceButton(VoiceButtonBinding(keycode), false)
+
+    fun voiceButtonConflict(keycode: Int, alice: Boolean): String? {
+        val state = _uiState.value
+        val other = if (alice) VoiceButtonBinding(state.voiceKeycode, state.voiceCompanions)
+            else VoiceButtonBinding(state.aliceKeycode, state.aliceCompanions)
+        return when {
+            !isVoiceAssignable(keycode) -> appContext.getString(R.string.learn_button_rejected)
+            keycode in other.codes -> appContext.getString(R.string.automation_steering_key_occupied_voice)
+            keycode in reservedVoiceKeys(appContext) -> appContext.getString(R.string.automation_steering_key_occupied_projection)
+            keycode in automationButtonKeys -> appContext.getString(R.string.voice_button_occupied_automation)
+            else -> null
         }
     }
+
+    fun saveVoiceButton(binding: VoiceButtonBinding, alice: Boolean, onSaved: () -> Unit = {}) {
+        viewModelScope.launch {
+            // Validate again at save, including disabled rules. A companion must not steal an action either.
+            automationButtonKeys = automationKeys(ruleDao.getAllList())
+            val conflict = binding.codes.firstNotNullOfOrNull { voiceButtonConflict(it, alice) }
+            val clearingAlice = alice && binding.primary == 0 && binding.companions.isEmpty()
+            val valid = clearingAlice || binding.canAssign(emptySet())
+            if (conflict != null || !valid) {
+                android.widget.Toast.makeText(appContext, conflict ?: appContext.getString(R.string.learn_button_rejected),
+                    android.widget.Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            val key = if (alice) SettingsRepository.KEY_ALICE_KEYCODE else SettingsRepository.KEY_VOICE_KEYCODE
+            val companionsKey = if (alice) SettingsRepository.KEY_ALICE_COMPANIONS else SettingsRepository.KEY_VOICE_COMPANIONS
+            val companions = voiceCompanionsToCsv(binding.companions - binding.primary)
+            settingsRepository.setStrings(mapOf(key to binding.primary.toString(), companionsKey to companions))
+            appContext.getSharedPreferences("voice", Context.MODE_PRIVATE).edit()
+                .putInt(key, binding.primary).putString(companionsKey, companions).apply()
+            _uiState.update {
+                if (alice) it.copy(aliceKeycode = binding.primary, aliceCompanions = binding.companions)
+                else it.copy(voiceKeycode = binding.primary, voiceCompanions = binding.companions)
+            }
+            onSaved()
+        }
+    }
+
+    private fun automationKeys(rules: List<com.bydmate.app.data.local.entity.RuleEntity>): Set<Int> =
+        rules.flatMap { com.bydmate.app.data.local.entity.TriggerDef.listFromJson(it.triggers) }
+            .filter { it.kind == "steering_key" }
+            .mapNotNull { it.value.toIntOrNull() }.toSet()
 
     // --- TTS (offline synthesis of agent replies) ---
 
@@ -1664,11 +1677,11 @@ class SettingsViewModel @Inject constructor(
             val result = agentOrchestrator.ask(AGENT_TEST_PROMPT)
             val elapsedSec = (SystemClock.elapsedRealtime() - start) / 1000.0
             val text = when (result) {
-                is AgentResult.Answer -> appContext.getString(
+                is AgentResult.Answer -> appStrings.get(
                     R.string.agent_test_model_result, modelLabel, elapsedSec, result.text.take(80)
                 )
-                AgentResult.Disabled -> appContext.getString(R.string.agent_test_model_disabled)
-                is AgentResult.Error -> appContext.getString(R.string.settings_error_with_message, result.message)
+                AgentResult.Disabled -> appStrings.get(R.string.agent_test_model_disabled)
+                is AgentResult.Error -> appStrings.get(R.string.settings_error_with_message, result.message)
             }
             _uiState.update { it.copy(modelTestRunning = false, modelTestResult = text) }
         }
@@ -1676,9 +1689,9 @@ class SettingsViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "SettingsViewModel"
-        /** Slug verified in the live OpenRouter catalog (2026-09-14); the fastest Flash of
-         *  the current line, which is what the voice path is tuned for. */
-        internal const val DEFAULT_OPENROUTER_MODEL = "google/gemini-3.8-flash"
+        /** Default for new users only (decision Andy 2026-09-25): the Lite tier, cheapest and
+         *  fastest of the current line, which is what the voice path is tuned for. */
+        internal const val DEFAULT_OPENROUTER_MODEL = "google/gemini-3.5-flash-lite"
         /** Voice sessions printed in the dump's agent section (newest first). */
         private const val AGENT_DUMP_ENTRIES = 20
         private const val AGENT_DUMP_ANSWER_CHARS = 200
@@ -1688,34 +1701,55 @@ class SettingsViewModel @Inject constructor(
             "Проверка связи. Вызови инструмент get_vehicle_state и ответь одним коротким " +
                 "предложением: какой заряд батареи."
         private const val MINIMAX_SOURCE = "minimax"
-        /** Shared budget for the two daemon-backed dump sections (liveness + seat reads).
+        /** Telegram bind code: six digits. */
+        private const val BIND_CODE_MIN = 100_000
+        private const val BIND_CODE_SPAN = 900_000
+        /** Same tag as TelegramReporter: the report's settings changes sit next to its sends. */
+        private const val TAG_TG_REPORT = "TgReport"
+        /** Shared budget for the daemon-backed dump sections (liveness + seat and steering heat reads).
          *  The dump must not hang on a wedged daemon. */
         private const val HELPER_DIAG_BUDGET_MS = 3_000L
-    }
 
-    /** What the two daemon-backed dump sections need; nulls mean "not obtained in budget". */
-    private data class HelperDiagnostics(val alive: Boolean?, val seats: List<Pair<Int, Int>>?)
-
-    /**
-     * Collects daemon liveness and the seat fid snapshot under ONE shared budget.
-     *
-     * A binder transact is a blocking call: wrapping it in withTimeoutOrNull here would not
-     * return until the call finished, because cancellation only takes effect at a suspension
-     * point. So the reads run in a coroutine that is NOT a child of the dump, and only the
-     * WAIT is bounded — a wedged daemon leaves an IO thread parked instead of stalling the
-     * dump the user is trying to send us.
-     */
-    private suspend fun gatherHelperDiagnostics(): HelperDiagnostics {
-        val probe = viewModelScope.async(Dispatchers.IO) {
-            HelperDiagnostics(
-                alive = runCatching { helperClient.isAlive() }.getOrNull(),
+        /**
+         * A binder transact is a blocking call: wrapping it in withTimeoutOrNull here would not
+         * return until the call finished, because cancellation only takes effect at a suspension
+         * point. So the reads run in a coroutine that is NOT a child of the dump, and only the
+         * WAIT is bounded — a wedged daemon leaves an IO thread parked instead of stalling the
+         * dump the user is trying to send us. Each section is kept as soon as it is read, so a
+         * later section that hangs past [budgetMs] does not erase the earlier ones.
+         */
+        internal suspend fun collectHelperDiagnostics(
+            scope: CoroutineScope,
+            helper: com.bydmate.app.data.vehicle.HelperClient,
+            budgetMs: Long,
+            dispatcher: CoroutineDispatcher = Dispatchers.IO,
+        ): HelperDiagnostics {
+            // Single writer (the probe), read after the wait: the reference gives visibility.
+            val collected = AtomicReference(HelperDiagnostics(null, null))
+            val probe = scope.launch(dispatcher) {
+                val alive = runCatching { helper.isAlive() }.getOrNull()
+                collected.set(collected.get().copy(alive = alive))
                 // One binder round-trip for all ten seat reads.
-                seats = runCatching { helperClient.readBatch(SeatsDiagnostics.batchItems()) }.getOrNull(),
-            )
+                val seats = runCatching { helper.readBatch(SeatsDiagnostics.batchItems()) }.getOrNull()
+                collected.set(collected.get().copy(seats = seats))
+                val steeringHeat = runCatching { helper.readBatch(SteeringHeatDiagnostics.batchItems()) }.getOrNull()
+                collected.set(collected.get().copy(steeringHeat = steeringHeat))
+            }
+            withTimeoutOrNull(budgetMs) { probe.join() }
+            return collected.get()
         }
-        return withTimeoutOrNull(HELPER_DIAG_BUDGET_MS) { probe.await() }
-            ?: HelperDiagnostics(null, null)
     }
+
+    /** What the daemon-backed dump sections need; nulls mean "not obtained in budget". */
+    internal data class HelperDiagnostics(
+        val alive: Boolean?,
+        val seats: List<Pair<Int, Int>>?,
+        val steeringHeat: List<Pair<Int, Int>>? = null,
+    )
+
+    /** Liveness, the seat fid snapshot and the steering heat snapshot under ONE shared budget. */
+    private suspend fun gatherHelperDiagnostics(): HelperDiagnostics =
+        collectHelperDiagnostics(viewModelScope, helperClient, HELPER_DIAG_BUDGET_MS)
 
     /** One-line trigger summary for the dump: param, operator and value only. */
     private fun describeTriggers(json: String): String {
@@ -1776,6 +1810,7 @@ class SettingsViewModel @Inject constructor(
                 appendLine("android: ${android.os.Build.VERSION.RELEASE} (SDK ${android.os.Build.VERSION.SDK_INT})")
                 appendLine("fingerprint: ${android.os.Build.FINGERPRINT}")
                 appendLine("locale: jvm=${Locale.getDefault().toLanguageTag()} app=${localePreferences.getLanguage() ?: "(unset)"}")
+                appendLine("font_scale: ${localePreferences.getFontScale()}")
             } catch (e: Exception) {
                 appendLine("(failed to gather app/device metadata: ${e.message})")
             }
@@ -1803,6 +1838,9 @@ class SettingsViewModel @Inject constructor(
                         "trigger=${adbRestoreManager.lastTrigger} retries=${adbRestoreManager.retryCount} " +
                         "write_secure_settings=$secureSettingsGranted"
                 )
+                appendLine("adb_verdict: ${adbVerdictMonitor.verdict.value ?: "(none)"}")
+                appendLine("daemon_ever_alive: ${helperBootstrap.daemonEverAlive()}")
+                appendLine(com.bydmate.app.data.backup.PostRestoreCheck.dumpLine(appContext))
             } catch (e: Exception) {
                 appendLine("(failed to gather settings: ${e.message})")
             }
@@ -1876,6 +1914,7 @@ class SettingsViewModel @Inject constructor(
                     .forEach { appendLine(it) }
             } catch (e: Exception) { appendLine("error: ${e.message}") }
 
+            appendLine(automationEngine.serviceStartDumpLine())
             // Automation rules (#177): issue reports about a rule that "does nothing"
             // are undiagnosable without the rule itself. Action payloads stay out —
             // they hold phone numbers, addresses and notification text.
@@ -1902,32 +1941,44 @@ class SettingsViewModel @Inject constructor(
             } catch (e: Exception) {
                 appendLine("(failed to gather rules: ${e.message})")
             }
+            // What the rules did and why not, and every condition as the engine reads it now.
+            appendLine("--- automation journal ---")
+            try {
+                automationEngine.journalDumpLines().forEach { appendLine(it) }
+            } catch (e: Exception) {
+                appendLine("(failed to gather journal: ${e.message})")
+            }
+            appendLine("--- automation params ---")
+            appendLine(automationEngine.paramSnapshotLine(com.bydmate.app.ui.automation.TRIGGER_PARAMS.map { it.param }))
 
-            // Voice agent: which connection/model answered and what the last turns did.
-            // The journal is a RAM ring buffer, so this is the only place a user report
-            // about a wrong or fabricated answer becomes checkable.
+            // Voice agent: which connection/model answered.
             appendLine("--- agent ---")
             try {
                 val conn = llmConnectionResolver.primary()
                 appendLine("connection: ${conn?.id ?: "(not configured)"} model=${conn?.model ?: "-"}")
-                val entries = voiceJournal.entries.value.take(AGENT_DUMP_ENTRIES)
-                if (entries.isEmpty()) {
-                    appendLine("(no voice sessions this run)")
-                } else {
-                    entries.forEach { e ->
-                        val stamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(e.timestampMs))
-                        appendLine("$stamp ${e.route} ${e.outcome} \"${e.transcript}\"" +
-                            (e.reason?.let { " reason=$it" } ?: ""))
-                        if (e.tools.isNotEmpty()) {
-                            appendLine("  tools: " + e.tools.joinToString(", ") {
-                                "${it.name}:${if (it.ok) "ok" else "err"}"
-                            })
-                        }
-                        e.answer?.let { appendLine("  answer: " + com.bydmate.app.agent.AgentTrace.clip(it, AGENT_DUMP_ANSWER_CHARS)) }
-                    }
-                }
             } catch (e: Exception) {
-                appendLine("(failed to gather agent journal: ${e.message})")
+                appendLine("(failed to gather agent connection: ${e.message})")
+            }
+            // Voice speed wave: which TTS source speaks the replies (online latency depends on it).
+            try {
+                val voicePrefs = appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                val source = voicePrefs.getString("tts_source", TtsRouter.OFFLINE) ?: TtsRouter.OFFLINE
+                val minimaxProvider = settingsRepository.getString(SettingsRepository.KEY_MINIMAX_TTS_PROVIDER, "official")
+                val voice = voicePrefs.getString("tts_voice", TtsModelManager.DEFAULT_VOICE_ID)
+                val gender = voicePrefs.getString("agent_gender", "m")
+                appendLine("tts: source=$source minimax_provider=$minimaxProvider offline_voice=$voice gender=$gender")
+            } catch (e: Exception) {
+                appendLine("(failed to gather tts source: ${e.message})")
+            }
+            // Voice sessions, persisted across restarts: what ASR heard, what it became (command,
+            // automation, agent) and why not, with the agent's tools and answer. The only place a
+            // user report about a misheard or refused command becomes checkable.
+            appendLine("--- voice ---")
+            try {
+                VoiceJournalDump.lines(voiceJournal.entries.value, AGENT_DUMP_ENTRIES, AGENT_DUMP_ANSWER_CHARS)
+                    .forEach { appendLine(it) }
+            } catch (e: Exception) {
+                appendLine("(failed to gather voice journal: ${e.message})")
             }
 
             appendLine("--- vehicle data sources ---")
@@ -2186,6 +2237,10 @@ class SettingsViewModel @Inject constructor(
                 val secure = android.provider.Settings.Secure.getString(
                     appContext.contentResolver, "enabled_accessibility_services")
                 appendLine("a11y_secure_setting: ${secure ?: "(null)"}")
+                val autoAllowLast = appContext.getSharedPreferences(
+                    com.bydmate.app.data.autoservice.AdbRestorePreferencesImpl.PREFS_NAME, Context.MODE_PRIVATE,
+                ).getString(com.bydmate.app.data.autoservice.WifiDebuggingDialogAutoAllow.KEY_LAST_OUTCOME, null)
+                appendLine("a11y_auto_allow_last: ${autoAllowLast ?: "(none)"}")
                 val voicePrefs = appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
                 appendLine(
                     "voice_ptt: enabled=${voicePrefs.getBoolean("voice_enabled", false)} " +
@@ -2203,7 +2258,7 @@ class SettingsViewModel @Inject constructor(
                 appendLine("disable_native_assistant pref: \"$pref\"")
                 // Same package family the helper daemon disables via TX_SET_APP_HIDDEN.
                 val pm = appContext.packageManager
-                for (pkg in listOf("com.byd.autovoice", "com.byd.autovoice.engine", "com.byd.autovoice.tts")) {
+                for (pkg in listOf("com.byd.autovoice", "com.byd.autovoice.engine", "com.byd.autovoice.tts", "com.byd.vrassistant")) {
                     val state = runCatching { enabledSettingName(pm.getApplicationEnabledSetting(pkg)) }
                         .getOrElse { "not installed" }
                     appendLine("$pkg: $state")
@@ -2304,6 +2359,9 @@ class SettingsViewModel @Inject constructor(
             appendLine("--- seat command journal ---")
             SeatsDiagnostics.journalLines(appContext).forEach { appendLine(it) }
 
+            appendLine("--- steering heat ---")
+            SteeringHeatDiagnostics.format(helperDiag.steeringHeat).forEach { appendLine(it) }
+
             appendLine("--- fid resolve ---")
             try {
                 com.bydmate.app.data.nativestack.FidResolveDiagnostics.format(
@@ -2314,6 +2372,29 @@ class SettingsViewModel @Inject constructor(
                     },
                     fidCatalogManager.resolveStatus,
                 ).forEach { appendLine(it) }
+            } catch (e: Exception) { appendLine("error: ${e.message}") }
+
+            appendLine("--- auto backup ---")
+            try {
+                val lastTs = settingsRepository.getAutoBackupLastTs()
+                val chatId = settingsRepository.getTgBackupChatId()
+                val tgConfigured = settingsRepository.getTgBackupToken().isNotEmpty() && chatId != null
+                appendLine("period: ${settingsRepository.getAutoBackupPeriod().key}")
+                appendLine(
+                    "parts: auto=${BackupPart.toCsv(settingsRepository.getAutoBackupParts())} " +
+                        "manual=${BackupPart.toCsv(settingsRepository.getManualBackupParts())}"
+                )
+                appendLine("last_ts: " + if (lastTs > 0L)
+                    SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US).format(Date(lastTs)) else "(never)")
+                appendLine("last_result: ${settingsRepository.getAutoBackupLastResult().ifEmpty { "(none)" }}")
+                appendLine("pending: ${File(settingsRepository.getAutoBackupPendingUpload()).name.ifEmpty { "(none)" }}")
+                // Never the token; chat id only by its last 4 digits.
+                appendLine(
+                    "telegram: configured=${if (tgConfigured) "yes" else "no"} " +
+                        "bot=${settingsRepository.getTgBackupBotName().ifEmpty { null }?.let { "@$it" } ?: "-"} " +
+                        "chat=${chatId?.let { "…" + it.toString().takeLast(4) } ?: "(none)"}"
+                )
+                telegramReporter.diagnosticsLines().forEach { appendLine(it) }
             } catch (e: Exception) { appendLine("error: ${e.message}") }
 
             appendLine("--- fid push ---")
@@ -2360,10 +2441,10 @@ class SettingsViewModel @Inject constructor(
             when (val result = logRecorder.start { file -> writeDiagnosticHeader(file) }) {
                 is LogRecorder.StartResult.Started, LogRecorder.StartResult.AlreadyRecording -> Unit
                 LogRecorder.StartResult.NoStorage -> _uiState.update {
-                    it.copy(logSaveStatus = appContext.getString(R.string.settings_log_error_no_fs_access))
+                    it.copy(logSaveStatus = appStrings.get(R.string.settings_log_error_no_fs_access))
                 }
                 is LogRecorder.StartResult.Failed -> _uiState.update {
-                    it.copy(logSaveStatus = appContext.getString(R.string.settings_error_with_message, result.message))
+                    it.copy(logSaveStatus = appStrings.get(R.string.settings_error_with_message, result.message))
                 }
             }
         }
@@ -2384,14 +2465,14 @@ class SettingsViewModel @Inject constructor(
             logRecorder.state.collect { state ->
                 _uiState.update {
                     val status = when {
-                        state.isRecording -> appContext.getString(
+                        state.isRecording -> appStrings.get(
                             R.string.settings_log_recording_started, state.filePath ?: "?"
                         )
                         // A fresh ViewModel must not surface the result of a recording
                         // the user stopped long ago.
                         first -> it.logSaveStatus
                         else -> state.lastStopped?.let { stopped ->
-                            appContext.getString(R.string.settings_log_saved, stopped.path, stopped.sizeKb)
+                            appStrings.get(R.string.settings_log_saved, stopped.path, stopped.sizeKb)
                         } ?: it.logSaveStatus
                     }
                     it.copy(isRecordingLogs = state.isRecording, logSaveStatus = status)
@@ -2422,7 +2503,7 @@ class SettingsViewModel @Inject constructor(
     /** Check for app updates on GitHub. */
     fun checkForUpdate() {
         viewModelScope.launch {
-            _uiState.update { it.copy(updateDialogState = UpdateState.Checking, updateStatus = appContext.getString(R.string.settings_update_check_in_progress)) }
+            _uiState.update { it.copy(updateDialogState = UpdateState.Checking, updateStatus = appStrings.get(R.string.settings_update_check_in_progress)) }
             try {
                 val update = updateChecker.checkForUpdate(appContext, forceCheck = true)
                 if (update != null) {
@@ -2432,14 +2513,14 @@ class SettingsViewModel @Inject constructor(
                                 version = update.version,
                                 notes = update.releaseNotes ?: ""
                             ),
-                            updateStatus = appContext.getString(R.string.settings_update_available_short, update.version)
+                            updateStatus = appStrings.get(R.string.settings_update_available_short, update.version)
                         )
                     }
                 } else {
                     _uiState.update {
                         it.copy(
                             updateDialogState = UpdateState.UpToDate,
-                            updateStatus = appContext.getString(R.string.settings_update_up_to_date)
+                            updateStatus = appStrings.get(R.string.settings_update_up_to_date)
                         )
                     }
                 }
@@ -2447,7 +2528,7 @@ class SettingsViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         updateDialogState = UpdateState.Error(e.message ?: "Unknown error"),
-                        updateStatus = appContext.getString(R.string.settings_error_with_message, e.message ?: "?")
+                        updateStatus = appStrings.get(R.string.settings_error_with_message, e.message ?: "?")
                     )
                 }
             }
@@ -2459,40 +2540,98 @@ class SettingsViewModel @Inject constructor(
     // -------------------------------------------------------------------------
 
     /**
-     * Export the full app state (DB + prefs) to a zip file in Downloads.
-     * Updates configStatus with a success path or an error message.
+     * «Сохранить конфигурацию» (#238): exports [parts] to Download and sends a copy to the bot when
+     * it is connected. The choice is remembered for the next save. Errors go to configStatus.
      */
-    fun exportConfig() {
+    fun saveConfiguration(parts: Set<BackupPart>) {
+        if (parts.isEmpty()) return
+        _uiState.update { it.copy(manualBackupParts = parts) }
         viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(configStatus = appContext.getString(R.string.settings_export_in_progress)) }
+            _uiState.update { it.copy(configStatus = appStrings.get(R.string.settings_export_in_progress)) }
             try {
-                val file = backupManager.export()
-                _uiState.update {
-                    it.copy(configStatus = appContext.getString(R.string.settings_config_export_done, file.absolutePath))
+                settingsRepository.setManualBackupParts(parts)
+                val result = AutoBackupRunner(backupManager, telegramBackupSink, settingsRepository).saveManual(parts)
+                val telegram = when {
+                    result.sent -> appStrings.get(R.string.settings_config_save_sent)
+                    result.sendError != null -> appStrings.get(
+                        R.string.settings_config_save_send_failed,
+                        telegramErrorText(appStrings.context, result.sendError),
+                    )
+                    else -> null
                 }
+                // The «Поделиться» dialog shows the saved file instead of the status line.
+                _uiState.update { it.copy(configStatus = null, savedBackup = SavedBackup(result.file, telegram)) }
             } catch (e: Exception) {
                 _uiState.update {
-                    it.copy(configStatus = appContext.getString(R.string.settings_error_with_message, e.message ?: "?"))
+                    it.copy(configStatus = appStrings.get(R.string.settings_error_with_message, e.message ?: "?"))
                 }
             }
         }
     }
 
+    /** Export zips found in the public Download folder, newest first. */
+    /** Lists the backups off the main thread (a scan of the whole Download folder), then opens the picker. */
+    // Scan behind the picker: repeated taps don't start a second one, and a closed picker
+    // must not be reopened by a late result.
+    private var restoreScanJob: Job? = null
+
+    // Test seam: tests swap it for a test dispatcher so the restore scan runs on virtual time.
+    internal var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+
+    fun openRestorePicker() {
+        if (restoreScanJob?.isActive == true) return
+        restoreScanJob = viewModelScope.launch(ioDispatcher) {
+            val files = backupManager.listBackups()
+            ensureActive()
+            _uiState.update { it.copy(restoreCandidates = files) }
+        }
+    }
+
+    fun closeRestorePicker() {
+        restoreScanJob?.cancel()
+        _uiState.update { it.copy(restoreCandidates = null) }
+    }
+
+    /** A file tapped in the picker: reads the parts its manifest lists, then opens «Что восстановить». */
+    fun pickRestoreFile(file: File) {
+        closeRestorePicker()
+        viewModelScope.launch(ioDispatcher) {
+            try {
+                val parts = backupManager.archiveParts(file)
+                _uiState.update { it.copy(restoreChoice = RestoreChoice(file, parts)) }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(configStatus = appStrings.get(R.string.settings_error_with_message, e.message ?: "?"))
+                }
+            }
+        }
+    }
+
+    fun dismissRestoreChoice() {
+        _uiState.update { it.copy(restoreChoice = null) }
+    }
+
     /**
-     * Restore the full app state from a user-picked backup zip.
+     * Restore [parts] of the app state from a user-picked backup zip.
      * On success the process is immediately restarted so Room re-opens the replaced DB.
      * On failure configStatus is set to the error message.
      */
-    fun restoreConfig(uri: Uri) {
-        viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(configStatus = appContext.getString(R.string.settings_export_in_progress)) }
+    fun restoreConfig(file: File, parts: Set<BackupPart>) {
+        // One restore at a time: a second one would run over the first one's temp files.
+        if (_uiState.value.restoreInProgress) return
+        restoreScanJob?.cancel()
+        _uiState.update { it.copy(restoreChoice = null, restoreInProgress = true) }
+        viewModelScope.launch(ioDispatcher) {
+            _uiState.update { it.copy(configStatus = appStrings.get(R.string.settings_export_in_progress)) }
             try {
-                backupManager.restore(uri)
+                backupManager.restore(file, parts)
                 restartApp()
             } catch (e: Exception) {
                 _uiState.update {
-                    it.copy(configStatus = appContext.getString(R.string.settings_error_with_message, e.message ?: "?"))
+                    it.copy(configStatus = appStrings.get(R.string.settings_error_with_message, e.message ?: "?"))
                 }
+            } finally {
+                _uiState.update { it.copy(restoreInProgress = false) }
             }
         }
     }
@@ -2500,6 +2639,201 @@ class SettingsViewModel @Inject constructor(
     /** Dismiss the config backup/restore status message. */
     fun clearConfigStatus() {
         _uiState.update { it.copy(configStatus = null) }
+    }
+
+    /** «Поделиться» in the dialog after a manual export (#237). */
+    fun shareExportedBackup() {
+        val file = _uiState.value.savedBackup?.file ?: return
+        _uiState.update { it.copy(savedBackup = null) }
+        try {
+            shareFile(file, "application/zip")
+        } catch (e: Exception) {
+            _uiState.update {
+                it.copy(configStatus = appStrings.get(R.string.settings_error_with_message, e.message ?: "?"))
+            }
+        }
+    }
+
+    fun dismissExportedBackup() {
+        _uiState.update { it.copy(savedBackup = null) }
+    }
+
+    /** Standard ACTION_SEND share sheet for a file in Download (or the app's external files). */
+    private fun shareFile(file: File, mime: String) {
+        val uri = FileProvider.getUriForFile(
+            appContext, "${appContext.packageName}.fileprovider", file,
+        )
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+            type = mime
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val chooser = Intent.createChooser(shareIntent, null).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        appContext.startActivity(chooser)
+    }
+
+    // -------------------------------------------------------------------------
+    // Automatic backup (#237)
+    // -------------------------------------------------------------------------
+
+    /** Loads the bot once, then mirrors period and last run live so the status follows the worker. */
+    private fun observeAutoBackup() {
+        viewModelScope.launch {
+            val config = settingsRepository.getTgBackupConfig()
+            val binding = if (config.configured) TgBackupBinding(config.botName, config.chatName) else null
+            val manualParts = settingsRepository.getManualBackupParts()
+            _uiState.update {
+                it.copy(tgBackupToken = config.token, tgBackupBinding = binding, manualBackupParts = manualParts)
+            }
+            combine(
+                settingsRepository.observeAutoBackupPeriod(),
+                settingsRepository.observeAutoBackupLastTs(),
+                settingsRepository.observeAutoBackupLastResult(),
+                settingsRepository.observeAutoBackupParts(),
+            ) { period, lastTs, lastResult, parts ->
+                { s: SettingsUiState ->
+                    s.copy(
+                        autoBackupPeriod = period,
+                        autoBackupLastTs = lastTs,
+                        autoBackupLastResult = lastResult,
+                        autoBackupParts = parts,
+                    )
+                }
+            }.collect { apply -> _uiState.update(apply) }
+        }
+        viewModelScope.launch {
+            combine(
+                settingsRepository.observeTgReportOffEnabled(),
+                settingsRepository.observeTgReportOffFields(),
+            ) { enabled, fields -> enabled to fields }
+                .collect { (enabled, fields) ->
+                    _uiState.update { it.copy(tgReportOffEnabled = enabled, tgReportOffFields = fields) }
+                }
+        }
+    }
+
+    /** «Отчёт при выключении машины»; phase B arms the helper daemon from these settings. */
+    fun setTgReportOffEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(tgReportOffEnabled = enabled) }
+        Log.i(TAG_TG_REPORT, "power-off report: enabled=$enabled")
+        viewModelScope.launch { settingsRepository.setTgReportOffEnabled(enabled) }
+    }
+
+    /** An item chip under the switch; the last checked item cannot be unchecked. */
+    fun toggleTgReportOffField(field: ReportField) {
+        val fields = _uiState.value.tgReportOffFields.let { if (field in it) it - field else it + field }
+        if (fields.isEmpty()) return
+        _uiState.update { it.copy(tgReportOffFields = fields) }
+        Log.i(TAG_TG_REPORT, "power-off report: fields=[${ReportField.toCsv(fields)}]")
+        viewModelScope.launch { settingsRepository.setTgReportOffFields(fields) }
+    }
+
+    fun setAutoBackupPeriod(period: AutoBackupPeriod) {
+        _uiState.update { it.copy(autoBackupPeriod = period) }
+        if (period == AutoBackupPeriod.OFF) autoBackupScheduler.cancelScheduled(appContext)
+        viewModelScope.launch { settingsRepository.setAutoBackupPeriod(period) }
+    }
+
+    /** A part chip under the period chips; the last checked part cannot be unchecked. */
+    fun toggleAutoBackupPart(part: BackupPart) {
+        val parts = _uiState.value.autoBackupParts.let { if (part in it) it - part else it + part }
+        if (parts.isEmpty()) return
+        _uiState.update { it.copy(autoBackupParts = parts) }
+        viewModelScope.launch { settingsRepository.setAutoBackupParts(parts) }
+    }
+
+    /**
+     * Token field edits stay in the state; the token is stored once «Проверить» accepts it.
+     * Trimmed: a token pasted from a chat often carries a trailing space or newline.
+     */
+    fun updateTgBackupToken(value: String) {
+        _uiState.update { it.copy(tgBackupToken = value.trim()) }
+    }
+
+    private var tgCheckJob: Job? = null
+
+    /** «Проверить»: token, then bot name, then the chat bound by a code, then a greeting message. */
+    fun checkTelegramBackup() {
+        val token = _uiState.value.tgBackupToken.trim()
+        if (token.isEmpty() || _uiState.value.tgBackupChecking) return
+        _uiState.update {
+            it.copy(tgBackupChecking = true, tgBackupStatus = appStrings.get(R.string.settings_tg_backup_checking))
+        }
+        tgCheckJob = viewModelScope.launch {
+            val status = connectTelegramBot(token)
+            _uiState.update {
+                // The field was edited while the check ran: the result belongs to another token.
+                if (it.tgBackupToken != token) it.copy(tgBackupChecking = false, tgBackupStatus = null)
+                else it.copy(tgBackupChecking = false, tgBackupStatus = status)
+            }
+        }
+    }
+
+    /**
+     * Binds the chat that sent the one-time code and stores the binding only after the greeting
+     * went through; any error changes nothing. A bot already bound with this token keeps its chat.
+     * Returns the status line to show; null = the stepper itself tells what happened.
+     */
+    private suspend fun connectTelegramBot(token: String): String? {
+        val botName = telegramBackupSink.getMe(token).getOrElse { return tgBackupError(it) }
+        val stored = settingsRepository.getTgBackupConfig()
+        val chat = if (stored.token == token && stored.chatId != null) {
+            TelegramChat(stored.chatId, stored.chatName)
+        } else {
+            val code = _uiState.value.tgBackupCode
+            if (code == null) {
+                _uiState.update { it.copy(tgBackupCode = newBindCode(), tgBackupBotName = botName) }
+                return null
+            }
+            telegramBackupSink.findPrivateChat(token, code).getOrElse { return tgBackupError(it) }
+                ?: return appStrings.get(R.string.settings_tg_backup_code_not_received)
+        }
+        telegramBackupSink.sendMessage(token, chat.id, appStrings.get(R.string.settings_tg_backup_greeting))
+            .getOrElse { return tgBackupError(it) }
+        // The field now holds another token: store nothing, the caller drops this status.
+        if (_uiState.value.tgBackupToken != token) return null
+        settingsRepository.saveTgBackup(token, botName, chat.id, chat.name)
+        _uiState.update { it.copy(tgBackupCode = null, tgBackupBinding = TgBackupBinding(botName, chat.name)) }
+        return null
+    }
+
+    /** «Назад» on the code step: drops the code, the token stays in the field for another try. */
+    fun cancelTelegramCode() {
+        tgCheckJob?.cancel()
+        _uiState.update { it.copy(tgBackupCode = null, tgBackupStatus = null, tgBackupChecking = false) }
+    }
+
+    private fun newBindCode(): String = (BIND_CODE_MIN + SecureRandom().nextInt(BIND_CODE_SPAN)).toString()
+
+    private fun tgBackupError(error: Throwable): String = appStrings.get(
+        R.string.settings_error_with_message,
+        (error as? TelegramSinkException)?.let { telegramErrorText(appStrings.context, it.key) } ?: error.message ?: "?",
+    )
+
+    /**
+     * «Отключить»: stops a running check and a waiting scheduled run, then forgets token, chat and
+     * bot name; backups stay local.
+     */
+    fun disconnectTelegramBackup() {
+        val check = tgCheckJob
+        autoBackupScheduler.cancelScheduled(appContext)
+        _uiState.update {
+            it.copy(
+                tgBackupToken = "",
+                tgBackupStatus = null,
+                tgBackupChecking = false,
+                tgBackupCode = null,
+                tgBackupBotName = "",
+                tgBackupBinding = null,
+            )
+        }
+        viewModelScope.launch {
+            // Joined first so a check that was about to save cannot write after the clear.
+            check?.cancelAndJoin()
+            settingsRepository.clearTgBackup()
+        }
     }
 
     /**
@@ -2585,18 +2919,7 @@ class SettingsViewModel @Inject constructor(
                     out.appendLine("---")
                     out.append(dump)
                 }
-                val uri = FileProvider.getUriForFile(
-                    appContext, "${appContext.packageName}.fileprovider", file,
-                )
-                val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_STREAM, uri)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-                val chooser = Intent.createChooser(shareIntent, null).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                appContext.startActivity(chooser)
+                shareFile(file, "text/plain")
                 // Show the path the user actually sees in a file manager (storage root stripped),
                 // e.g. "Download/fid-dump-20260729-120000.txt".
                 val storageRoot = Environment.getExternalStorageDirectory()?.absolutePath
@@ -2637,7 +2960,7 @@ class SettingsViewModel @Inject constructor(
                 val update = updateChecker.checkForUpdate(appContext, forceCheck = true)
                 if (update != null) {
                     _uiState.update {
-                        it.copy(updateDialogState = UpdateState.Downloading(update.version, appContext.getString(R.string.update_downloading_start)))
+                        it.copy(updateDialogState = UpdateState.Downloading(update.version, appStrings.get(R.string.update_downloading_start)))
                     }
                     updateChecker.downloadAndInstall(appContext, update) { progress ->
                         // Ignore late progress after the job was cancelled (Close pressed)
@@ -2659,6 +2982,33 @@ class SettingsViewModel @Inject constructor(
 }
 
 /** Human-readable name for [android.content.pm.PackageManager.getApplicationEnabledSetting] values. */
+/** Localized text for a [TelegramSinkException.key]; an unknown key is shown as is. */
+internal fun telegramErrorText(context: Context, key: String): String {
+    if (key.startsWith("HTTP:")) return context.getString(R.string.settings_tg_error_http, key.removePrefix("HTTP:"))
+    val res = when (TelegramError.entries.firstOrNull { it.name == key }) {
+        TelegramError.BAD_TOKEN -> R.string.settings_tg_error_bad_token
+        TelegramError.NO_NETWORK -> R.string.settings_tg_error_no_network
+        TelegramError.NO_CHAT -> R.string.settings_tg_error_no_chat
+        TelegramError.TOO_LARGE -> R.string.settings_tg_error_too_large
+        TelegramError.WEBHOOK -> R.string.settings_tg_error_webhook
+        TelegramError.BAD_RESPONSE -> R.string.settings_tg_error_bad_response
+        TelegramError.HTTP, null -> return key
+    }
+    return context.getString(res)
+}
+
+/** Localized text for the stored auto backup result key (see [AutoBackupRunner] RESULT_*). */
+internal fun autoBackupResultText(context: Context, key: String): String = when {
+    key == AutoBackupRunner.RESULT_SENT -> context.getString(R.string.settings_auto_backup_result_sent)
+    key == AutoBackupRunner.RESULT_LOCAL_ONLY -> context.getString(R.string.settings_auto_backup_result_local_only)
+    key == AutoBackupRunner.RESULT_EXPORT_ERROR -> context.getString(R.string.settings_auto_backup_result_export_error)
+    key.startsWith(AutoBackupRunner.RESULT_SEND_ERROR_PREFIX) -> context.getString(
+        R.string.settings_auto_backup_result_send_error,
+        telegramErrorText(context, key.removePrefix(AutoBackupRunner.RESULT_SEND_ERROR_PREFIX)),
+    )
+    else -> key
+}
+
 internal fun enabledSettingName(state: Int): String = when (state) {
     android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DEFAULT -> "DEFAULT (enabled)"
     android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED -> "ENABLED"

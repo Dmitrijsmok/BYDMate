@@ -15,7 +15,7 @@ VER="${1:?usage: prepare-release.sh X.Y.Z}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CL="$ROOT/CHANGELOG.md"
 DATE="$(date +%Y-%m-%d)"
-URL="https://github.com/AndyShaman/BYDMate"
+URL="https://github.com/Dmitrijsmok/BYDMate"
 
 # --- guard: [Unreleased] must actually have content ---
 UNREL="$(awk '/^## \[Unreleased\]/{f=1;next} /^## \[/{f=0} f' "$CL")"
@@ -67,7 +67,7 @@ awk -v ver="$VER" '
 ' "$CL"
 
 # --- APK SHA-256 for the release notes (AC-12) ---
-APK="$ROOT/app/build/outputs/apk/release/BYDMate-v$VER.apk"
+APK="$ROOT/app/build/outputs/apk/release/BYDMate-dilink3-v$VER.apk"
 if [ -f "$APK" ]; then
   echo ""
   echo "SHA-256: $(shasum -a 256 "$APK" | cut -d' ' -f1)"

@@ -42,7 +42,9 @@ class ActionDispatcherToggleTest {
         dagger.Lazy { mockk<com.bydmate.app.voice.VoiceAutomationActions>(relaxed = true) },
         cluster,
         mockk<com.bydmate.app.voice.AudioCapture>(relaxed = true),
-        mockk<com.bydmate.app.split.SplitSessionManager>(relaxed = true))
+        mockk<com.bydmate.app.split.SplitSessionManager>(relaxed = true),
+            com.bydmate.app.util.AppStrings(app), dagger.Lazy { io.mockk.mockk(relaxed = true) })
+        .also { it.readSpeedNow = { 0 } } // a standing car unless a test says otherwise
 
     init {
         coEvery { vehicleApi.dispatch(any()) } returns Result.success(Unit)
@@ -161,6 +163,7 @@ class ActionDispatcherToggleTest {
     }
 
     @Test fun `front trunk open keeps the standstill gate`() = runTest {
+        dispatcher.readSpeedNow = { 40 }
         val result = dispatcher.dispatch(toggle("front_trunk"), snapshot(frontTrunk = 2, speed = 40))
         assertFalse(result.success)
         coVerify(exactly = 0) { vehicleApi.dispatch(any()) }
@@ -185,6 +188,7 @@ class ActionDispatcherToggleTest {
     }
 
     @Test fun `sunroof open keeps its speed gate`() = runTest {
+        dispatcher.readSpeedNow = { 100 }
         val result = dispatcher.dispatch(toggle("sunroof"), snapshot(sunroof = 0, speed = 100))
         assertFalse(result.success)
         coVerify(exactly = 0) { vehicleApi.dispatch(any()) }
@@ -209,6 +213,7 @@ class ActionDispatcherToggleTest {
     }
 
     @Test fun `unlock resolved by a toggle still hits the speed gate`() = runTest {
+        dispatcher.readSpeedNow = { 60 }
         val result = dispatcher.dispatch(toggle("locks"), snapshot(lockFL = 2, speed = 60))
         assertFalse(result.success)
         coVerify(exactly = 0) { vehicleApi.dispatch(any()) }

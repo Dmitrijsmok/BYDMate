@@ -7,8 +7,13 @@ import android.provider.Settings as AndroidSettings
 import android.widget.Toast
 import com.bydmate.app.camera.BlindSpotPositionOverlay
 import com.bydmate.app.camera.BlindSpotPreferences
+import com.bydmate.app.camera.blindSpotClusterDisplay
 import com.bydmate.app.cluster.ClusterEntryPoint
 import com.bydmate.app.data.autoservice.AdbRestoreState
+import com.bydmate.app.data.autoservice.AdbVerdict
+import com.bydmate.app.data.backup.AutoBackupPeriod
+import com.bydmate.app.data.backup.BackupPart
+import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.cluster.ClusterProjectionManager
 import com.bydmate.app.cluster.CENTER_OFFSET_PCT
 import com.bydmate.app.cluster.MAX_OFFSET_PCT
@@ -24,6 +29,7 @@ import kotlin.math.roundToInt
 import com.bydmate.app.ui.widget.LeftTapMode
 import com.bydmate.app.ui.widget.WidgetController
 import com.bydmate.app.ui.widget.WidgetPreferences
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
@@ -34,7 +40,6 @@ import androidx.compose.material.icons.outlined.DirectionsCar
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.PhoneAndroid
-import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
@@ -42,6 +47,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -57,11 +63,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import com.bydmate.app.ui.components.AppAlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -80,7 +88,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.withStyle
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -89,6 +101,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -97,12 +111,20 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.IconButton
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.horizontalScroll
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.runtime.rememberCoroutineScope
+import com.bydmate.app.data.telegram.ReportField
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.window.Dialog
@@ -120,15 +142,23 @@ import com.bydmate.app.R
 import com.bydmate.app.agent.LlmAgentBackend
 import com.bydmate.app.data.remote.OpenRouterModel
 import com.bydmate.app.data.repository.SettingsRepository
+import com.bydmate.app.ui.components.AdbVerdictDialog
 import com.bydmate.app.ui.components.AppLaunchPickerDialog
+import com.bydmate.app.ui.components.adbVerdictColor
+import com.bydmate.app.ui.components.adbVerdictText
 import com.bydmate.app.ui.components.MultiAppPickerDialog
 import com.bydmate.app.ui.components.bydSwitchColors
 import com.bydmate.app.ui.theme.*
+import com.bydmate.app.util.APP_LANGUAGES
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import androidx.compose.material.icons.outlined.Mic
 import com.bydmate.app.cluster.DEFAULT_VOICE_KEYCODE
+import com.bydmate.app.cluster.VoiceButtonBinding
+import com.bydmate.app.cluster.localVoiceBinding
+import com.bydmate.app.cluster.aliceVoiceBinding
+import com.bydmate.app.cluster.LEARN_COMPANION_WINDOW_MS
 import com.bydmate.app.voice.AgentPersona
 import com.bydmate.app.voice.TtsGender
 import com.bydmate.app.voice.TtsVoiceCatalog
@@ -138,17 +168,17 @@ import com.bydmate.app.split.Split37Engine
 import com.bydmate.app.split.SplitFreeformVerdict
 import com.bydmate.app.split.SplitRole
 import com.bydmate.app.split.applyPick
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private enum class SettingsSection(@StringRes val labelRes: Int, val icon: ImageVector) {
+internal enum class SettingsSection(@StringRes val labelRes: Int, val icon: ImageVector) {
     VOICE(R.string.settings_section_voice_agent, Icons.Outlined.Mic),
     WIDGET(R.string.settings_section_widget_title, Icons.Outlined.PhoneAndroid),
     DISPLAY(R.string.settings_section_display_title, Icons.Outlined.DirectionsCar),
     SPLIT(R.string.settings_section_split_title, Icons.Outlined.Apps),
     BATTERY(R.string.settings_section_auto_battery_title, Icons.Outlined.BatteryChargingFull),
-    PLACES(R.string.settings_section_places_title, Icons.Outlined.Place),
     INTEGRATIONS(R.string.settings_section_integrations_title, Icons.Outlined.Link),
     SERVICE(R.string.settings_section_service_title, Icons.Outlined.Build),
     APP(R.string.settings_section_application_title, Icons.Outlined.Settings),
@@ -157,11 +187,15 @@ private enum class SettingsSection(@StringRes val labelRes: Int, val icon: Image
 
 private val PrimaryColor = AccentGreen
 
+/** Own phrases for built-in commands are hidden while the built-in phrase list settles. */
+private const val SHOW_VOICE_USER_PHRASES = false
+
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
     onNavigateToAgentChat: () -> Unit = {},
     onNavigateToVoiceJournal: () -> Unit = {},
+    onNavigateToVoiceUserPhrases: () -> Unit = {},
     onNavigateToTariffPeriods: () -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -259,11 +293,12 @@ fun SettingsScreen(
                     when (safeSelected) {
                         SettingsSection.BATTERY -> BatterySection(state, viewModel, onNavigateToTariffPeriods)
                         SettingsSection.INTEGRATIONS -> IntegrationsSection(state, viewModel)
-                        SettingsSection.VOICE -> VoiceSettingsContent(state, viewModel, onNavigateToVoiceJournal, onNavigateToAgentChat)
+                        SettingsSection.VOICE -> VoiceSettingsContent(
+                            state, viewModel, onNavigateToVoiceJournal, onNavigateToAgentChat, onNavigateToVoiceUserPhrases,
+                        )
                         SettingsSection.WIDGET -> WidgetSection()
                         SettingsSection.DISPLAY -> DisplaySection()
                         SettingsSection.SPLIT -> SplitSection()
-                        SettingsSection.PLACES -> PlacesSection()
                         SettingsSection.SERVICE -> ServiceSection(state, viewModel)
                         SettingsSection.APP -> AppSection(state, viewModel)
                         SettingsSection.SMART_HOME -> SmartHomeSection(state, viewModel)
@@ -289,26 +324,29 @@ private fun SettingsRail(
         modifier = modifier,
     ) {
         Column(modifier = Modifier.fillMaxSize().padding(vertical = 12.dp, horizontal = 8.dp)) {
-            Text(
-                stringResource(R.string.settings_rail_sections_label),
-                color = TextMuted,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-            )
-
-            SettingsSection.entries.forEach { section ->
-                val isHidden = section == SettingsSection.SMART_HOME
-                if (isHidden && !smartHomeUnlocked) return@forEach
-                RailItem(
-                    section = section,
-                    isActive = section == selected,
-                    isHidden = isHidden,
-                    onClick = { onSelect(section) },
+            // Only the section list scrolls, for enlarged fonts or a short screen; it takes the
+            // remaining height, so the divider and the version stay pinned to the bottom.
+            Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                Text(
+                    stringResource(R.string.settings_rail_sections_label),
+                    color = TextMuted,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                 )
+
+                SettingsSection.entries.forEach { section ->
+                    val isHidden = section == SettingsSection.SMART_HOME
+                    if (isHidden && !smartHomeUnlocked) return@forEach
+                    RailItem(
+                        section = section,
+                        isActive = section == selected,
+                        isHidden = isHidden,
+                        onClick = { onSelect(section) },
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.weight(1f))
             HorizontalDivider(color = CardBorder)
             Row(
                 modifier = Modifier
@@ -798,7 +836,7 @@ private fun WidgetSection() {
                     if (requested) {
                         if (AndroidSettings.canDrawOverlays(context)) {
                             prefs.setEnabled(true)
-                            WidgetController.attach(context)
+                            WidgetController.attach(context, "settings_toggle_on")
                         } else {
                             val intent = Intent(
                                 AndroidSettings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -808,7 +846,7 @@ private fun WidgetSection() {
                         }
                     } else {
                         prefs.setEnabled(false)
-                        WidgetController.detach()
+                        WidgetController.detach("settings_toggle_off")
                     }
                 },
             )
@@ -858,8 +896,8 @@ private fun WidgetSection() {
                 onClick = {
                     prefs.resetPosition()
                     if (enabled && AndroidSettings.canDrawOverlays(context)) {
-                        WidgetController.detach()
-                        WidgetController.attach(context)
+                        WidgetController.detach("reset_position")
+                        WidgetController.attach(context, "reset_position")
                     }
                 },
                 style = SettingButtonStyle.Secondary,
@@ -894,10 +932,13 @@ private fun WidgetSection() {
                     ),
                     selectedIndex = if (leftTapApp.mode == LeftTapMode.APP) 0 else 1,
                     onSelect = { idx ->
-                        prefs.setLeftTapMode(if (idx == 0) LeftTapMode.APP else LeftTapMode.SPLIT)
+                        if (leftTapModeSelectable(idx, splitFeatureEnabled)) {
+                            prefs.setLeftTapMode(if (idx == 0) LeftTapMode.APP else LeftTapMode.SPLIT)
+                        }
                     },
-                    // Disabled when split feature is off: prevents selecting split mode (Fix 1).
-                    enabled = enabled && splitFeatureEnabled,
+                    // Stays enabled with split off if SPLIT is still the saved mode, so the
+                    // user has a way to switch out of it (#188).
+                    enabled = leftTapModeChipEnabled(enabled, splitFeatureEnabled, leftTapApp.mode),
                 )
             }
             SettingToggleRow(
@@ -942,11 +983,23 @@ private fun WidgetSection() {
     }
 }
 
-@Composable
-private fun PlacesSection() {
-    SectionHeader(text = stringResource(R.string.settings_section_places_title))
-    PlacesInlineContent()
-}
+/**
+ * Whether the "left tap mode" chip row should be interactive. With the split feature off the
+ * row still stays enabled if SPLIT is the saved mode, so the user has a way to switch out of
+ * it instead of being stuck (#188).
+ */
+internal fun leftTapModeChipEnabled(
+    widgetEnabled: Boolean,
+    splitFeatureEnabled: Boolean,
+    mode: LeftTapMode,
+): Boolean = widgetEnabled && (splitFeatureEnabled || mode == LeftTapMode.SPLIT)
+
+/**
+ * Whether a chip tap (idx 0 = APP, idx 1 = SPLIT) should be applied. APP is always accepted;
+ * SPLIT is ignored while the split feature is disabled.
+ */
+internal fun leftTapModeSelectable(idx: Int, splitFeatureEnabled: Boolean): Boolean =
+    idx == 0 || splitFeatureEnabled
 
 @Composable
 private fun DisplaySection() {
@@ -1106,7 +1159,7 @@ private fun DisplaySection() {
             },
         )
         if (extendedConfirmOpen) {
-            AlertDialog(
+            AppAlertDialog(
                 onDismissRequest = { extendedConfirmOpen = false },
                 containerColor = CardSurface,
                 title = {
@@ -1287,6 +1340,11 @@ private fun DisplaySection() {
                 learning = false
             },
             onDismiss = { learning = false },
+            occupiedReason = { code ->
+                val voicePrefs = context.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                if (code in (voicePrefs.localVoiceBinding().codes + voicePrefs.aliceVoiceBinding().codes))
+                    context.getString(R.string.automation_steering_key_occupied_voice) else null
+            },
         )
     }
 
@@ -1337,6 +1395,11 @@ private fun BlindSpotCard() {
     var bothOnMain by remember {
         mutableStateOf(prefs.getBoolean(BlindSpotPreferences.KEY_BOTH_ON_MAIN, false))
     }
+    var bothOnCluster by remember {
+        mutableStateOf(prefs.getBoolean(BlindSpotPreferences.KEY_BOTH_ON_CLUSTER, false))
+    }
+    // Same lookup the controller routes by: without a projection panel there is no cluster to offer.
+    val hasClusterDisplay = remember { blindSpotClusterDisplay(context) != null }
 
     // Drag-to-place preview: it lives in a WindowManager overlay, so leaving the screen has to
     // take it down explicitly. The state follows the window rather than the clicks — the overlay
@@ -1457,7 +1520,12 @@ private fun BlindSpotCard() {
             checked = bothOnMain,
             onCheckedChange = {
                 bothOnMain = it
-                prefs.edit().putBoolean(BlindSpotPreferences.KEY_BOTH_ON_MAIN, it).apply()
+                // The two screen opt-ins exclude each other (#240): one write, so the controller
+                // never sees both on.
+                if (it) bothOnCluster = false
+                val editor = prefs.edit().putBoolean(BlindSpotPreferences.KEY_BOTH_ON_MAIN, it)
+                if (it) editor.putBoolean(BlindSpotPreferences.KEY_BOTH_ON_CLUSTER, false)
+                editor.apply()
                 // The left window only exists on the main screen while this is on; its placement
                 // row goes away with it, and an open drag overlay would have nothing to dismiss it.
                 if (!it && placing == BlindSpotPositionOverlay.Side.LEFT) positionOverlay.hide()
@@ -1480,6 +1548,24 @@ private fun BlindSpotCard() {
                     val closing = placing == side
                     positionOverlay.hide()
                     if (!closing && positionOverlay.show(context, side)) placing = side
+                },
+                enabled = enabled,
+            )
+        }
+        if (hasClusterDisplay) {
+            SettingDivider()
+            SettingToggleRow(
+                title = stringResource(R.string.settings_blindspot_both_cluster_title),
+                description = stringResource(R.string.settings_blindspot_both_cluster_desc),
+                checked = bothOnCluster,
+                onCheckedChange = {
+                    bothOnCluster = it
+                    if (it) bothOnMain = false
+                    val editor = prefs.edit().putBoolean(BlindSpotPreferences.KEY_BOTH_ON_CLUSTER, it)
+                    if (it) editor.putBoolean(BlindSpotPreferences.KEY_BOTH_ON_MAIN, false)
+                    editor.apply()
+                    // Turning the main-screen opt-in off takes the left placement row with it.
+                    if (it && placing == BlindSpotPositionOverlay.Side.LEFT) positionOverlay.hide()
                 },
                 enabled = enabled,
             )
@@ -1758,7 +1844,7 @@ internal sealed interface LearnUiState {
     data class Rejected(val keyCode: Int) : LearnUiState
     /** Assignable key, but already taken by another feature; [reason] explains which one. */
     data class Occupied(val keyCode: Int, val reason: String) : LearnUiState
-    data class Captured(val keyCode: Int) : LearnUiState
+    data class Captured(val keyCode: Int, val companions: Set<Int> = emptySet()) : LearnUiState
     data object TimedOut : LearnUiState
 }
 
@@ -1772,16 +1858,29 @@ internal sealed interface LearnUiState {
  */
 @Composable
 internal fun LearnButtonDialog(
-    onSave: (Int) -> Unit,
+    onSave: (Int) -> Unit = {},
     onDismiss: () -> Unit,
     occupiedReason: (Int) -> String? = { null },
+    onSaveWithCompanions: ((Int, Set<Int>) -> Unit)? = null,
 ) {
     var state by remember { mutableStateOf<LearnUiState>(LearnUiState.Waiting) }
+    var captureReady by remember { mutableStateOf(onSaveWithCompanions == null) }
+    val capture by SteeringWheelKeyService.capturedKey.collectAsState()
+    LaunchedEffect(capture) {
+        if (onSaveWithCompanions != null) {
+            captureReady = false
+            if (capture?.primaryReleased == true) {
+                delay(LEARN_COMPANION_WINDOW_MS)
+                captureReady = true
+            }
+        }
+    }
 
     // Clear learn mode AND the captured value on close, so a later reopen can't latch a stale capture.
     DisposableEffect(Unit) {
         onDispose {
             SteeringWheelKeyService.learnMode = false
+            SteeringWheelKeyService.learnVoiceCompanions = false
             SteeringWheelKeyService.capturedKey.value = null
         }
     }
@@ -1791,11 +1890,12 @@ internal fun LearnButtonDialog(
     // stale value left from a previous session — reopening therefore always starts at Waiting.
     LaunchedEffect(Unit) {
         SteeringWheelKeyService.capturedKey.value = null
+        SteeringWheelKeyService.learnVoiceCompanions = onSaveWithCompanions != null
         SteeringWheelKeyService.learnMode = true
         SteeringWheelKeyService.capturedKey
             .filterNotNull()
             .collect { r ->
-                val occupied = if (r.assignable) occupiedReason(r.keyCode) else null
+                val occupied = if (r.assignable) (r.companions + r.keyCode).firstNotNullOfOrNull(occupiedReason) else null
                 state = when {
                     !r.assignable -> LearnUiState.Rejected(r.keyCode)
                     // The service clears learn mode on capture; re-arm so the next press is caught.
@@ -1805,7 +1905,7 @@ internal fun LearnButtonDialog(
                     }
                     else -> {
                         SteeringWheelKeyService.learnMode = false
-                        LearnUiState.Captured(r.keyCode)
+                        LearnUiState.Captured(r.keyCode, r.companions)
                     }
                 }
             }
@@ -1829,7 +1929,7 @@ internal fun LearnButtonDialog(
         state = LearnUiState.Waiting
     }
 
-    AlertDialog(
+    AppAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.learn_button_dialog_title)) },
         text = {
@@ -1855,7 +1955,7 @@ internal fun LearnButtonDialog(
                 is LearnUiState.Captured -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(stringResource(R.string.learn_button_captured))
                     Text(
-                        "${steeringButtonLabel(s.keyCode)} (${s.keyCode})",
+                        "${steeringButtonLabel(s.keyCode)} (${(listOf(s.keyCode) + s.companions.sorted()).joinToString(" + ")})",
                         color = TextPrimary, fontWeight = FontWeight.Medium,
                     )
                 }
@@ -1864,7 +1964,10 @@ internal fun LearnButtonDialog(
         },
         confirmButton = {
             when (val s = state) {
-                is LearnUiState.Captured -> TextButton(onClick = { onSave(s.keyCode) }) {
+                is LearnUiState.Captured -> TextButton(enabled = captureReady, onClick = {
+                    if (onSaveWithCompanions != null) onSaveWithCompanions(s.keyCode, s.companions)
+                    else onSave(s.keyCode)
+                }) {
                     Text(stringResource(R.string.learn_button_save))
                 }
                 is LearnUiState.TimedOut -> TextButton(onClick = restart) {
@@ -1904,42 +2007,49 @@ private fun ServiceSection(
         EntryPointAccessors.fromApplication(context.applicationContext, ClusterEntryPoint::class.java)
     }
 
-    // SAF picker for restore — must be declared at composable top level
-    val restoreLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) viewModel.restoreConfig(uri)
-    }
-    var showRestoreConfirm by remember { mutableStateOf(false) }
-    var showExportConfirm by remember { mutableStateOf(false) }
+    // Own picker over Download/ instead of SAF: on some firmwares ACTION_OPEN_DOCUMENT hands
+    // back a URI without a read grant (#223). Non-null restoreCandidates = picker open.
+    var showSaveDialog by remember { mutableStateOf(false) }
 
-    // Confirm dialog for destructive restore operation
-    if (showRestoreConfirm) {
-        AlertDialog(
-            onDismissRequest = { showRestoreConfirm = false },
+    state.restoreCandidates?.let { files ->
+        AppAlertDialog(
+            onDismissRequest = { viewModel.closeRestorePicker() },
             title = {
                 Text(
-                    stringResource(R.string.settings_config_restore_confirm_title),
+                    stringResource(R.string.settings_config_restore_pick_title),
                     color = TextPrimary,
                 )
             },
             text = {
-                Text(
-                    stringResource(R.string.settings_config_restore_confirm_body),
-                    color = TextSecondary,
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showRestoreConfirm = false
-                    restoreLauncher.launch(arrayOf("application/zip"))
-                }) {
+                if (files.isEmpty()) {
                     Text(
-                        stringResource(R.string.settings_config_restore_confirm_ok),
-                        color = SocRed,
+                        stringResource(R.string.settings_config_restore_pick_empty),
+                        color = TextSecondary,
                     )
+                } else {
+                    val dateFormat = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        items(files) { file ->
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { viewModel.pickRestoreFile(file) }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Text(file.name, color = TextPrimary, fontSize = 13.sp, maxLines = 1)
+                                Text(
+                                    dateFormat.format(Date(file.lastModified())),
+                                    color = TextSecondary,
+                                    fontSize = 12.sp,
+                                )
+                            }
+                        }
+                    }
                 }
             },
+            confirmButton = {},
             dismissButton = {
-                TextButton(onClick = { showRestoreConfirm = false }) {
+                TextButton(onClick = { viewModel.closeRestorePicker() }) {
                     Text(
                         stringResource(R.string.settings_config_restore_confirm_cancel),
                         color = TextSecondary,
@@ -1950,42 +2060,45 @@ private fun ServiceSection(
         )
     }
 
-    // Confirm dialog before exporting plaintext backup
-    if (showExportConfirm) {
-        AlertDialog(
-            onDismissRequest = { showExportConfirm = false },
-            title = {
-                Text(
-                    stringResource(R.string.settings_config_export_confirm_title),
-                    color = TextPrimary,
-                )
+    // «Что восстановить»: only the parts the archive carries can be checked (#238).
+    state.restoreChoice?.let { choice ->
+        BackupPartsDialog(
+            title = stringResource(R.string.settings_config_restore_dialog_title),
+            initial = choice.parts,
+            available = choice.parts,
+            confirmLabel = stringResource(R.string.settings_config_restore_confirm_ok),
+            confirmColor = SocRed,
+            warning = stringResource(R.string.settings_config_restore_warning),
+            busy = state.restoreInProgress,
+            onConfirm = { viewModel.restoreConfig(choice.file, it) },
+            onDismiss = { viewModel.dismissRestoreChoice() },
+        )
+    }
+
+    if (showSaveDialog) {
+        BackupPartsDialog(
+            title = stringResource(R.string.settings_config_save_dialog_title),
+            initial = state.manualBackupParts,
+            available = BackupPart.ALL,
+            confirmLabel = stringResource(R.string.settings_config_save_button),
+            confirmColor = PrimaryColor,
+            warning = null,
+            busy = state.restoreInProgress,
+            onConfirm = {
+                showSaveDialog = false
+                viewModel.saveConfiguration(it)
             },
-            text = {
-                Text(
-                    stringResource(R.string.settings_config_export_confirm_body),
-                    color = TextSecondary,
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showExportConfirm = false
-                    viewModel.exportConfig()
-                }) {
-                    Text(
-                        stringResource(R.string.settings_config_export_confirm_ok),
-                        color = PrimaryColor,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showExportConfirm = false }) {
-                    Text(
-                        stringResource(R.string.settings_config_restore_confirm_cancel),
-                        color = TextSecondary,
-                    )
-                }
-            },
-            containerColor = CardSurfaceElevated,
+            onDismiss = { showSaveDialog = false },
+        )
+    }
+
+    // After a manual save: the file, the Telegram outcome and the system share sheet (#237, #238).
+    state.savedBackup?.let { saved ->
+        SavedBackupDialog(
+            saved = saved,
+            withKeys = BackupPart.KEYS in state.manualBackupParts,
+            onShare = { viewModel.shareExportedBackup() },
+            onDismiss = { viewModel.dismissExportedBackup() },
         )
     }
 
@@ -2023,8 +2136,17 @@ private fun ServiceSection(
     // every car: where the port survives a reboot the status line simply says so.
     val adbRestore = remember { clusterEntryPoint.adbRestoreManager() }
     var adbRestoreEnabled by remember { mutableStateOf(adbRestore.isEnabled()) }
+    // Android 10: the toggle stays visible but locked off, the status line says why.
+    val adbRestoreSupported = remember { adbRestore.isSupported() }
     var adbRestoreHelpOpen by remember { mutableStateOf(false) }
     val adbRestoreState by adbRestore.state.collectAsStateWithLifecycle()
+    val adbVerdict by viewModel.adbVerdict.collectAsStateWithLifecycle()
+    val adbChecking by viewModel.adbChecking.collectAsStateWithLifecycle()
+    // The verdict the dialog was opened for; cleared when the problem goes away.
+    var openAdbVerdict by remember { mutableStateOf<AdbVerdict?>(null) }
+    LaunchedEffect(adbVerdict) {
+        if (adbVerdict == null || adbVerdict == AdbVerdict.OK) openAdbVerdict = null
+    }
     // Opening Settings with the feature on refreshes the status line (and picks the port back
     // up if it is down) instead of showing whatever the last trigger left behind. Keyed on the
     // toggle, so switching it on runs an attempt right away. The attempt runs in the manager's
@@ -2042,18 +2164,61 @@ private fun ServiceSection(
             SettingToggleRow(
                 title = stringResource(R.string.settings_adb_restore_title),
                 description = stringResource(R.string.settings_adb_restore_desc),
-                checked = adbRestoreEnabled,
+                checked = adbRestoreEnabled && adbRestoreSupported,
                 onCheckedChange = { enabled ->
                     adbRestoreEnabled = enabled
                     adbRestore.setEnabled(enabled)
                 },
-                onHelp = { adbRestoreHelpOpen = true },
+                enabled = adbRestoreSupported,
+                // The help explains a working restore; on Android 10 the status line says why there is none.
+                onHelp = if (adbRestoreSupported) ({ adbRestoreHelpOpen = true }) else null,
             )
             adbRestoreStatusText(adbRestoreState)?.let { SettingHint(text = it) }
+            val verdict = adbVerdict
+            if (adbChecking) {
+                Text(
+                    stringResource(R.string.adb_verdict_checking),
+                    color = TextSecondary, fontSize = 12.5.sp,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+            } else if (verdict != null && verdict != AdbVerdict.OK) {
+                val link = stringResource(
+                    if (verdict == AdbVerdict.NOT_ENABLED) R.string.adb_verdict_link_how
+                    else R.string.adb_verdict_link_more
+                )
+                Text(
+                    buildAnnotatedString {
+                        withStyle(SpanStyle(color = adbVerdictColor(verdict))) { append(adbVerdictText(verdict)) }
+                        append(" ")
+                        withStyle(SpanStyle(color = AccentBlue, fontWeight = FontWeight.SemiBold)) { append(link) }
+                    },
+                    fontSize = 12.5.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { openAdbVerdict = verdict }
+                        .padding(bottom = 8.dp),
+                )
+            }
         }
     }
+    val dialogVerdict = adbVerdict
+    if (openAdbVerdict != null && dialogVerdict != null && dialogVerdict != AdbVerdict.OK) {
+        AdbVerdictDialog(
+            verdict = dialogVerdict,
+            restoreEnabled = adbRestoreEnabled,
+            restoreSupported = adbRestoreSupported,
+            onCheck = { viewModel.recheckAdb() },
+            onEnableRestore = {
+                // Keep the toggle above in step with the dialog's switch-on.
+                adbRestoreEnabled = true
+                viewModel.enableAdbRestore()
+            },
+            onOpenDiagnostics = null,
+            onDismiss = { openAdbVerdict = null },
+        )
+    }
     if (adbRestoreHelpOpen) {
-        AlertDialog(
+        AppAlertDialog(
             onDismissRequest = { adbRestoreHelpOpen = false },
             containerColor = CardSurface,
             title = {
@@ -2150,88 +2315,31 @@ private fun ServiceSection(
                 },
             )
             SettingDivider()
+            SettingSubhead(stringResource(R.string.settings_config_header))
             SettingActionRow(
-                title = stringResource(R.string.settings_export_csv_button),
-                description = stringResource(R.string.settings_export_csv_desc),
-                buttonLabel = stringResource(R.string.settings_export_csv_button),
-                onClick = { viewModel.exportCsv() },
-            )
-            if (state.exportStatus != null) {
-                SettingHint(
-                    text = state.exportStatus!!,
-                )
-            }
-            SettingDivider()
-            SettingActionRow(
-                title = stringResource(R.string.settings_log_recording_start_button),
-                description = stringResource(R.string.settings_log_recording_desc),
-                buttonLabel = if (state.isRecordingLogs) {
-                    stringResource(R.string.settings_log_recording_stop_button)
-                } else {
-                    stringResource(R.string.settings_log_recording_start_button)
-                },
-                onClick = {
-                    if (state.isRecordingLogs) viewModel.stopLogRecording()
-                    else viewModel.startLogRecording()
-                },
-            )
-            if (state.logSaveStatus != null) {
-                SettingHint(
-                    text = state.logSaveStatus!!,
-                )
-            }
-            // Diagnostic fid recorder (-test/debug builds only): the daemon owns the run, this row
-            // only reflects and toggles it, so a reopened screen still shows a recording in force.
-            if (state.fidRecorderVisible) {
-                SettingDivider()
-                SettingToggleRow(
-                    title = stringResource(R.string.settings_fid_recorder_title),
-                    description = stringResource(R.string.settings_fid_recorder_desc),
-                    checked = state.fidRecorderRunning,
-                    onCheckedChange = { viewModel.setFidRecorder(it) },
-                )
-                if (state.fidRecorderError != null) {
-                    SettingHint(
-                        text = stringResource(R.string.settings_fid_recorder_error, state.fidRecorderError!!),
-                    )
-                }
-                if (state.fidRecorderFile != null) {
-                    SettingHint(
-                        text = stringResource(R.string.settings_fid_recorder_file, state.fidRecorderFile!!),
-                    )
-                }
-            }
-            SettingDivider()
-            SettingActionRow(
-                title = stringResource(R.string.settings_config_export_button),
-                description = stringResource(R.string.settings_config_export_desc),
-                buttonLabel = stringResource(R.string.settings_config_export_button),
-                onClick = { showExportConfirm = true },
+                title = stringResource(R.string.settings_config_save_title),
+                description = stringResource(R.string.settings_config_save_desc),
+                buttonLabel = stringResource(R.string.settings_config_save_button),
+                onClick = { showSaveDialog = true },
+                style = SettingButtonStyle.Primary,
+                enabled = !state.restoreInProgress,
             )
             SettingDivider()
             SettingActionRow(
                 title = stringResource(R.string.settings_config_restore_button),
                 description = stringResource(R.string.settings_config_restore_desc),
-                buttonLabel = stringResource(R.string.settings_config_restore_button),
-                onClick = { showRestoreConfirm = true },
+                buttonLabel = stringResource(R.string.settings_config_restore_pick_button),
+                onClick = { viewModel.openRestorePicker() },
+                enabled = !state.restoreInProgress,
             )
             if (state.configStatus != null) {
                 SettingHint(
                     text = state.configStatus!!,
                 )
             }
+            AutoBackupRows(state, viewModel)
             SettingDivider()
-            SettingActionRow(
-                title = stringResource(R.string.settings_fid_dump_button),
-                description = stringResource(R.string.settings_fid_dump_desc),
-                buttonLabel = stringResource(R.string.settings_fid_dump_button),
-                onClick = { viewModel.dumpFids() },
-            )
-            if (state.fidDumpStatus != null) {
-                SettingHint(
-                    text = state.fidDumpStatus!!,
-                )
-            }
+            DiagnosticsRows(state, viewModel)
         }
     }
 
@@ -2261,10 +2369,549 @@ private fun ServiceSection(
     }
 }
 
+/** Log recording, the fid recorder (test builds) and the fid catalog dump, each with a [?] (#238). */
+@Composable
+private fun DiagnosticsRows(state: SettingsUiState, viewModel: SettingsViewModel) {
+    // Title and body of the open [?] dialog; null = closed.
+    var help by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    help?.let { (title, body) ->
+        AppAlertDialog(
+            onDismissRequest = { help = null },
+            containerColor = CardSurface,
+            title = { Text(stringResource(title), color = TextPrimary) },
+            text = {
+                Text(
+                    stringResource(body),
+                    color = TextSecondary, fontSize = 14.sp, lineHeight = 19.sp,
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { help = null }) {
+                    Text(stringResource(R.string.nav_autostart_dialog_button), color = AccentGreen)
+                }
+            },
+        )
+    }
+    SettingSubhead(stringResource(R.string.settings_diagnostics_header))
+    SettingActionRow(
+        title = stringResource(R.string.settings_log_recording_start_button),
+        description = stringResource(R.string.settings_log_recording_desc),
+        buttonLabel = if (state.isRecordingLogs) {
+            stringResource(R.string.settings_log_recording_stop_button)
+        } else {
+            stringResource(R.string.settings_log_recording_start_button)
+        },
+        onClick = {
+            if (state.isRecordingLogs) viewModel.stopLogRecording()
+            else viewModel.startLogRecording()
+        },
+        onHelp = { help = R.string.settings_log_recording_start_button to R.string.settings_log_recording_help },
+    )
+    if (state.logSaveStatus != null) {
+        SettingHint(
+            text = state.logSaveStatus!!,
+        )
+    }
+    // Diagnostic fid recorder (-test/debug builds only): the daemon owns the run, this row
+    // only reflects and toggles it, so a reopened screen still shows a recording in force.
+    if (state.fidRecorderVisible) {
+        SettingDivider()
+        SettingToggleRow(
+            title = stringResource(R.string.settings_fid_recorder_title),
+            description = stringResource(R.string.settings_fid_recorder_desc),
+            checked = state.fidRecorderRunning,
+            onCheckedChange = { viewModel.setFidRecorder(it) },
+            onHelp = { help = R.string.settings_fid_recorder_title to R.string.settings_fid_recorder_help },
+        )
+        if (state.fidRecorderError != null) {
+            SettingHint(
+                text = stringResource(R.string.settings_fid_recorder_error, state.fidRecorderError!!),
+            )
+        }
+        if (state.fidRecorderFile != null) {
+            SettingHint(
+                text = stringResource(R.string.settings_fid_recorder_file, state.fidRecorderFile!!),
+            )
+        }
+    }
+    SettingDivider()
+    SettingActionRow(
+        title = stringResource(R.string.settings_fid_dump_button),
+        description = stringResource(R.string.settings_fid_dump_desc),
+        buttonLabel = stringResource(R.string.settings_config_save_button),
+        onClick = { viewModel.dumpFids() },
+        onHelp = { help = R.string.settings_fid_dump_button to R.string.settings_fid_dump_help },
+    )
+    if (state.fidDumpStatus != null) {
+        SettingHint(
+            text = state.fidDumpStatus!!,
+        )
+    }
+}
+
+/**
+ * Automatic save (#237, #238): period and part chips with the last run, then the Telegram bot and
+ * the power-off report it sends (3.19).
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun AutoBackupRows(state: SettingsUiState, viewModel: SettingsViewModel) {
+    val context = LocalContext.current
+    val tokenFocus = remember { FocusRequester() }
+    val botBringer = remember { BringIntoViewRequester() }
+    val periods = AutoBackupPeriod.entries
+    val locale = LocalConfiguration.current.locales[0]
+    val dateFormat = remember(locale) { SimpleDateFormat("d MMM HH:mm", locale) }
+    SettingDivider()
+    // Two halves instead of SettingChipRow: at the largest text size the chips wrap onto a second
+    // line instead of scrolling the last one out of sight.
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(
+                stringResource(R.string.settings_auto_backup_title),
+                color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+            )
+            Text(
+                stringResource(R.string.settings_auto_backup_desc),
+                color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            Text(
+                text = when {
+                    state.autoBackupLastTs > 0L -> stringResource(
+                        R.string.settings_auto_backup_last,
+                        dateFormat.format(Date(state.autoBackupLastTs)),
+                        autoBackupResultText(context, state.autoBackupLastResult),
+                    )
+                    // A first run that failed to export has no timestamp but does have a reason.
+                    state.autoBackupLastResult.isNotEmpty() -> autoBackupResultText(context, state.autoBackupLastResult)
+                    else -> stringResource(R.string.settings_auto_backup_never)
+                },
+                color = TextPrimary, fontSize = 13.sp, lineHeight = 17.sp,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+        Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+            val periodLabels = listOf(
+                stringResource(R.string.settings_auto_backup_off),
+                stringResource(R.string.settings_auto_backup_daily),
+                stringResource(R.string.settings_auto_backup_weekly),
+                stringResource(R.string.settings_auto_backup_monthly),
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End)) {
+                periods.forEachIndexed { index, period ->
+                    UnitChip(
+                        label = periodLabels[index],
+                        selected = period == state.autoBackupPeriod,
+                        onClick = { viewModel.setAutoBackupPeriod(period) },
+                    )
+                }
+            }
+            Text(
+                stringResource(R.string.settings_auto_backup_parts_label),
+                color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp, textAlign = TextAlign.End,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End)) {
+                BackupPart.entries.forEach { part ->
+                    val label = stringResource(
+                        when (part) {
+                            BackupPart.TABLES -> R.string.settings_backup_chip_tables
+                            BackupPart.SETTINGS -> R.string.settings_backup_chip_settings
+                            BackupPart.KEYS -> R.string.settings_backup_chip_keys
+                        }
+                    )
+                    val selected = part in state.autoBackupParts
+                    UnitChip(
+                        label = if (selected) "✓ $label" else label,
+                        selected = selected,
+                        onClick = { viewModel.toggleAutoBackupPart(part) },
+                    )
+                }
+            }
+        }
+    }
+    SettingDivider()
+    TelegramBotRows(state, viewModel, tokenFocus, botBringer)
+    SettingDivider()
+    PowerOffReportRows(state, viewModel, tokenFocus, botBringer)
+}
+
+/**
+ * «Отчёт при выключении машины»: needs the bot above, so without it the switch is grey and a link
+ * takes the driver to the token field. The items show only while the report is on.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun PowerOffReportRows(
+    state: SettingsUiState,
+    viewModel: SettingsViewModel,
+    tokenFocus: FocusRequester,
+    botBringer: BringIntoViewRequester,
+) {
+    val connected = state.tgBackupBinding != null
+    val scope = rememberCoroutineScope()
+    SettingToggleRow(
+        title = stringResource(R.string.settings_tg_report_off_title),
+        description = stringResource(R.string.settings_tg_report_off_hint),
+        checked = connected && state.tgReportOffEnabled,
+        onCheckedChange = { viewModel.setTgReportOffEnabled(it) },
+        enabled = connected,
+    )
+    if (!connected) {
+        FlowRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .clickable {
+                    scope.launch {
+                        botBringer.bringIntoView()
+                        // The token field exists only on the first step; on the code step the block is enough.
+                        if (state.tgBackupCode == null) tokenFocus.requestFocus()
+                    }
+                }
+                .padding(bottom = 4.dp),
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                stringResource(R.string.settings_tg_report_off_no_bot),
+                color = TextSecondary, fontSize = 12.5.sp, lineHeight = 17.sp,
+                modifier = Modifier.padding(end = 4.dp),
+            )
+            Text(
+                stringResource(R.string.settings_tg_report_off_connect),
+                color = AccentBlue, fontSize = 12.5.sp, lineHeight = 17.sp, fontWeight = FontWeight.SemiBold,
+            )
+        }
+    } else if (state.tgReportOffEnabled) {
+        Text(
+            stringResource(R.string.settings_tg_report_items_label),
+            color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(bottom = 6.dp),
+        ) {
+            ReportField.entries.forEach { field ->
+                val label = stringResource(field.labelRes)
+                val selected = field in state.tgReportOffFields
+                UnitChip(
+                    label = if (selected) "✓ $label" else label,
+                    selected = selected,
+                    onClick = { viewModel.toggleTgReportOffField(field) },
+                )
+            }
+        }
+    }
+}
+
+/** Telegram bot as a three-step stepper: token, code sent to the bot, connected (#238). */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun TelegramBotRows(
+    state: SettingsUiState,
+    viewModel: SettingsViewModel,
+    tokenFocus: FocusRequester,
+    botBringer: BringIntoViewRequester,
+) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val copiedToast = stringResource(R.string.settings_tg_backup_code_copied)
+    val binding = state.tgBackupBinding
+    val code = state.tgBackupCode
+    val step = when {
+        binding != null -> 3
+        code != null -> 2
+        else -> 1
+    }
+    Column(
+        modifier = Modifier.fillMaxWidth().bringIntoViewRequester(botBringer).padding(vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            stringResource(R.string.settings_tg_backup_title),
+            color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+        )
+        TelegramStepper(step)
+        when {
+            binding != null -> {
+                Text(
+                    "✓ " + stringResource(R.string.settings_tg_backup_connected_chip),
+                    color = AccentGreen, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .background(AccentGreen.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+                Text(
+                    stringResource(R.string.settings_tg_backup_chat_line, binding.botName, binding.chatName),
+                    color = TextPrimary, fontSize = 14.sp,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(R.string.settings_tg_backup_connected_note),
+                        color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { viewModel.disconnectTelegramBackup() }) {
+                        Text(stringResource(R.string.settings_tg_backup_disconnect), color = TextSecondary, fontSize = 13.sp)
+                    }
+                }
+            }
+            code != null -> {
+                Text(
+                    code,
+                    color = TextPrimary, fontSize = 30.sp, fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace, letterSpacing = 6.sp,
+                    modifier = Modifier
+                        .background(NavyDark, RoundedCornerShape(10.dp))
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                )
+                Text(
+                    stringResource(R.string.settings_tg_backup_code_instruction, state.tgBackupBotName),
+                    color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            clipboard.setText(AnnotatedString(code))
+                            Toast.makeText(context, copiedToast, Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, CardBorder),
+                    ) { Text(stringResource(R.string.settings_tg_backup_copy_code), color = TextPrimary, fontSize = 13.sp) }
+                    TelegramCheckButton(state, viewModel)
+                    TextButton(onClick = { viewModel.cancelTelegramCode() }) {
+                        Text(stringResource(R.string.settings_tg_backup_back), color = TextSecondary, fontSize = 13.sp)
+                    }
+                }
+            }
+            else -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        SettingsTextField(
+                            label = stringResource(R.string.settings_tg_backup_token_label),
+                            value = state.tgBackupToken,
+                            onValueChange = { viewModel.updateTgBackupToken(it) },
+                            keyboardType = KeyboardType.Password,
+                            secret = true,
+                            modifier = Modifier.focusRequester(tokenFocus),
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    TelegramCheckButton(state, viewModel)
+                }
+                Text(
+                    stringResource(R.string.settings_tg_backup_hint),
+                    color = TextMuted, fontSize = 12.sp, lineHeight = 16.sp,
+                )
+            }
+        }
+        // Progress and errors right under the controls, in colour: easy to miss as a grey hint.
+        state.tgBackupStatus?.takeIf { step != 3 }?.let { status ->
+            Text(
+                status,
+                color = if (state.tgBackupChecking) TextSecondary else AccentOrange,
+                fontSize = 14.sp, lineHeight = 19.sp, fontWeight = FontWeight.Medium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TelegramCheckButton(state: SettingsUiState, viewModel: SettingsViewModel) {
+    Button(
+        onClick = { viewModel.checkTelegramBackup() },
+        enabled = !state.tgBackupChecking && state.tgBackupToken.isNotBlank(),
+        shape = RoundedCornerShape(8.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark),
+    ) { Text(stringResource(R.string.settings_tg_backup_check), fontSize = 13.sp, fontWeight = FontWeight.Medium) }
+}
+
+/** «1 Токен — 2 Код — 3 Готово»; steps before [current] show a check mark. */
+@Composable
+private fun TelegramStepper(current: Int) {
+    val labels = listOf(
+        stringResource(R.string.settings_tg_backup_step_token),
+        stringResource(R.string.settings_tg_backup_step_code),
+        stringResource(R.string.settings_tg_backup_step_done),
+    )
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        labels.forEachIndexed { index, label ->
+            val step = index + 1
+            val active = step == current
+            val done = step < current || (active && step == labels.size)
+            if (index > 0) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 8.dp)
+                        .height(1.dp)
+                        .background(if (step <= current) AccentGreen else CardBorder),
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .background(if (active || done) AccentGreen else CardBorder, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (done) "✓" else step.toString(),
+                    color = if (active || done) NavyDark else TextSecondary,
+                    fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                )
+            }
+            Text(
+                label,
+                color = if (active) TextPrimary else TextSecondary,
+                fontSize = 13.sp, fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
+                maxLines = 1,
+                modifier = Modifier.padding(start = 6.dp),
+            )
+        }
+    }
+}
+
+/**
+ * «Что сохранить» / «Что восстановить» (#238): a checkbox per part, [available] parts only; at least
+ * one must stay checked. Scrolls, so the buttons stay reachable at the largest text size.
+ * [busy] = a restore runs, the confirm button stays disabled.
+ */
+@Composable
+private fun BackupPartsDialog(
+    title: String,
+    initial: Set<BackupPart>,
+    available: Set<BackupPart>,
+    confirmLabel: String,
+    confirmColor: Color,
+    warning: String?,
+    busy: Boolean,
+    onConfirm: (Set<BackupPart>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var selected by remember { mutableStateOf(initial intersect available) }
+    AppAlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = CardSurfaceElevated,
+        title = { Text(title, color = TextPrimary) },
+        text = {
+            Box(modifier = Modifier.heightIn(max = 400.dp)) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    BackupPart.entries.forEach { part ->
+                        val enabled = part in available
+                        val (titleRes, descRes) = when (part) {
+                            BackupPart.TABLES -> R.string.settings_backup_part_tables to R.string.settings_backup_part_tables_desc
+                            BackupPart.SETTINGS -> R.string.settings_backup_part_settings to R.string.settings_backup_part_settings_desc
+                            BackupPart.KEYS -> R.string.settings_backup_part_keys to R.string.settings_backup_part_keys_desc
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = enabled) {
+                                    selected = if (part in selected) selected - part else selected + part
+                                }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = part in selected,
+                                onCheckedChange = null,
+                                enabled = enabled,
+                                colors = CheckboxDefaults.colors(
+                                    checkedColor = AccentGreen,
+                                    uncheckedColor = CardBorder,
+                                    checkmarkColor = NavyDark,
+                                ),
+                            )
+                            Column(modifier = Modifier.padding(start = 10.dp)) {
+                                Text(
+                                    stringResource(titleRes),
+                                    color = if (enabled) TextPrimary else TextMuted,
+                                    fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                                )
+                                Text(
+                                    stringResource(if (enabled) descRes else R.string.settings_backup_part_absent),
+                                    color = if (enabled) TextSecondary else TextMuted,
+                                    fontSize = 12.sp, lineHeight = 16.sp,
+                                )
+                            }
+                        }
+                    }
+                    if (warning != null) {
+                        Text(
+                            warning,
+                            color = AccentOrange, fontSize = 13.sp, lineHeight = 18.sp,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            val canConfirm = selected.isNotEmpty() && !busy
+            TextButton(onClick = { onConfirm(selected) }, enabled = canConfirm) {
+                Text(confirmLabel, color = if (canConfirm) confirmColor else TextMuted)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.settings_config_restore_confirm_cancel), color = TextSecondary)
+            }
+        },
+    )
+}
+
+/** «Сохранено»: file name and size, the Telegram outcome, «Поделиться» and «Закрыть». */
+@Composable
+private fun SavedBackupDialog(saved: SavedBackup, withKeys: Boolean, onShare: () -> Unit, onDismiss: () -> Unit) {
+    val locale = LocalConfiguration.current.locales[0]
+    val sizeMb = remember(saved.file, locale) {
+        String.format(locale, "%.1f", saved.file.length() / (1024.0 * 1024.0))
+    }
+    AppAlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = CardSurfaceElevated,
+        title = { Text(stringResource(R.string.settings_config_saved_title), color = TextPrimary) },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(stringResource(R.string.settings_config_saved_file, saved.file.name, sizeMb), color = TextPrimary)
+                if (saved.telegramStatus != null) {
+                    Text(saved.telegramStatus, color = TextPrimary, fontSize = 14.sp)
+                }
+                if (withKeys) {
+                    Text(stringResource(R.string.settings_backup_share_hint), color = TextSecondary, fontSize = 13.sp)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.settings_backup_close), color = PrimaryColor)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onShare) {
+                Text(stringResource(R.string.settings_backup_share), color = TextSecondary)
+            }
+        },
+    )
+}
+
 @Composable
 private fun AppSection(state: SettingsUiState, viewModel: SettingsViewModel) {
     val lang by viewModel.appLanguage.collectAsState()
     LanguageBlock(currentLang = lang, onLanguageChange = viewModel::setAppLanguage)
+    val fontScale by viewModel.fontScale.collectAsState()
+    FontScaleBlock(current = fontScale, onChange = viewModel::setFontScale)
 
     var showDonate by remember { mutableStateOf(false) }
     if (showDonate) {
@@ -2380,6 +3027,7 @@ private fun VoiceSettingsContent(
     viewModel: SettingsViewModel,
     onNavigateToVoiceJournal: () -> Unit,
     onNavigateToAgentChat: () -> Unit,
+    onNavigateToVoiceUserPhrases: () -> Unit,
 ) {
     val context = LocalContext.current
 
@@ -2777,6 +3425,7 @@ private fun VoiceSettingsContent(
 
     // Steering-button assignment (reuses LearnButtonDialog from DisplaySection)
     var learningVoiceKey by remember { mutableStateOf(false) }
+    var learningAliceKey by remember { mutableStateOf(false) }
     Card(
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
@@ -2787,20 +3436,42 @@ private fun VoiceSettingsContent(
                 if (state.voiceKeycode == 0) DEFAULT_VOICE_KEYCODE else state.voiceKeycode
             )
             SettingValueRow(
-                title = stringResource(R.string.settings_voice_button_label),
+                title = stringResource(R.string.voice_button_local_label),
                 value = stringResource(R.string.settings_voice_button_current, keyLabel),
                 onClick = { learningVoiceKey = true },
             )
+            SettingValueRow(
+                title = stringResource(R.string.voice_button_alice_label),
+                value = if (state.aliceKeycode == 0) stringResource(R.string.voice_button_not_assigned)
+                    else steeringButtonLabel(state.aliceKeycode),
+                onClick = { learningAliceKey = true },
+            )
+            if (state.aliceKeycode != 0) {
+                TextButton(onClick = { viewModel.saveVoiceButton(VoiceButtonBinding(), true) }) {
+                    Text(stringResource(R.string.voice_button_clear_alice))
+                }
+            }
+            SettingHint(stringResource(R.string.voice_button_assignment_hint))
         }
     }
 
     if (learningVoiceKey) {
         LearnButtonDialog(
-            onSave = { code ->
-                viewModel.saveVoiceKeycode(code)
-                learningVoiceKey = false
+            onSaveWithCompanions = { code, companions ->
+                viewModel.saveVoiceButton(VoiceButtonBinding(code, companions), false) { learningVoiceKey = false }
             },
+            occupiedReason = { viewModel.voiceButtonConflict(it, false) },
             onDismiss = { learningVoiceKey = false },
+        )
+    }
+
+    if (learningAliceKey) {
+        LearnButtonDialog(
+            onSaveWithCompanions = { code, companions ->
+                viewModel.saveVoiceButton(VoiceButtonBinding(code, companions), true) { learningAliceKey = false }
+            },
+            occupiedReason = { viewModel.voiceButtonConflict(it, true) },
+            onDismiss = { learningAliceKey = false },
         )
     }
 
@@ -2839,6 +3510,15 @@ private fun VoiceSettingsContent(
                 onClick = onNavigateToVoiceJournal,
                 style = SettingButtonStyle.Secondary,
             )
+            if (SHOW_VOICE_USER_PHRASES) {
+                SettingActionRow(
+                    title = stringResource(R.string.settings_voice_user_phrases_title),
+                    description = stringResource(R.string.settings_voice_user_phrases_description),
+                    buttonLabel = stringResource(R.string.settings_voice_user_phrases_button),
+                    onClick = onNavigateToVoiceUserPhrases,
+                    style = SettingButtonStyle.Secondary,
+                )
+            }
         }
     }
 
@@ -3054,11 +3734,8 @@ private fun LanguageBlock(
     // No Activity.recreate(): MainActivity listens to LocalePreferences,
     // mutates Resources.configuration in place, and re-provides
     // LocalConfiguration so every stringResource recomposes on next frame.
-    val langCodes = listOf("ru", "en", "zh", "pt", "pl", "be")
-    val langLabels = listOf(
-        stringResource(R.string.settings_lang_russian), "English", "简体中文", "Português",
-        "Polski", "Беларуская",
-    )
+    val langCodes = APP_LANGUAGES.map { it.first }
+    val langLabels = APP_LANGUAGES.map { it.second }
     SectionHeader(text = stringResource(R.string.settings_language_title))
     Card(
         shape = RoundedCornerShape(12.dp),
@@ -3074,6 +3751,38 @@ private fun LanguageBlock(
                 options = langLabels,
                 selectedIndex = langCodes.indexOf(currentLang).coerceAtLeast(0),
                 onSelect = { idx -> if (langCodes[idx] != currentLang) onLanguageChange(langCodes[idx]) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun FontScaleBlock(
+    current: Float,
+    onChange: (Float) -> Unit
+) {
+    val scales = LocalePreferences.FONT_SCALES
+    val labels = listOf(
+        stringResource(R.string.settings_font_scale_normal),
+        stringResource(R.string.settings_font_scale_large),
+        stringResource(R.string.settings_font_scale_xlarge),
+    )
+    SectionHeader(text = stringResource(R.string.settings_font_scale_title))
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SettingChipRow(
+                title = stringResource(R.string.settings_font_scale_title),
+                description = stringResource(R.string.settings_font_scale_desc),
+                options = labels,
+                selectedIndex = scales.indexOf(current).coerceAtLeast(0),
+                onSelect = { idx -> if (scales[idx] != current) onChange(scales[idx]) },
             )
         }
     }
@@ -3207,11 +3916,13 @@ private fun ConnDropdown(
                 Text(selectedLabel, fontSize = 13.sp, maxLines = 1)
             }
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                if (allowNone) {
-                    DropdownMenuItem(text = { Text(noneLabel) }, onClick = { onSelect(""); expanded = false })
-                }
-                options.forEach { (id, text) ->
-                    DropdownMenuItem(text = { Text(text) }, onClick = { onSelect(id); expanded = false })
+                ScaledDialogContent {
+                    if (allowNone) {
+                        DropdownMenuItem(text = { Text(noneLabel) }, onClick = { onSelect(""); expanded = false })
+                    }
+                    options.forEach { (id, text) ->
+                        DropdownMenuItem(text = { Text(text) }, onClick = { onSelect(id); expanded = false })
+                    }
                 }
             }
         }
@@ -3269,7 +3980,8 @@ private fun SettingsTextField(
     onValueChange: (String) -> Unit,
     keyboardType: KeyboardType,
     secret: Boolean = false,
-    singleLine: Boolean = true
+    singleLine: Boolean = true,
+    modifier: Modifier = Modifier,
 ) {
     // Secret fields (API keys, tokens) are masked so screenshots and over-the-shoulder
     // looks do not leak them; the eye icon reveals the value while editing.
@@ -3295,7 +4007,7 @@ private fun SettingsTextField(
                 }
             }
         } else null,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
         colors = OutlinedTextFieldDefaults.colors(
             focusedTextColor = Color.White,
@@ -3351,48 +4063,50 @@ private fun CustomModelPickerDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Card(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = CardSurface),
-            modifier = Modifier
-                .fillMaxWidth(0.6f)
-                .heightIn(max = 500.dp)
-                .padding(16.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    stringResource(R.string.settings_model_picker_title),
-                    color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                if (loading) {
+        ScaledDialogContent {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = CardSurface),
+                modifier = Modifier
+                    .fillMaxWidth(0.6f)
+                    .heightIn(max = 500.dp)
+                    .padding(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        stringResource(R.string.settings_model_picker_loading),
-                        color = TextSecondary, fontSize = 14.sp
+                        stringResource(R.string.settings_model_picker_title),
+                        color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold
                     )
-                } else {
-                    LazyColumn(
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                        modifier = Modifier.weight(1f, fill = false)
-                    ) {
-                        items(models) { id ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onSelect(id) }
-                                    .background(
-                                        if (id == selectedId) AccentGreen.copy(alpha = 0.15f)
-                                        else Color.Transparent,
-                                        RoundedCornerShape(8.dp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    if (loading) {
+                        Text(
+                            stringResource(R.string.settings_model_picker_loading),
+                            color = TextSecondary, fontSize = 14.sp
+                        )
+                    } else {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                            modifier = Modifier.weight(1f, fill = false)
+                        ) {
+                            items(models) { id ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onSelect(id) }
+                                        .background(
+                                            if (id == selectedId) AccentGreen.copy(alpha = 0.15f)
+                                            else Color.Transparent,
+                                            RoundedCornerShape(8.dp)
+                                        )
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                ) {
+                                    Text(
+                                        id,
+                                        color = if (id == selectedId) AccentGreen else TextPrimary,
+                                        fontSize = 13.sp,
+                                        maxLines = 1
                                     )
-                                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                            ) {
-                                Text(
-                                    id,
-                                    color = if (id == selectedId) AccentGreen else TextPrimary,
-                                    fontSize = 13.sp,
-                                    maxLines = 1
-                                )
+                                }
                             }
                         }
                     }
@@ -3416,77 +4130,79 @@ private fun ModelPickerDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Card(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = CardSurface),
-            modifier = Modifier
-                .fillMaxWidth(0.6f)
-                .heightIn(max = 500.dp)
-                .padding(16.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(stringResource(R.string.settings_model_picker_title), color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(8.dp))
+        ScaledDialogContent {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = CardSurface),
+                modifier = Modifier
+                    .fillMaxWidth(0.6f)
+                    .heightIn(max = 500.dp)
+                    .padding(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(stringResource(R.string.settings_model_picker_title), color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    label = { Text(stringResource(R.string.settings_model_picker_search_label)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = AccentGreen,
-                        unfocusedBorderColor = CardBorder,
-                        focusedLabelColor = AccentGreen,
-                        unfocusedLabelColor = TextSecondary,
-                        cursorColor = AccentGreen
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        label = { Text(stringResource(R.string.settings_model_picker_search_label)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = AccentGreen,
+                            unfocusedBorderColor = CardBorder,
+                            focusedLabelColor = AccentGreen,
+                            unfocusedLabelColor = TextSecondary,
+                            cursorColor = AccentGreen
+                        )
                     )
-                )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                if (loading) {
-                    Text(stringResource(R.string.settings_model_picker_loading), color = TextSecondary, fontSize = 14.sp)
-                } else {
-                    val filtered = if (searchQuery.isBlank()) models
-                    else models.filter { it.name.contains(searchQuery, ignoreCase = true) ||
-                        it.id.contains(searchQuery, ignoreCase = true) }
+                    if (loading) {
+                        Text(stringResource(R.string.settings_model_picker_loading), color = TextSecondary, fontSize = 14.sp)
+                    } else {
+                        val filtered = if (searchQuery.isBlank()) models
+                        else models.filter { it.name.contains(searchQuery, ignoreCase = true) ||
+                            it.id.contains(searchQuery, ignoreCase = true) }
 
-                    LazyColumn(
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                        modifier = Modifier.weight(1f, fill = false)
-                    ) {
-                        items(filtered) { model ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onSelect(model) }
-                                    .background(
-                                        if (model.id == selectedId) AccentGreen.copy(alpha = 0.15f)
-                                        else Color.Transparent,
-                                        RoundedCornerShape(8.dp)
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                            modifier = Modifier.weight(1f, fill = false)
+                        ) {
+                            items(filtered) { model ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onSelect(model) }
+                                        .background(
+                                            if (model.id == selectedId) AccentGreen.copy(alpha = 0.15f)
+                                            else Color.Transparent,
+                                            RoundedCornerShape(8.dp)
+                                        )
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        model.name,
+                                        color = if (model.id == selectedId) AccentGreen else TextPrimary,
+                                        fontSize = 13.sp,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1
                                     )
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    model.name,
-                                    color = if (model.id == selectedId) AccentGreen else TextPrimary,
-                                    fontSize = 13.sp,
-                                    modifier = Modifier.weight(1f),
-                                    maxLines = 1
-                                )
-                                Text(
-                                    if (model.pricingPrompt == 0.0) "FREE"
-                                    else "${"%.2f".format(model.pricingPrompt)}$/M",
-                                    color = if (model.pricingPrompt == 0.0) AccentGreen else TextSecondary,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
+                                    Text(
+                                        if (model.pricingPrompt == 0.0) "FREE"
+                                        else "${"%.2f".format(model.pricingPrompt)}$/M",
+                                        color = if (model.pricingPrompt == 0.0) AccentGreen else TextSecondary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
                             }
                         }
                     }
@@ -3500,6 +4216,7 @@ private fun ModelPickerDialog(
 @Composable
 private fun adbRestoreStatusText(state: AdbRestoreState): String? = when (state) {
     AdbRestoreState.Disabled -> null
+    AdbRestoreState.Unsupported -> stringResource(R.string.settings_adb_restore_status_unsupported)
     AdbRestoreState.NotNeeded -> stringResource(R.string.settings_adb_restore_status_not_needed)
     AdbRestoreState.NeedsActivation -> stringResource(R.string.settings_adb_restore_status_needs_activation)
     AdbRestoreState.WaitingWifi -> stringResource(R.string.settings_adb_restore_status_waiting_wifi)

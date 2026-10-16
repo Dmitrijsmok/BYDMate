@@ -15,6 +15,7 @@ import com.bydmate.app.domain.cost.TariffSchedule
 import com.bydmate.app.data.repository.equivalentFullCycles
 import com.bydmate.app.data.repository.fullCycleKwh
 import com.bydmate.app.domain.battery.BatteryStateRepository
+import com.bydmate.app.util.CalendarPeriods
 import com.bydmate.app.util.appLocalizedContext
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -71,6 +72,9 @@ data class ChargesUiState(
     val nominalCapacityKwh: Double = 72.9,
     // BMS-reported SOH as a 0..1 factor; 1.0 when unavailable or implausible (#28)
     val sohFactor: Double = 1.0,
+    // Raw BMS SoH for the full-cycle divisor, as «Техника» passes it; fullCycleCapacityKwh
+    // alone decides whether it is usable (#224)
+    val sohPercent: Float? = null,
     val sohSeries: List<Float> = emptyList(),
     val capacitySeries: List<Float> = emptyList(),
     // BMS lifetime from autoservice — distinct from sum across our charge rows
@@ -96,7 +100,13 @@ data class ChargesUiState(
      */
     val equivCycles: Double
         get() = fullCycleKwh(bmsLifetimeKwh, lifetimeTotalKwh)
-            ?.let { equivalentFullCycles(it, nominalCapacityKwh) } ?: 0.0
+            ?.let {
+                equivalentFullCycles(
+                    it, nominalCapacityKwh,
+                    sohPercent = sohPercent,
+                    lifetimeSource = bmsLifetimeKwh != null && bmsLifetimeKwh > 0.0,
+                )
+            } ?: 0.0
 }
 
 @HiltViewModel
@@ -313,6 +323,7 @@ class ChargesViewModel @Inject constructor(
                     sohFactor = state.sohPercent?.toDouble()
                         ?.takeIf { soh -> soh in AutoserviceChargingDetector.SOH_SANITY_MIN..100.0 }
                         ?.div(100.0) ?: 1.0,
+                    sohPercent = state.sohPercent?.toFloat(),
                 )
             }
         }
@@ -359,24 +370,9 @@ class ChargesViewModel @Inject constructor(
                 cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
                 cal.timeInMillis to now
             }
-            ChargesPeriod.WEEK -> {
-                cal.add(Calendar.DAY_OF_YEAR, -7)
-                cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0)
-                cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
-                cal.timeInMillis to now
-            }
-            ChargesPeriod.MONTH -> {
-                cal.set(Calendar.DAY_OF_MONTH, 1)
-                cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0)
-                cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
-                cal.timeInMillis to now
-            }
-            ChargesPeriod.YEAR -> {
-                cal.set(Calendar.DAY_OF_YEAR, 1)
-                cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0)
-                cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
-                cal.timeInMillis to now
-            }
+            ChargesPeriod.WEEK -> CalendarPeriods.startOfWeek(now) to now
+            ChargesPeriod.MONTH -> CalendarPeriods.startOfMonth(now) to now
+            ChargesPeriod.YEAR -> CalendarPeriods.startOfYear(now) to now
             ChargesPeriod.ALL -> 0L to now
         }
     }

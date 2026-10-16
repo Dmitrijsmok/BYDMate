@@ -4,6 +4,9 @@ package com.bydmate.app.helper
 import com.bydmate.app.BuildConfig
 import com.bydmate.app.helper.push.FidPushRegistry
 import com.bydmate.app.helper.push.FidRecorder
+import com.bydmate.app.helper.offreport.OffReport
+import com.bydmate.app.helper.offreport.readOffReportArm
+import com.bydmate.app.helper.offreport.writeOffReportStatus
 import com.bydmate.app.helper.push.PermissiveContext
 import com.bydmate.app.helper.push.readRecStartRequest
 import com.bydmate.app.helper.push.readSubscribeRequest
@@ -33,7 +36,7 @@ import java.nio.channels.OverlappingFileLockException
 import kotlin.system.exitProcess
 
 // Lock path on the device filesystem (writable by shell uid).
-private const val LOCK_PATH = "/data/local/tmp/bydmate_helper.lock"
+private const val LOCK_PATH = "/data/local/tmp/bydm_d3_helper.lock"
 
 // SELinux domain of the running process; the daemon must land in the shell domain to be
 // allowed to addService. Unreadable on some firmwares — never fatal.
@@ -207,6 +210,11 @@ fun main(args: Array<String>) {
             exitProcess(3)
         }
     val autoIface: String = svc.interfaceDescriptor ?: ""
+    // The power-off report seeds its listener with a direct getInt of the power fids.
+    OffReport.reader = { dev, fid ->
+        autoserviceTransact(svc, autoIface, 5, dev, fid, 0, writeValue = false)
+            .takeIf { (status, _) -> status == 0 }?.second
+    }
 
     // Keeps created VirtualDisplays alive (their backing Surface comes from the app overlay).
     // Keyed by displayId so TX_RELEASE_VIRTUAL_DISPLAY can release the right one.
@@ -532,7 +540,13 @@ fun main(args: Array<String>) {
                     // the caller may only name the launcher package.
                     // Validate the flag daemon-side too — a privileged shell-uid op must not
                     // trust the caller. Only 0/1 are a defined state; reject anything else.
-                    val ok = if (pkg == "com.byd.autovoice" && hidden in 0..1) {
+                    val ok = if (pkg == "com.byd.vrassistant" && hidden in 0..1) {
+                        // DiLink 3 ships the real native voice UI as com.byd.vrassistant.
+                        // Keep the privileged surface exact and reversible: this is NOT a generic
+                        // package-disable passthrough.
+                        val cmd = if (hidden == 1) "pm disable-user --user 0" else "pm enable"
+                        shExec("$cmd \"\$1\"", pkg).code == 0
+                    } else if (pkg == "com.byd.autovoice" && hidden in 0..1) {
                         // `pm disable-user --user 0` force-stops the package and disables its
                         // components so the framework stops routing the steering voice button to it.
                         // `pm hide` left the already-running system assistant alive — the wheel
@@ -865,6 +879,10 @@ fun main(args: Array<String>) {
                 HelperBinderProtocol.TX_REC_START,
                 HelperBinderProtocol.TX_REC_STOP,
                 HelperBinderProtocol.TX_REC_STATUS -> handleRecorderTransact(code, data, reply)
+
+                HelperBinderProtocol.TX_OFFREPORT_ARM,
+                HelperBinderProtocol.TX_OFFREPORT_DISARM,
+                HelperBinderProtocol.TX_OFFREPORT_STATUS -> handleOffReportTransact(code, data, reply)
 
                 else -> super.onTransact(code, data, reply, flags)
             }
@@ -2025,7 +2043,7 @@ private fun recoverAccessibilityService(): Boolean {
     for (attempt in 1..2) {
         am = runCatching {
             amShell(
-                "am broadcast --include-stopped-packages -a com.bydmate.app.action.RECOVER_START -n \"\$1\"",
+                "am broadcast --include-stopped-packages -a com.bydmate.dilink3.app.action.RECOVER_START -n \"\$1\"",
                 listOf("$pkg/com.bydmate.app.service.BootReceiver"),
             )
         }.getOrElse { "broadcast failed: ${it.javaClass.simpleName}: ${it.message}" }
@@ -2069,11 +2087,11 @@ private fun logA11yFrameworkState(reassertOk: Boolean) {
     }.take(12)
     android.util.Log.i(tag, "a11y state after reassert ok=$reassertOk: sdk=${android.os.Build.VERSION.SDK_INT} lines=${a11y.size}")
     keep.forEach { android.util.Log.i(tag, "a11y: " + it.trim().take(300)) }
-    val pid = shExecBounded("pidof com.bydmate.app")
-    val stopped = shExecBounded("dumpsys package com.bydmate.app").lines()
+    val pid = shExecBounded("pidof ${HelperBinderProtocol.APP_PACKAGE}")
+    val stopped = shExecBounded("dumpsys package ${HelperBinderProtocol.APP_PACKAGE}").lines()
         .firstOrNull { it.contains("stopped=", ignoreCase = true) }?.trim()?.take(200)
     android.util.Log.i(tag, "pkg: pid=${pid.ifEmpty { "none" }} $stopped")
-    val am = shExecBounded("dumpsys activity services com.bydmate.app").lines()
+    val am = shExecBounded("dumpsys activity services ${HelperBinderProtocol.APP_PACKAGE}").lines()
     val start = am.indexOfFirst { it.contains("SteeringWheelKeyService") }
     if (start < 0) {
         android.util.Log.i(tag, "am: no ServiceRecord for SteeringWheelKeyService (lines=${am.size})")
@@ -2598,6 +2616,37 @@ private fun handleRecorderTransact(code: Int, data: Parcel, reply: Parcel?): Boo
             android.util.Log.w("FidRec", "TX_REC_STATUS failed", e)
             reply?.writeInt(-1)
         }
+    }
+    return true
+}
+
+/**
+ * The three power-off report verbs, out of line like the recorder's. Every reply starts with a
+ * status int; a failure here costs this call only, never the daemon.
+ */
+private fun handleOffReportTransact(code: Int, data: Parcel, reply: Parcel?): Boolean {
+    runCatching {
+        when (code) {
+            HelperBinderProtocol.TX_OFFREPORT_ARM -> {
+                val request = readOffReportArm(data)
+                if (request != null) OffReport.arm(request)
+                reply?.writeInt(if (request != null) 0 else -1)
+            }
+            HelperBinderProtocol.TX_OFFREPORT_DISARM -> {
+                // Non-zero while a pending file survived the delete: the app keeps asking.
+                reply?.writeInt(if (OffReport.disarm()) 0 else 1)
+            }
+            else -> {
+                val status = OffReport.status(data.readString().orEmpty())
+                reply?.writeInt(0)
+                reply?.let { writeOffReportStatus(it, status) }
+            }
+        }
+    }.onFailure { e ->
+        // The class name only: a message could carry what the request held.
+        android.util.Log.w("OffReport", "offreport: tx=$code failed: ${e.javaClass.simpleName}")
+        reply?.setDataSize(0)
+        reply?.writeInt(-1)
     }
     return true
 }

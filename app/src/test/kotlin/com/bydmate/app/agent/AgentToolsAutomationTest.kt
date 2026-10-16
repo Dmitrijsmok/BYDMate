@@ -19,6 +19,7 @@ import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.domain.battery.BatteryStateRepository
 import com.bydmate.app.domain.calculator.RangeCalculator
 import com.bydmate.app.voice.VoiceGate
+import com.bydmate.app.voice.VoiceUserPhrases
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -38,7 +39,7 @@ class AgentToolsAutomationTest {
     private val tripDao = mockk<TripDao>()
     private val chargeDao = mockk<ChargeDao>()
     private val dispatcher = mockk<ActionDispatcher>()
-    private val ruleDao = mockk<RuleDao>()
+    private val ruleDao = mockk<RuleDao> { coEvery { getCount() } returns 0 }
     private val engine = mockk<AutomationEngine>()
     private val places = mockk<PlaceRepository>()
     private val weather = mockk<WeatherClient>()
@@ -406,7 +407,7 @@ class AgentToolsAutomationTest {
         val out = JSONObject(tools().execute(call("create_automation", createArgs(
             actions = """[{"kind":"delay"}]"""))))
 
-        assertEquals("не указана длительность паузы (мс, 0..30000)", out.getString("error"))
+        assertEquals("не указана длительность паузы (мс, 0..60000)", out.getString("error"))
         coVerify(exactly = 0) { ruleDao.insert(any()) }
     }
 
@@ -463,11 +464,13 @@ class AgentToolsAutomationTest {
         assertTrue(out.has("error"))
     }
 
-    @Test fun `voice trigger colliding with builtin command is rejected`() = runTest {
+    // Automations resolve before built-in commands, so a built-in phrase is taken over, not refused.
+    @Test fun `voice trigger with a builtin command phrase is accepted`() = runTest {
         coEvery { ruleDao.getAllList() } returns emptyList()
+        coEvery { ruleDao.insert(any()) } returns 1L
         val out = JSONObject(tools().execute(call("create_automation",
             createArgs(trigger = """{"kind":"voice","phrase":"открой окна"}"""))))
-        assertTrue(out.getString("error").contains("встроенн"))
+        assertTrue(out.toString(), out.getBoolean("ok"))
     }
 
     @Test fun `voice trigger taken by another rule is rejected`() = runTest {
@@ -478,6 +481,22 @@ class AgentToolsAutomationTest {
         val out = JSONObject(tools().execute(call("create_automation",
             createArgs(trigger = """{"kind":"voice","phrase":"Тёплый приём!"}"""))))
         assertTrue(out.getString("error").contains("уже использ"))
+    }
+
+    @Test fun `voice trigger taken by a user phrase of a built-in command is rejected`() = runTest {
+        coEvery { ruleDao.getAllList() } returns emptyList()
+        coEvery { ruleDao.insert(any()) } returns 1L
+        val phrases = VoiceUserPhrases().apply { add("windows_close_all", "задраить трюм") }
+        val command = VoiceUserPhrases.COMMANDS.first { it.id == "windows_close_all" }.name
+        val tools = tools().apply { injectUserPhrases(phrases) }
+
+        val out = JSONObject(tools.execute(call("create_automation",
+            createArgs(trigger = """{"kind":"voice","phrase":"Задраить трюм!"}"""))))
+
+        assertFalse(out.toString(), out.optBoolean("ok"))
+        assertTrue(out.toString(), out.getString("error").contains("уже используется"))
+        assertTrue(out.toString(), out.getString("error").contains(command))
+        coVerify(exactly = 0) { ruleDao.insert(any()) }
     }
 
     @Test fun `create with button press trigger saves button number`() = runTest {

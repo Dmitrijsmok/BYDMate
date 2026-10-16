@@ -71,9 +71,9 @@ import android.os.IBinder
  * status/value carry the raw autoservice transact result (see HelperDaemon).
  */
 object HelperBinderProtocol {
-    const val SERVICE_NAME = "bydmate_helper"
-    const val PROCESS_NAME = "bydmate_helper"   // app_process --nice-name + ps lookup
-    const val DESCRIPTOR = "com.bydmate.app.helper.IHelper"
+    const val SERVICE_NAME = "bydm_d3_helper"
+    const val PROCESS_NAME = "bydm_d3_helper"   // app_process --nice-name + ps lookup
+    const val DESCRIPTOR = "com.bydmate.dilink3.app.helper.IHelper"
 
     /**
      * Broadcast delivery of the daemon's IBinder — the H2 fallback for firmwares where
@@ -86,7 +86,7 @@ object HelperBinderProtocol {
      * THIS spawn, the binder's interface descriptor, and — afterwards — the version the daemon
      * reports over TX_GET_VERSION.
      */
-    const val ACTION_BINDER = "com.bydmate.app.helper.BINDER"
+    const val ACTION_BINDER = "com.bydmate.dilink3.app.helper.BINDER"
     const val RECEIVER_CLASS = "com.bydmate.app.helper.HelperBinderReceiver"
 
     /** Extras of [ACTION_BINDER]: one Bundle (a Binder cannot be an Intent extra directly). */
@@ -447,6 +447,37 @@ object HelperBinderProtocol {
      */
     val TX_GET_GLOBAL_SETTING: Int = IBinder.FIRST_CALL_TRANSACTION + 51  // 52
 
+    /**
+     * Arms the power-off Telegram report (3.19): the daemon keeps it and sends it itself when its
+     * own listener on the power fids sees the car switched off (see helper/offreport). A repeated
+     * call replaces the report. The handler only stores it and answers: the listener registration
+     * (retried every 30 s while a fid is missing) and the priming reads run on the daemon's worker.
+     * An arm also lets the daemon deliver the reports still pending from earlier power-offs.
+     *
+     * Request: [String id, String token, long chatId, String text with `{{time}}`,
+     *   String lateMark with `{{time}}` (the «(записано в HH:MM)» line of a pending delivery)]
+     * Reply:   [int status (0 = armed, -1 = refused / failed)]
+     * An old daemon without this handler makes transact return false → the client returns false,
+     * and the app, finding the daemon alive, logs it as outdated.
+     */
+    val TX_OFFREPORT_ARM: Int = IBinder.FIRST_CALL_TRANSACTION + 52  // 53
+
+    /**
+     * Drops the armed report and every pending one (the report was switched off or the bot
+     * disconnected). (no args) -> [int status (0 = ok, the pending files are gone; 1 = a file could
+     * not be deleted, ask again)]. Outcomes already kept stay.
+     */
+    val TX_OFFREPORT_DISARM: Int = IBinder.FIRST_CALL_TRANSACTION + 53  // 54
+
+    /**
+     * Where one report id stands (unknown / armed / sending / sent / failed, with the power-off
+     * time), plus what is armed now, the last delivery outcome whatever its id, each power fid's
+     * registration state and how many reports wait on disk — for the app's dump.
+     *
+     * Request: [String id] -> Reply: [int status (0 = ok), OffReportStatus (see OffReportWire)]
+     */
+    val TX_OFFREPORT_STATUS: Int = IBinder.FIRST_CALL_TRANSACTION + 54  // 55
+
     /** Status codes of the TX_SPLIT37_* verbs. Distinct from the (status, value) autoservice
      *  convention: 2 says the firmware has no native split surface at all (methods absent on the
      *  IActivityTaskManager proxy), which is a verdict, unlike 1 = the call threw. The split is
@@ -483,7 +514,7 @@ object HelperBinderProtocol {
     const val PANE_TYPE_RECENTS = 3
 
     /** Our own package — target of the narrow grantOverlayPermission appops call. */
-    const val APP_PACKAGE = "com.bydmate.app"
+    const val APP_PACKAGE = "com.bydmate.dilink3.app"
 
     /**
      * Flattened ComponentName of our steering-wheel accessibility service — appended
@@ -491,7 +522,7 @@ object HelperBinderProtocol {
      * by the narrow enableAccessibilityService daemon op, since DiLink has no a11y settings UI.
      */
     const val ACCESSIBILITY_SERVICE_COMPONENT =
-        "com.bydmate.app/com.bydmate.app.cluster.SteeringWheelKeyService"
+        "com.bydmate.dilink3.app/com.bydmate.app.cluster.SteeringWheelKeyService"
 
     /**
      * Flattened ComponentName of our notification-listener stub — granted by the narrow
@@ -501,5 +532,5 @@ object HelperBinderProtocol {
      * Grants MediaSessionManager.getActiveSessions() access to our process for Yandex Music.
      */
     const val NOTIFICATION_LISTENER_COMPONENT =
-        "com.bydmate.app/com.bydmate.app.media.MediaSessionListenerService"
+        "com.bydmate.dilink3.app/com.bydmate.app.media.MediaSessionListenerService"
 }

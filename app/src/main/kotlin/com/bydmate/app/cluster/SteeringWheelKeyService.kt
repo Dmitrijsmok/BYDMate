@@ -5,10 +5,16 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
+import com.bydmate.app.data.autoservice.AdbRestorePreferencesImpl
+import com.bydmate.app.data.autoservice.WifiDebuggingDialogAutoAllow
 import com.bydmate.app.media.KnobPlayPause
+import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.navdata.NavA11yFeed
 import com.bydmate.app.service.TrackingService
 import dagger.hilt.android.EntryPointAccessors
@@ -28,9 +34,38 @@ import kotlinx.coroutines.flow.MutableStateFlow
  * no Accessibility UI on DiLink) AND the settings switch is on, so it does nothing for users who
  * never opt in.
  */
+internal enum class VoicePressRoute { NONE, LOCAL, ALICE }
+
+internal data class VoicePressMemory(
+    val keyCode: Int,
+    val downMs: Long,
+)
+
+internal fun voicePressRoute(
+    repeatCount: Int,
+    aliceContextActive: Boolean,
+    keyCode: Int,
+    previous: VoicePressMemory,
+    nowMs: Long,
+): VoicePressRoute = when {
+    repeatCount != 0 -> VoicePressRoute.NONE
+    aliceContextActive -> VoicePressRoute.ALICE
+    keyCode == previous.keyCode && isVoiceDoublePress(previous.downMs, nowMs) ->
+        VoicePressRoute.ALICE
+    else -> VoicePressRoute.LOCAL
+}
+
+@Suppress("TooManyFunctions") // Voice scheduling belongs to the key-event lifecycle; keep it cohesive.
 class SteeringWheelKeyService : AccessibilityService() {
 
     private var cachedEntryPoint: ClusterEntryPoint? = null
+    private var lastLocalVoiceDownMs = 0L
+    private var lastLocalVoiceKeyCode = -1
+    private val voiceHandler = Handler(Looper.getMainLooper())
+    private var pendingLocalVoice: Runnable? = null
+    private val voicePresses = VoiceButtonPresses()
+    private val learningDown = mutableSetOf<Pair<Int, Int>>()
+    private val aliceLauncher by lazy { YandexAliceLauncher(this) { entryPoint().voiceController() } }
     private val prefs: SharedPreferences by lazy {
         applicationContext.getSharedPreferences(ClusterProjectionManager.PREFS_NAME, Context.MODE_PRIVATE)
     }
@@ -67,6 +102,12 @@ class SteeringWheelKeyService : AccessibilityService() {
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
         val isDown = event.action == KeyEvent.ACTION_DOWN
+        val identity = event.keyCode to event.deviceId
+        if (!learnVoiceCompanions && identity in learningDown) {
+            if (event.action == KeyEvent.ACTION_UP) learningDown.remove(identity)
+            return true
+        }
+        if (learnVoiceCompanions) learnVoiceKey(event)?.let { return it }
         if (learnMode) {
             return when (learnDecision(event.keyCode, isDown)) {
                 LearnAction.CAPTURE -> {
@@ -81,21 +122,7 @@ class SteeringWheelKeyService : AccessibilityService() {
                 LearnAction.CONSUME -> true
             }
         }
-        // Voice check: runs after learn-mode, before star decision. Returns true only when voice is
-        // enabled and the configured voice key is pressed (isDown). Non-voice keys fall through.
-        val voicePrefs = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
-        val voiceEnabled = voicePrefs.getBoolean("voice_enabled", false)
-        val voiceKey = voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)
-        when (voiceDecision(event.keyCode, isDown, voiceEnabled, voiceKey)) {
-            VoiceKeyDecision.TRIGGER -> {
-                entryPoint().voiceController().onPttPressed()
-                return true
-            }
-            // Swallow the matching key's UP edge too — otherwise it falls through to the
-            // native BYD assistant, which owns the same hardware keycode (Finding 2).
-            VoiceKeyDecision.CONSUME -> return true
-            VoiceKeyDecision.IGNORE -> {}
-        }
+        handleVoiceKey(event, isDown)?.let { return it }
         // Volume-knob press: runs before the star decision, own switch, default off. The key is
         // consumed whenever the feature is on — even when no MediaSession answers — because the
         // alternative is the firmware's source switch, which is exactly what the user turned this
@@ -135,6 +162,174 @@ class SteeringWheelKeyService : AccessibilityService() {
         }
     }
 
+    private fun learnVoiceKey(event: KeyEvent): Boolean? {
+        val isDown = event.action == KeyEvent.ACTION_DOWN
+        val capture = capturedKey.value?.takeIf { it.assignable && it.deviceId == event.deviceId }
+        val identity = event.keyCode to event.deviceId
+        if (event.action == KeyEvent.ACTION_UP && learningDown.remove(identity)) {
+            if (capture?.keyCode == event.keyCode) {
+                capturedKey.value = capture.copy(atMs = event.eventTime, primaryReleased = true)
+            }
+            return true
+        }
+        if (capture != null && (event.keyCode == capture.keyCode || event.keyCode in capture.companions)) {
+            if (isDown) {
+                learningDown.add(identity)
+                refreshLearnedPrimary(event, capture)
+            }
+            return true
+        }
+        if (capture != null && event.repeatCount == 0 &&
+            isLearnCompanion(event.keyCode, isDown, capture.keyCode, capture.atMs, event.eventTime)
+        ) {
+            learningDown.add(identity)
+            capturedKey.value = capture.copy(companions = capture.companions + event.keyCode)
+            return true
+        }
+        if (!learnMode) return null
+        cancelPendingLocalVoice()
+        lastLocalVoiceDownMs = 0L
+        lastLocalVoiceKeyCode = -1
+        aliceLauncher.localHandoff.cancel()
+        captureVoicePrimary(event)
+        return true
+    }
+
+    private fun refreshLearnedPrimary(event: KeyEvent, capture: CaptureResult) {
+        if (event.keyCode == capture.keyCode && event.repeatCount == 0) {
+            capturedKey.value = capture.copy(atMs = event.eventTime, primaryReleased = false)
+        }
+    }
+
+    private fun captureVoicePrimary(event: KeyEvent) {
+        if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount != 0) return
+        learningDown.add(event.keyCode to event.deviceId)
+        val assignable = isVoiceAssignable(event.keyCode)
+        capturedKey.value = CaptureResult(event.keyCode, assignable, deviceId = event.deviceId, atMs = event.eventTime)
+        if (assignable) learnMode = false
+    }
+
+    private fun handleVoiceKey(event: KeyEvent, isDown: Boolean): Boolean? {
+        val voicePrefs = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+        val voiceEnabled = voicePrefs.getBoolean("voice_enabled", false)
+        val local = voicePrefs.localVoiceBinding()
+        val alice = voicePrefs.aliceVoiceBinding()
+        val nativeTakeover = voicePrefs.getBoolean("alice_native_takeover", false)
+        val explicitlyLearned = event.keyCode in alice.codes ||
+            (voicePrefs.contains(SettingsRepository.KEY_VOICE_COMPANIONS) && event.keyCode in local.codes)
+        val legacyMicEvent = android.os.Build.VERSION.SDK_INT <= 29 && event.keyCode in setOf(304, 327)
+        if (legacyMicEvent && !nativeTakeover && !explicitlyLearned) return null // Preserve the existing Android 10 takeover opt-in for unlearned keys.
+        if (!voiceEnabled) return null
+        // An old 327 preference never overrode the 304/327 takeover fallback. Preserve that route.
+        val legacyOnly = !voicePrefs.contains(SettingsRepository.KEY_VOICE_COMPANIONS) && alice.primary == 0
+        if (legacyMicEvent && legacyOnly) {
+            return handleAssignedVoice(diLink3VoiceDecision(event.keyCode, isDown, true), event, false, false)
+        }
+
+        val target = assignedVoiceTarget(event.keyCode, local, alice)
+        if (target == VoiceButtonTarget.COMPANION) return true
+        if (target == VoiceButtonTarget.UNASSIGNED) {
+            return handleFallbackVoice(event, isDown, local, alice, nativeTakeover)
+        }
+        return handleAssignedVoice(
+            if (isDown) VoiceKeyDecision.TRIGGER else VoiceKeyDecision.CONSUME,
+            event, alice.primary > 0, target == VoiceButtonTarget.ALICE,
+        )
+    }
+
+    private fun handleFallbackVoice(
+        event: KeyEvent,
+        isDown: Boolean,
+        local: VoiceButtonBinding,
+        alice: VoiceButtonBinding,
+        nativeTakeover: Boolean,
+    ): Boolean? {
+        if (!useLegacyVoiceFallback(android.os.Build.VERSION.SDK_INT, nativeTakeover, local, alice)) return null
+        // An explicitly learned 327 primary must not also launch Local on its 304 companion.
+        val decision = if (event.keyCode == 304 && (327 in local.codes || 327 in alice.codes))
+            VoiceKeyDecision.CONSUME else diLink3VoiceDecision(event.keyCode, isDown, true)
+        return handleAssignedVoice(decision, event, alice.primary > 0, false)
+    }
+
+    private fun handleAssignedVoice(
+        decision: VoiceKeyDecision,
+        event: KeyEvent,
+        dedicated: Boolean,
+        alice: Boolean,
+    ): Boolean? {
+        if (decision == VoiceKeyDecision.IGNORE) return null
+        if (event.action == KeyEvent.ACTION_UP) voicePresses.release(event.keyCode, event.deviceId)
+        if (decision != VoiceKeyDecision.TRIGGER ||
+            !voicePresses.firstDown(event.keyCode, event.deviceId, event.downTime, event.repeatCount)
+        ) return true
+        if (!dedicated) return handleVoiceDecision(decision, event)
+        cancelPendingLocalVoice()
+        lastLocalVoiceDownMs = 0L
+        lastLocalVoiceKeyCode = -1
+        if (alice) aliceLauncher.trigger()
+        else aliceLauncher.localHandoff.requestLocal {
+            val current = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+            if (!learnMode && !learnVoiceCompanions && current.getBoolean("voice_enabled", false)) {
+                entryPoint().voiceController().onPttPressed()
+            }
+        }
+        return true
+    }
+
+    private fun handleVoiceDecision(
+        decision: VoiceKeyDecision,
+        event: KeyEvent,
+    ): Boolean? = when (decision) {
+        VoiceKeyDecision.TRIGGER -> {
+            val now = SystemClock.elapsedRealtime()
+            when (
+                voicePressRoute(
+                    repeatCount = event.repeatCount,
+                    aliceContextActive = aliceLauncher.ownsMicButton(),
+                    keyCode = event.keyCode,
+                    previous = VoicePressMemory(lastLocalVoiceKeyCode, lastLocalVoiceDownMs),
+                    nowMs = now,
+                )
+            ) {
+                VoicePressRoute.ALICE -> {
+                    cancelPendingLocalVoice()
+                    lastLocalVoiceDownMs = 0L
+                    lastLocalVoiceKeyCode = -1
+                    // Local has not started yet inside the 250 ms arbitration window.
+                    aliceLauncher.trigger()
+                }
+                VoicePressRoute.LOCAL -> {
+                    lastLocalVoiceDownMs = now
+                    lastLocalVoiceKeyCode = event.keyCode
+                    scheduleLocalVoice(event.keyCode, now)
+                }
+                VoicePressRoute.NONE -> Unit
+            }
+            true
+        }
+        VoiceKeyDecision.CONSUME -> true
+        VoiceKeyDecision.IGNORE -> null
+    }
+
+    private fun scheduleLocalVoice(keyCode: Int, downMs: Long) {
+        if (pendingLocalVoice != null) return
+        val task = Runnable {
+            pendingLocalVoice = null
+            if (lastLocalVoiceKeyCode == keyCode && lastLocalVoiceDownMs == downMs) {
+                lastLocalVoiceDownMs = 0L
+                lastLocalVoiceKeyCode = -1
+                entryPoint().voiceController().onPttPressed()
+            }
+        }
+        pendingLocalVoice = task
+        voiceHandler.postDelayed(task, VOICE_DOUBLE_PRESS_WINDOW_MS)
+    }
+
+    private fun cancelPendingLocalVoice() {
+        pendingLocalVoice?.let(voiceHandler::removeCallbacks)
+        pendingLocalVoice = null
+    }
+
     private fun entryPoint(): ClusterEntryPoint =
         cachedEntryPoint ?: EntryPointAccessors
             .fromApplication(applicationContext, ClusterEntryPoint::class.java)
@@ -166,6 +361,19 @@ class SteeringWheelKeyService : AccessibilityService() {
     // Single volatile read when the HUD feature is off - see NavA11yFeed.enabled.
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         NavA11yFeed.onEvent(this, event)
+        if (event != null) {
+            val eventPkg = event.packageName?.toString().orEmpty()
+            val nativeTakeover = applicationContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                .getBoolean("alice_native_takeover", false)
+            if (nativeTakeover &&
+                event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+                eventPkg == "com.byd.vrassistant"
+            ) {
+                val closed = performGlobalAction(GLOBAL_ACTION_BACK)
+                Log.w(TAG, "ALICE4_5_VRASSISTANT_WINDOW_BLOCKED back=$closed")
+            }
+        }
+        aliceLauncher.onAccessibilityEvent(event)
         // Whoever just took the MAIN screen, reported the moment it happens: the blind-spot
         // window has to be gone before the native 360 view is drawn, and the UsageStats poll is
         // half a second behind. Events from the cluster are dropped by the filter, and the poll
@@ -175,12 +383,23 @@ class SteeringWheelKeyService : AccessibilityService() {
             if (pkg != null && ForegroundHintFilter.allows(this, event, pkg)) {
                 entryPoint().cameraStateMonitor().onForegroundHint(pkg)
             }
+            // Preserve upstream 3.19 Android 10 ADB restore handling.
+            if (WifiDebuggingDialogAutoAllow.isDialog(event.packageName, event.className)) {
+                WifiDebuggingDialogAutoAllow.onDialogShown(
+                    this, applicationContext, event, AdbRestorePreferencesImpl(applicationContext).isEnabled())
+            }
         }
     }
 
     override fun onInterrupt() { /* no-op */ }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        cancelPendingLocalVoice()
+        aliceLauncher.localHandoff.cancel()
+        voicePresses.clear()
+        learningDown.clear()
+        lastLocalVoiceDownMs = 0L
+        lastLocalVoiceKeyCode = -1
         instance = null
         isConnected = false
         Log.d(TAG, "unbound; star key filter inactive")
@@ -188,6 +407,9 @@ class SteeringWheelKeyService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        cancelPendingLocalVoice()
+        voiceHandler.removeCallbacksAndMessages(null)
+        aliceLauncher.destroy()
         instance = null
         isConnected = false
         super.onDestroy()
@@ -221,7 +443,17 @@ class SteeringWheelKeyService : AccessibilityService() {
         var learnMode: Boolean = false
 
         /** Result of a learn-mode key press; the settings dialog (same process) collects this. */
-        data class CaptureResult(val keyCode: Int, val assignable: Boolean)
+        data class CaptureResult(
+            val keyCode: Int,
+            val assignable: Boolean,
+            val companions: Set<Int> = emptySet(),
+            val deviceId: Int = 0,
+            val atMs: Long = 0,
+            val primaryReleased: Boolean = false,
+        )
+
+        @Volatile
+        var learnVoiceCompanions: Boolean = false
 
         /** Last captured key while learning; null = nothing captured yet. */
         val capturedKey = MutableStateFlow<CaptureResult?>(null)

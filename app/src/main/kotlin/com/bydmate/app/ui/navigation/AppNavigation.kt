@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -17,6 +18,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -28,8 +30,10 @@ import androidx.compose.material.icons.outlined.DirectionsCar
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -56,6 +60,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.service.UpdateChecker
 import com.bydmate.app.ui.charges.ChargesScreen
@@ -70,6 +75,13 @@ import com.bydmate.app.ui.settings.UpdateState
 import com.bydmate.app.ui.theme.*
 import com.bydmate.app.ui.trips.TripsScreen
 import com.bydmate.app.ui.welcome.WelcomeScreen
+
+// M3 NavigationBar only sets a default minimum of 80 dp, so an explicit height lowers it; each
+// item centres its 32 dp indicator and label in that height, keeping at least 4 dp above and below.
+private val NavBarHeight = 64.dp
+
+// Indicator (24 dp icon + 2 x 4 dp), 4 dp to the label, 2 x 4 dp minimum item padding.
+private val NavBarItemChrome = 40.dp
 
 enum class Screen(val route: String, val labelRes: Int, val icon: ImageVector) {
     Dashboard("dashboard", R.string.nav_tab_dashboard, Icons.Outlined.Home),
@@ -193,12 +205,20 @@ fun AppNavigation(
     }
 
     val isWelcome = currentDestination?.route == "welcome"
+    // Grows past NavBarHeight only once a large text size makes the label too tall for it.
+    // The bar pads itself by its bottom window inset inside this height, so the inset is added on top.
+    val density = LocalDensity.current
+    val navBarHeight = maxOf(
+        NavBarHeight,
+        with(density) { MaterialTheme.typography.labelMedium.lineHeight.toDp() } + NavBarItemChrome,
+    ) + with(density) { NavigationBarDefaults.windowInsets.getBottom(density).toDp() }
 
     Scaffold(
         containerColor = NavyDark,
         bottomBar = {
             if (!isWelcome) {
                 NavigationBar(
+                    modifier = Modifier.height(navBarHeight),
                     containerColor = NavBarBackground
                 ) {
                     Screen.entries.forEach { screen ->
@@ -209,7 +229,13 @@ fun AppNavigation(
                                     contentDescription = stringResource(screen.labelRes)
                                 )
                             },
-                            label = { Text(stringResource(screen.labelRes)) },
+                            label = {
+                                Text(
+                                    stringResource(screen.labelRes),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
                             selected = currentDestination?.hierarchy?.any { it.route == screen.route } == true,
                             onClick = {
                                 navController.navigate(screen.route) {
@@ -248,7 +274,19 @@ fun AppNavigation(
                 )
             }
             composable(Screen.Dashboard.route) {
-                DashboardScreen(onOpenTechPanel = { navController.navigate("tech_panel") })
+                DashboardScreen(
+                    onOpenTechPanel = { navController.navigate("tech_panel") },
+                    // Same tab switch as the bottom bar's Settings item.
+                    onOpenSettings = {
+                        navController.navigate(Screen.Settings.route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
+                )
             }
             composable(Screen.Trips.route) {
                 TripsScreen(onOpenTemperature = { navController.navigate("trip_temperature") })
@@ -261,6 +299,7 @@ fun AppNavigation(
                 SettingsScreen(
                     onNavigateToAgentChat = { navController.navigate("agent_chat") },
                     onNavigateToVoiceJournal = { navController.navigate("voice_journal") },
+                    onNavigateToVoiceUserPhrases = { navController.navigate("voice_user_phrases") },
                     onNavigateToTariffPeriods = { navController.navigate("tariff_periods") },
                 )
             }
@@ -285,6 +324,9 @@ fun AppNavigation(
             composable("voice_journal") {
                 com.bydmate.app.ui.debug.VoiceJournalScreen(onBack = { navController.popBackStack() })
             }
+            composable("voice_user_phrases") {
+                com.bydmate.app.ui.settings.VoiceUserPhrasesScreen(onBack = { navController.popBackStack() })
+            }
         }
     }
 }
@@ -296,41 +338,43 @@ private fun PostInstallReminderDialog(version: String, onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) { onDismiss() },
-            contentAlignment = Alignment.Center
-        ) {
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = CardSurface),
+        ScaledDialogContent {
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth(0.55f)
-                    .clickable { /* absorb */ }
+                    .fillMaxSize()
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { onDismiss() },
+                contentAlignment = Alignment.Center
             ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = CardSurface),
+                    modifier = Modifier
+                        .fillMaxWidth(0.55f)
+                        .clickable { /* absorb */ }
                 ) {
-                    Text(stringResource(R.string.nav_autostart_dialog_title, version), color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                    Text(
-                        stringResource(R.string.nav_autostart_dialog_body),
-                        color = TextSecondary, fontSize = 14.sp
-                    )
-                    Button(
-                        onClick = {
-                            com.bydmate.app.util.AutostartScreen.open(context)
-                            onDismiss()
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentGreen)
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text(stringResource(R.string.nav_autostart_dialog_button), color = Color.Black, fontWeight = FontWeight.Bold)
+                        Text(stringResource(R.string.nav_autostart_dialog_title, version), color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            stringResource(R.string.nav_autostart_dialog_body),
+                            color = TextSecondary, fontSize = 14.sp
+                        )
+                        Button(
+                            onClick = {
+                                com.bydmate.app.util.AutostartScreen.open(context)
+                                onDismiss()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentGreen)
+                        ) {
+                            Text(stringResource(R.string.nav_autostart_dialog_button), color = Color.Black, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }

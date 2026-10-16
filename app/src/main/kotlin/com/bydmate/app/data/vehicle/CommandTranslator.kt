@@ -27,12 +27,12 @@ data class SeatCommand(val group: SeatGroup, val level: Int)
  * BYDAutoSettingDevice. dev=1023/1004 are carved out per-fid in WriteAllowlist.
  * All four groups validated on Leopard 3 2026-05-29 (write+readback snap).
  *
- * DROPPED: commands whose action_name either has no allowlist entry or targets
- * a banned dev namespace —
- *   ECO模式                                — drive mode write targets dev=1006 (BANNED).
- *                                            Default rule "Эко при низком заряде" is
- *                                            shipped disabled; if user enables it the
- *                                            dispatch fails-soft via AllowlistMiss.
+ * Drive modes (ECO模式 = the old D+ string, 普通模式, 运动模式, 雪地模式 …) write the
+ * dev=1023 SETTING_PRESELECTED_DRIVING_MODE_SET carve-out, not the banned dev=1006 energy
+ * fid (accepted and ignored on Leopard 3). VehicleApiImpl routes them through
+ * DriveModeChannel (support flag, flotation refusal, target readback); the >15 km/h gate
+ * for terrain modes lives in ActionDispatcher. The starter rule «Эко при низком заряде»
+ * ships again with ECO模式 (#253).
  *
  * Values for competitor-sourced entries verified against competitor-actions.json
  * (app/src/main/assets/competitor-actions.json). See value comments below.
@@ -118,7 +118,7 @@ object CommandTranslator {
 
         // ── Sunroof ── LIVE_VALIDATED ─────────────────────────────────────────
         "天窗打开100" to Resolved("sunroof_open",  1),  // full open
-        "天窗打开50"  to Resolved("sunroof_tilt",  3),  // tilt/half — LIVE val=3
+        "天窗打开50"  to Resolved("sunroof_tilt",  3),  // half-open slide — LIVE val=3 (not a tilt, 2026-07-30; tilt is 天窗通风 = 5)
         "天窗打开0"   to Resolved("sunroof_close", 2),
 
         // ── Sunroof extra positions ── allowlist sunroof_stop/updip/comfort vals 4/5/6
@@ -150,6 +150,25 @@ object CommandTranslator {
         // ── Mirror heat = rear-window defrost ── LIVE_VALIDATED (dev=1000) ────
         "后视镜加热"   to Resolved("defrost_rear_on",  1),
         "关闭后视镜加热" to Resolved("defrost_rear_off", 0),
+
+        // ── Steering wheel heat ── CANDIDATE (dev=1023 carve-out, 2=on / 1=off) ──
+        // VehicleApiImpl routes both through SteeringHeatChannel (state readback +
+        // dev=1000 fallback) instead of a bare write.
+        "方向盘加热"   to Resolved("steering_heat_on",  2),
+        "关闭方向盘加热" to Resolved("steering_heat_off", 1),
+
+        // ── Drive mode ── dev=1023 carve-out, value = SETTING_PRESELECTED_DRIVING_MODE_SET ──
+        // Names follow BYD's voice assistant (切换<name>成功); ECO模式 is the D+ string older
+        // installs still carry in their rules.
+        "ECO模式"  to Resolved("drive_mode_eco",      2),
+        "普通模式" to Resolved("drive_mode_normal",   1),
+        "运动模式" to Resolved("drive_mode_sport",    3),
+        "雪地模式" to Resolved("drive_mode_snow",     4),
+        "沙地模式" to Resolved("drive_mode_sand",     5),
+        "泥地模式" to Resolved("drive_mode_mud",      6),
+        "山地模式" to Resolved("drive_mode_mountain", 7),
+        "岩石模式" to Resolved("drive_mode_rock",     8),
+        "智能模式" to Resolved("drive_mode_smart",    21),
     )
 
     /** Fridge temperature presets fan out to [fridge_mode, fridge_temp_*]. Cooling raw

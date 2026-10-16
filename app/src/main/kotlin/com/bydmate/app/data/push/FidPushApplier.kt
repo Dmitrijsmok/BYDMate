@@ -101,6 +101,7 @@ object FidPushApplier {
         "gear" to { d, v -> d.copy(gear = v) },
         "powerState" to { d, v -> d.copy(powerState = v) },
         "workMode" to { d, v -> d.copy(workMode = v) },
+        "driveModeTarget" to { d, v -> d.copy(driveModeTarget = v) },
         // Climate
         "acStatus" to { d, v -> d.copy(acStatus = v) },
         "acTemp" to { d, v -> d.copy(acTemp = v) },
@@ -141,6 +142,12 @@ object FidPushApplier {
         // Cabin sensors
         "seatbeltFL" to { d, v -> d.copy(seatbeltFL = v) },
         "seatbeltFR" to { d, v -> d.copy(seatbeltFR = v) },
+        "seatbeltRL" to { d, v -> d.copy(seatbeltRL = v) },
+        "seatbeltRM" to { d, v -> d.copy(seatbeltRM = v) },
+        "seatbeltRR" to { d, v -> d.copy(seatbeltRR = v) },
+        "rearBeltSettingRL" to { d, v -> d.copy(rearBeltSettingRL = v) },
+        "rearBeltSettingRM" to { d, v -> d.copy(rearBeltSettingRM = v) },
+        "rearBeltSettingRR" to { d, v -> d.copy(rearBeltSettingRR = v) },
         "occupancyFL" to { d, v -> d.copy(occupancyFL = v) },
         "occupancyFR" to { d, v -> d.copy(occupancyFR = v) },
         "occupancyRL" to { d, v -> d.copy(occupancyRL = v) },
@@ -191,6 +198,7 @@ object FidPushApplier {
             d.copy(hvCurrent = v, batteryPowerW = FieldGuards.batteryPowerW(d.hvVoltage, v))
         },
         "bmsMaxChargeKw" to { d, v -> d.copy(bmsMaxChargeKw = v) },
+        "bmsMaxDischargeAllowKw" to { d, v -> d.copy(bmsMaxDischargeAllowKw = v) },
         "motorCurrentFront" to { d, v -> d.copy(motorCurrentFront = v.toFloat()) },
         "motorCurrentRear" to { d, v -> d.copy(motorCurrentRear = v.toFloat()) },
     )

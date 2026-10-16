@@ -62,7 +62,10 @@ class AutomationEngineEdgeTest {
         lastTriggeredAt = lastTriggeredAt,
     )
 
-    private fun setup(rulesProvider: () -> List<RuleEntity>): Pair<AutomationEngine, RuleDao> {
+    private fun setup(
+        context: Context = ApplicationProvider.getApplicationContext(),
+        rulesProvider: () -> List<RuleEntity>,
+    ): Pair<AutomationEngine, RuleDao> {
         val ruleDao = mockk<RuleDao>(relaxed = true) {
             coEvery { getEnabled() } answers { rulesProvider() }
         }
@@ -75,8 +78,10 @@ class AutomationEngineEdgeTest {
                 every { lastAvailableAt } returns 0L
                 every { probePending } returns false
             },
-            context = ApplicationProvider.getApplicationContext<Context>(),
+            context = context,
+            appStrings = com.bydmate.app.util.AppStrings(ApplicationProvider.getApplicationContext()),
         )
+        engine.interactiveProvider = { true }  // screen on unless a test says otherwise
         return engine to ruleDao
     }
 
@@ -187,6 +192,7 @@ class AutomationEngineEdgeTest {
                     every { probePending } returns false
                 },
                 context = ApplicationProvider.getApplicationContext<Context>(),
+                appStrings = com.bydmate.app.util.AppStrings(ApplicationProvider.getApplicationContext()),
             )
             engine.evaluate(diParsData(exteriorTemp = 10), null)
             engine.evaluate(diParsData(exteriorTemp = 25), null)

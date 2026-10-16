@@ -50,6 +50,38 @@ class FidMapTest {
         assertTrue("Missing FidMap entries: ${required - mapped}", mapped.containsAll(required))
     }
 
+    // Audit 3.19 items 10, 11: the passenger belt reads the Instrument fid (Setting 1004 answered
+    // a constant), the rear belts sit next to it; the Setting rear fids ride along for the probe.
+    @Test fun `belt fids read the Instrument belt states`() {
+        val expected = mapOf(
+            "seatbeltFR" to 638582811, "seatbeltRL" to 638582812,
+            "seatbeltRM" to 638582813, "seatbeltRR" to 638582814,
+        )
+        for ((field, fid) in expected) {
+            val entry = FidMap.entries.single { it.field == field }
+            assertEquals(field, 1007, entry.device)
+            assertEquals(field, fid, entry.fid)
+        }
+        val probe = FidMap.entries.filter { it.field.startsWith("rearBeltSetting") }
+            .associate { it.field to (it.device to it.fid) }
+        assertEquals(
+            mapOf(
+                "rearBeltSettingRL" to (1023 to 824180746),
+                "rearBeltSettingRM" to (1023 to 824180750),
+                "rearBeltSettingRR" to (1023 to 824180748),
+            ),
+            probe,
+        )
+    }
+
+    // Audit 3.19 item 4: dev 1006 reads 3 on normal and on every terrain mode.
+    @Test fun `the target drive mode fid is mapped`() {
+        val entry = FidMap.entries.single { it.field == "driveModeTarget" }
+        assertEquals(1023, entry.device)
+        assertEquals(255852712, entry.fid)
+        assertEquals("Setting.SETTING_TARGET_DRIVING_MODE", entry.symbol)
+    }
+
     @Test fun `front trunk position fid is mapped for the toggle action`() {
         val entry = FidMap.entries.single { it.field == "frontTrunk" }
         assertEquals(1001, entry.device)
@@ -96,7 +128,7 @@ class FidMapTest {
         val required = setOf(
             "insulationKohm", "motorTempFront", "motorTempRear",
             "inverterTempFront", "inverterTempRear", "hvVoltage", "hvCurrent",
-            "motorCurrentFront", "motorCurrentRear", "bmsMaxChargeKw", "bmsMaxDischargeKw",
+            "motorCurrentFront", "motorCurrentRear", "bmsMaxChargeKw", "bmsMaxDischargeAllowKw", "bmsMaxDischargeKw",
             "motorRpmFront", "motorRpmRear", "compressorW",
             "tyreTempFL", "tyreTempFR", "tyreTempRL", "tyreTempRR",
             "pedalAccel", "pedalBrake",
@@ -116,6 +148,7 @@ class FidMapTest {
             "motorCurrentFront" to Triple(1009, 1186988040, 7),
             "motorCurrentRear" to Triple(1009, 1186988056, 7),
             "bmsMaxChargeKw" to Triple(1014, 877658136, 5),
+            "bmsMaxDischargeAllowKw" to Triple(1014, 877658120, 5),
             "bmsMaxDischargeKw" to Triple(1014, 1145045048, 5),
             "motorRpmFront" to Triple(1012, 1141899272, 5),
             "motorRpmRear" to Triple(1012, 621805576, 5),
@@ -134,6 +167,7 @@ class FidMapTest {
             assertEquals("transact for $field", addr.third, e.transact)
         }
         assertEquals(0.1, FidMap.entries.single { it.field == "bmsMaxChargeKw" }.scale, 0.0001)
+        assertEquals(0.1, FidMap.entries.single { it.field == "bmsMaxDischargeAllowKw" }.scale, 0.0001)
     }
 
     /** The addresses moved out of FidRegistry must still be the ones it documents. */

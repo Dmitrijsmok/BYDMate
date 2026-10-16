@@ -1,7 +1,6 @@
 package com.bydmate.app.ui.settings
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -20,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -46,9 +46,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.BorderStroke
+import com.bydmate.app.R
 import com.bydmate.app.ui.components.bydSwitchColors
 import com.bydmate.app.ui.theme.AccentGreen
 import com.bydmate.app.ui.theme.AccentOrange
@@ -180,6 +182,7 @@ fun SettingActionRow(
     secondButtonLabel: String? = null,
     onSecondClick: (() -> Unit)? = null,
     secondButtonEnabled: Boolean = enabled,
+    onHelp: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
@@ -188,7 +191,7 @@ fun SettingActionRow(
             .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RowLabel(title, description, enabled, Modifier.weight(1f))
+        RowLabel(title, description, enabled, Modifier.weight(1f), onHelp)
         if (secondButtonLabel != null && onSecondClick != null) {
             SettingRowButton(secondButtonLabel, onSecondClick, SettingButtonStyle.Secondary, secondButtonEnabled)
             Spacer(modifier = Modifier.width(8.dp))
@@ -306,16 +309,16 @@ fun SettingChipRow(
 @Composable
 fun SettingHelpBadge(onClick: () -> Unit) {
     val source = remember { MutableInteractionSource() }
-    Box(
+    // A vector icon sized in dp: the glyph never outgrows its circle at a larger text size.
+    Icon(
+        Icons.AutoMirrored.Outlined.HelpOutline,
+        contentDescription = stringResource(R.string.help_badge_content_description),
+        tint = TextMuted,
         modifier = Modifier
             .padding(horizontal = 6.dp)
-            .size(18.dp)
-            .border(1.5.dp, TextMuted, CircleShape)
+            .size(20.dp)
             .clickable(indication = null, interactionSource = source, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text("?", color = TextMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-    }
+    )
 }
 
 /** Row with a green/orange status dot + optional button on the right. */

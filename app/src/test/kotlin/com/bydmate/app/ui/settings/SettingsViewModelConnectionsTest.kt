@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.bydmate.app.agent.AgentOrchestrator
 import com.bydmate.app.agent.LlmConnection
 import com.bydmate.app.agent.LlmConnectionResolver
+import com.bydmate.app.data.autoservice.AdbConnectFailure
 import com.bydmate.app.data.autoservice.AdbOnDeviceClient
 import com.bydmate.app.data.backup.BackupManager
 import com.bydmate.app.data.local.EnergyDataReader
@@ -94,6 +95,8 @@ class SettingsViewModelConnectionsTest {
     private class FakeSettingsDao : SettingsDao {
         val map = mutableMapOf<String, String>()
         override suspend fun get(key: String): String? = map[key]
+        override suspend fun getMany(keys: List<String>): List<SettingEntity> =
+            keys.mapNotNull { k -> map[k]?.let { SettingEntity(k, it) } }
         override fun observe(key: String): Flow<String?> = flowOf(map[key])
         override suspend fun set(entity: SettingEntity) { map[entity.key] = entity.value ?: "" }
         override suspend fun setAll(settings: List<SettingEntity>) { settings.forEach { set(it) } }
@@ -120,6 +123,7 @@ class SettingsViewModelConnectionsTest {
         override suspend fun getWithEnergyInRange(from: Long, to: Long): List<TripEntity> = emptyList()
         override suspend fun deleteById(id: Long) {}
         override suspend fun deleteZeroKmTrips(): Int = 0
+        override suspend fun fillOdometerIfEmpty(id: Long, startKm: Double?, endKm: Double?): Int = 0
         override suspend fun getTripsForCapacityEstimate(minSocDelta: Int, limit: Int): List<TripEntity> = emptyList()
         override suspend fun getRecentSummary(maxTrips: Int): TripSummary = TripSummary(0.0, 0.0)
         override suspend fun getRecentForEma(limit: Int): List<TripEntity> = emptyList()
@@ -191,6 +195,7 @@ class SettingsViewModelConnectionsTest {
     private class FakeAdbClient : AdbOnDeviceClient {
         override suspend fun connect(): Result<Unit> = Result.success(Unit)
         override suspend fun isConnected(): Boolean = false
+        override fun lastConnectFailure(): AdbConnectFailure? = null
         override suspend fun exec(cmd: String): String? = null
         override suspend fun grantUsageStatsAppop(packageName: String): Boolean = false
         override suspend fun grantWriteSecureSettings(packageName: String): Boolean = false
@@ -224,7 +229,8 @@ class SettingsViewModelConnectionsTest {
         val historyImporter = HistoryImporter(
             ctx, energyReader, tripRepo, tripDao, tripPointDao, idleDrainDao,
             settingsRepo, com.bydmate.app.data.repository.LastSessionRepository(ctx),
-            mockk<TripTombstoneDao>(relaxed = true), mockk(relaxed = true)
+            mockk<TripTombstoneDao>(relaxed = true), mockk(relaxed = true),
+            com.bydmate.app.data.repository.OdometerMarks(ctx),
         )
 
         val insightsClient = OpenRouterClient(httpClient)
@@ -242,11 +248,10 @@ class SettingsViewModelConnectionsTest {
             settingsRepository = settingsRepo,
             tripRepository = tripRepo,
             chargeRepository = chargeRepo,
-            updateChecker = UpdateChecker(httpClient),
+            updateChecker = UpdateChecker(httpClient, com.bydmate.app.util.AppStrings(ctx)),
             historyImporter = historyImporter,
             energyDataReader = energyReader,
             idleDrainDao = idleDrainDao,
-            tripPointDao = tripPointDao,
             insightsManager = insightsManager,
             adbOnDeviceClient = FakeAdbClient(),
             localePreferences = LocalePreferences(ctx),
@@ -291,10 +296,19 @@ class SettingsViewModelConnectionsTest {
             fidCatalogManager = mockk(relaxed = true),
             writeAllowlist = com.bydmate.app.data.vehicle.WriteAllowlist.EMPTY,
             ruleDao = mockk(relaxed = true),
+            automationEngine = mockk(relaxed = true),
             voiceJournal = com.bydmate.app.voice.VoiceJournal(),
             tariffPeriodDao = mockk(relaxed = true),
             costCalculator = mockk(relaxed = true),
             blindSpotController = mockk(relaxed = true),
+            adbVerdictMonitor = mockk(relaxed = true) {
+                io.mockk.every { verdict } returns kotlinx.coroutines.flow.MutableStateFlow(null)
+                io.mockk.every { checking } returns kotlinx.coroutines.flow.MutableStateFlow(false)
+            },
+            telegramBackupSink = mockk(relaxed = true),
+            autoBackupScheduler = mockk(relaxed = true),
+            appStrings = com.bydmate.app.util.AppStrings(ctx),
+            telegramReporter = mockk(relaxed = true),
         )
     }
 
@@ -430,7 +444,7 @@ class SettingsViewModelConnectionsTest {
         testDispatcher.scheduler.advanceUntilIdle()
 
         assertEquals(SettingsViewModel.DEFAULT_OPENROUTER_MODEL, vm.uiState.value.openRouterModel)
-        assertEquals("gemini-3.8-flash", vm.uiState.value.openRouterModelName)
+        assertEquals("gemini-3.5-flash-lite", vm.uiState.value.openRouterModelName)
     }
 
     @Test fun `testConnection second tap while running is ignored`() = runTest {

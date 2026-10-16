@@ -14,30 +14,6 @@ class WriteAllowlistTest {
 
     private val bannedDevs = setOf(1004, 1006, 1007, 1009, 1011, 1012, 1013, 1014, 1016, 1023, 1032)
 
-    // ── Test 5: WriteEntry data class construction with new fields ────────────
-    @Test fun `WriteEntry data class construction with new fields works`() {
-        val entry = WriteEntry(
-            actionName = "test_action",
-            dev = 1001,
-            writeFid = 12345,
-            readbackFid = 67890,
-            valueMin = 0,
-            valueMax = 100,
-            category = "windows",
-            validated = true,
-            source = "live-leopard3-2026-05-28",
-        )
-        assertEquals("test_action", entry.actionName)
-        assertEquals(1001, entry.dev)
-        assertEquals(12345, entry.writeFid)
-        assertEquals(67890, entry.readbackFid)
-        assertEquals(0, entry.valueMin)
-        assertEquals(100, entry.valueMax)
-        assertEquals("windows", entry.category)
-        assertTrue(entry.validated)
-        assertEquals("live-leopard3-2026-05-28", entry.source)
-    }
-
     // ── Test 1: banned dev entries are dropped; safe entries survive ──────────
     @Test fun `no production entry targets a banned dev namespace`() {
         val fixture = """
@@ -312,6 +288,38 @@ class WriteAllowlistTest {
         assertNotNull(heat); assertEquals(35, heat!!.valueMin); assertEquals(50, heat.valueMax)
     }
 
+    // ── Steering wheel heat: dev 1023 carve-out for the write fid only, unvalidated ──
+    @Test fun `steering heat write fid is the only new dev 1023 carve-out`() {
+        assertTrue((1023 to 944767029) in WriteAllowlist.BANNED_DEV_FID_EXCEPTIONS)
+        assertTrue(WriteAllowlist.isBanned(1023, WriteAllowlist.STEERING_HEAT_STATE_FID))
+        assertTrue(WriteAllowlist.isBanned(1023, 1116733496))
+        assertFalse(WriteAllowlist.isBanned(1023, 944767029))
+    }
+
+    @Test fun `steering heat entries are dev 1023 unvalidated and override the competitor`() {
+        val fixture = """
+            {
+              "steering_heat_on": { "featureId": 944767029, "deviceType": 1000, "value": 2 },
+              "steering_heat_off": { "featureId": 944767029, "deviceType": 1000, "value": 1 },
+              "wheel_heat_on": { "featureId": 944767029, "deviceType": 1000, "value": 2 },
+              "wheel_heat_off": { "featureId": 944767029, "deviceType": 1000, "value": 1 }
+            }
+        """.trimIndent()
+        val al = WriteAllowlist.loadProduction { fixture }
+        for ((name, value) in listOf("steering_heat_on" to 2, "steering_heat_off" to 1)) {
+            val e = al.find(name) ?: error("missing $name")
+            assertEquals("$name dev", 1023, e.dev)
+            assertEquals(944767029, e.writeFid)
+            assertNull("$name must not read back inline", e.readbackFid)
+            assertEquals(value, e.valueMin); assertEquals(value, e.valueMax)
+            assertEquals("climate", e.category)
+            assertFalse("$name must be unvalidated", e.validated)
+        }
+        // The competitor's dev=1000 pair stays as the fallback channel.
+        assertEquals(1000, al.find("wheel_heat_on")!!.dev)
+        assertEquals(1000, al.find("wheel_heat_off")!!.dev)
+    }
+
     // ── Task 4: competitor dev=1001 fallback seat entries in CANDIDATE_UNVALIDATED ──
     @Test fun `seat fallback entries are dev 1001 range 1 to 6 unvalidated`() {
         val al = WriteAllowlist(
@@ -391,6 +399,56 @@ class WriteAllowlistTest {
         )) {
             assertTrue("$name is live-validated", al.find(name)!!.validated)
         }
+    }
+
+    // ── Drive mode: dev 1023 carve-out for one fid and nine single values ─────
+    @Test fun `drive mode write fid is the only drive mode carve-out on dev 1023`() {
+        assertFalse(WriteAllowlist.isBanned(1023, 1276260400))
+        // The readback, flag and dev=1006 fids stay banned.
+        assertTrue(WriteAllowlist.isBanned(1023, WriteAllowlist.DRIVE_MODE_TARGET_FID))
+        assertTrue(WriteAllowlist.isBanned(1023, 1219518496))
+        assertTrue(WriteAllowlist.isBanned(1006, 734003229))
+        assertTrue(WriteAllowlist.isBanned(1006, 555745294))
+        val dev1023 = WriteAllowlist.BANNED_DEV_FID_EXCEPTIONS.filter { it.first == 1023 }.map { it.second }.toSet()
+        assertEquals(setOf(1330643002, 1069547536, 850427920, 850427928, 944767029, 1276260400), dev1023)
+    }
+
+    @Test fun `drive mode entries are single allowed values, rock unvalidated`() {
+        val al = WriteAllowlist.loadProduction { "{}" }
+        val entries = al.allEntries().filter { it.dev == 1023 && it.writeFid == 1276260400 }
+        assertEquals(setOf(1, 2, 3, 4, 5, 6, 7, 8, 21), entries.map { it.valueMin }.toSet())
+        for (e in entries) {
+            assertEquals(e.actionName, e.valueMin, e.valueMax)
+            assertEquals(e.actionName, "drive_mode", e.category)
+            assertEquals(e.actionName, e.actionName != "drive_mode_rock", e.validated)
+        }
+        assertEquals("live-leopard3-2026-09-27", al.find("drive_mode_eco")!!.source)
+    }
+
+    @Test fun `no other drive mode value opens up, whatever the source`() {
+        // Competitor JSON cannot add 19 CUSTOM, 23 TRACTION, 255 EXIT or a value-less range.
+        val fixture = """
+            {
+              "drive_custom":   { "featureId": 1276260400, "deviceType": 1023, "value": 19 },
+              "drive_traction": { "featureId": 1276260400, "deviceType": 1023, "value": 23 },
+              "drive_exit":     { "featureId": 1276260400, "deviceType": 1023, "value": 255 },
+              "drive_any":      { "featureId": 1276260400, "deviceType": 1023 },
+              "drive_eco_dup":  { "featureId": 1276260400, "deviceType": 1023, "value": 2 }
+            }
+        """.trimIndent()
+        val al = WriteAllowlist.loadProduction { fixture }
+        assertNull(al.find("drive_custom"))
+        assertNull(al.find("drive_traction"))
+        assertNull(al.find("drive_exit"))
+        assertNull(al.find("drive_any"))
+        assertNotNull(al.find("drive_eco_dup"))
+        val allowed = setOf(1, 2, 3, 4, 5, 6, 7, 8, 21)
+        for (e in al.allEntries().filter { it.dev == 1023 && it.writeFid == 1276260400 }) {
+            assertTrue(e.actionName, e.valueMin == e.valueMax && e.valueMin in allowed)
+        }
+        // A ranged entry is refused too, even when its bounds are allowed values.
+        assertFalse(WriteAllowlist.valuesAllowed(
+            WriteEntry("x", 1023, 1276260400, null, 1, 3, "drive_mode", false, "test")))
     }
 
     // ── Dim 6, Test 6: LIVE_VALIDATED has no duplicate actionName ────────────

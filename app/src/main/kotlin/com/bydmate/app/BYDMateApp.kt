@@ -20,6 +20,7 @@ import com.bydmate.app.data.local.HistoryImporter
 import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.data.local.decideLanguage
 import com.bydmate.app.data.automation.DriveModeRuleMigration
+import com.bydmate.app.data.automation.TrunkRuleMigration
 import com.bydmate.app.data.local.dao.ChargeDao
 import com.bydmate.app.data.remote.InsightsManager
 import com.bydmate.app.data.repository.SettingsRepository
@@ -51,6 +52,7 @@ class BYDMateApp : Application(), Configuration.Provider {
     @Inject lateinit var insightsManager: InsightsManager
     @Inject lateinit var splitOverlayController: com.bydmate.app.split.SplitOverlayController
     @Inject lateinit var driveModeRuleMigration: DriveModeRuleMigration
+    @Inject lateinit var trunkRuleMigration: TrunkRuleMigration
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -98,6 +100,8 @@ class BYDMateApp : Application(), Configuration.Provider {
             }
             // One-shot: revive DriveMode rules saved against the old "0" = NORMAL code.
             driveModeRuleMigration.runOnce()
+            // One-shot: revive Trunk rules saved against the old "0" = closed code.
+            trunkRuleMigration.runOnce()
             // One-time cleanup of existing duplicates from v2.0.0
             historyImporter.cleanupDuplicates()
             // Only sync if setup is completed (prevents duplicates during first wizard run)
@@ -106,6 +110,12 @@ class BYDMateApp : Application(), Configuration.Provider {
             }
         }
         scheduleDataThinning()
+        appScope.launch {
+            com.bydmate.app.service.UpdateApkCleanup.run(
+                android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
+                BuildConfig.VERSION_NAME,
+            )
+        }
         registerActivityLifecycleCallbacks(WidgetLifecycleCallbacks(this, splitOverlayController))
         // Start split-screen overlay observers (mirrors WidgetController init pattern).
         splitOverlayController.start(appScope)
@@ -195,7 +205,7 @@ class BYDMateApp : Application(), Configuration.Provider {
             splitOverlay.setOwnAppForegrounded(false)
             val prefs = WidgetPreferences(app)
             if (prefs.isEnabled() && Settings.canDrawOverlays(app)) {
-                WidgetController.attach(app)
+                WidgetController.attach(app, "app_backgrounded")
             }
         }
 

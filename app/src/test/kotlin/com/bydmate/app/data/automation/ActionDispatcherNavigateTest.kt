@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import com.bydmate.app.cluster.ClusterVoiceControl
+import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.data.local.entity.ActionDef
 import com.bydmate.app.data.vehicle.HelperClient
 import com.bydmate.app.data.vehicle.VehicleApi
@@ -28,7 +29,13 @@ class ActionDispatcherNavigateTest {
         dagger.Lazy { mockk<com.bydmate.app.voice.VoiceAutomationActions>(relaxed = true) },
         mockk<ClusterVoiceControl>(relaxed = true),
         mockk<com.bydmate.app.voice.AudioCapture>(relaxed = true),
-        mockk<com.bydmate.app.split.SplitSessionManager>(relaxed = true))
+        mockk<com.bydmate.app.split.SplitSessionManager>(relaxed = true),
+            com.bydmate.app.util.AppStrings(app), dagger.Lazy { io.mockk.mockk(relaxed = true) })
+
+    init {
+        // The fallback reasons below are asserted in Russian; another test may leave its language set.
+        LocalePreferences(app).setLanguage("ru")
+    }
 
     private fun actionDef(payload: String) =
         ActionDef(command = "", displayName = "navi", kind = "navigate", payload = payload)

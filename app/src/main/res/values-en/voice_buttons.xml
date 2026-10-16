@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="voice_button_local_label">Local Assistant button</string>
+    <string name="voice_button_alice_label">Yandex Alice button</string>
+    <string name="voice_button_not_assigned">Not assigned</string>
+    <string name="voice_button_clear_alice">Clear Alice button</string>
+    <string name="voice_button_assignment_hint">Without a dedicated Alice button, existing single/double-press behavior is preserved. With two buttons, each starts only its assigned assistant. To learn, press and release one physical button.</string>
+    <string name="voice_button_occupied_automation">This button is assigned to an automation. Change that assignment first.</string>
+    <string name="voice_button_handoff_failed">Could not confirm that Alice has exited. Close Alice and press the Local Assistant button again.</string>
+</resources>

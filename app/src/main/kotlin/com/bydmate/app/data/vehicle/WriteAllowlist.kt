@@ -76,7 +76,38 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
             1004 to 871366669,   // hazard lights — live-validated on Leopard 3 2026-07-31
             1023 to 850427920,  // fridge WORKING_STATUS_SET (cool/heat/off) — com.byd.car.icebox
             1023 to 850427928,  // fridge TEMP_REGULATION_SET — com.byd.car.icebox
+            1023 to 944767029,  // SET_STEERING_WHEEL_HEAT_STATE_SET — BYDAutoSettingDevice, unvalidated
+            // SETTING_PRESELECTED_DRIVING_MODE_SET — the BYD voice assistant's drive mode write.
+            // Only the values of [RESTRICTED_VALUES] pass, see there.
+            DRIVE_MODE_DEV to DRIVE_MODE_WRITE_FID,
         )
+
+        /** Drive mode: written and read back on the Setting device (dev=1023). */
+        const val DRIVE_MODE_DEV = 1023
+        const val DRIVE_MODE_WRITE_FID = 1276260400
+        /** SETTING_TARGET_DRIVING_MODE (tx=5): the mode the car is in, same 1..21 encoding as the
+         *  write; 10 = emergency flotation. The dev=1006 driveMode fid does not follow the terrain
+         *  modes (live Leopard 3 2026-09-27), so only this fid confirms a write. */
+        const val DRIVE_MODE_TARGET_FID = 255852712
+
+        /**
+         * Carve-outs that open only some values of their fid: an entry on such a fid must be a
+         * single value from the set, anything else is dropped at load like a banned dev. The drive
+         * mode fid also takes 19 CUSTOM, 23 TRACTION and 255 EXIT, which stay closed.
+         */
+        val RESTRICTED_VALUES: Map<Pair<Int, Int>, Set<Int>> = mapOf(
+            (DRIVE_MODE_DEV to DRIVE_MODE_WRITE_FID) to DriveMode.entries.map { it.value }.toSet(),
+        )
+
+        /** False when [entry] sits on a [RESTRICTED_VALUES] fid with a value outside its set. */
+        internal fun valuesAllowed(entry: WriteEntry): Boolean {
+            val allowed = RESTRICTED_VALUES[entry.dev to entry.writeFid] ?: return true
+            return entry.valueMin == entry.valueMax && entry.valueMin in allowed
+        }
+
+        /** An entry may load: not on a banned dev (unless carved out) and within its value set. */
+        private fun admitted(entry: WriteEntry): Boolean =
+            !isBanned(entry.dev, entry.writeFid) && valuesAllowed(entry)
 
         /** A (dev,fid) is banned unless explicitly carved out. */
         internal fun isBanned(dev: Int, fid: Int): Boolean =
@@ -183,6 +214,18 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
             WriteEntry("fridge_mode",      1023, 850427920, null, 1, 3,  "fridge", true, "live-leopard3-2026-06-29"),
             WriteEntry("fridge_temp_cool", 1023, 850427928, null, 13, 25, "fridge", true, "live-leopard3-2026-06-29"),
             WriteEntry("fridge_temp_heat", 1023, 850427928, null, 35, 50, "fridge", true, "live-leopard3-2026-06-29"),
+            // drive mode — dev=1023 carve-out, one entry per value (1=normal 2=eco 3=sport 4=snow
+            // 5=sand 6=mud 7=mountain 21=smart). Each read back on DRIVE_MODE_TARGET_FID within
+            // 2 s, parked, 2026-09-27. DriveModeChannel checks the support flag, the flotation
+            // state and reads the result back; 8=rock is in CANDIDATE_UNVALIDATED.
+            WriteEntry("drive_mode_normal",   1023, 1276260400, null, 1, 1,   "drive_mode", true, "live-leopard3-2026-09-27"),
+            WriteEntry("drive_mode_eco",      1023, 1276260400, null, 2, 2,   "drive_mode", true, "live-leopard3-2026-09-27"),
+            WriteEntry("drive_mode_sport",    1023, 1276260400, null, 3, 3,   "drive_mode", true, "live-leopard3-2026-09-27"),
+            WriteEntry("drive_mode_snow",     1023, 1276260400, null, 4, 4,   "drive_mode", true, "live-leopard3-2026-09-27"),
+            WriteEntry("drive_mode_sand",     1023, 1276260400, null, 5, 5,   "drive_mode", true, "live-leopard3-2026-09-27"),
+            WriteEntry("drive_mode_mud",      1023, 1276260400, null, 6, 6,   "drive_mode", true, "live-leopard3-2026-09-27"),
+            WriteEntry("drive_mode_mountain", 1023, 1276260400, null, 7, 7,   "drive_mode", true, "live-leopard3-2026-09-27"),
+            WriteEntry("drive_mode_smart",    1023, 1276260400, null, 21, 21, "drive_mode", true, "live-leopard3-2026-09-27"),
         )
 
         /** dev of the seat status fids below (same namespace as the primary write channel). */
@@ -208,6 +251,15 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
             SeatGroup.DRIVER_VENT to 702545928,
             SeatGroup.DRIVER_HEAT to 702545932,
         )
+
+        /**
+         * READ-side state of the steering wheel heater (SET_STEERING_WHEEL_HEAT_STATE, tx=5),
+         * the counterpart of the steering_heat_on/off writes: 2=on, 1=off, 0=function absent,
+         * 65535=no CAN link. BYD reads it on the Setting device (dev=1023). Not validated on a
+         * car with a heated wheel: Leopard 3 has none and reads 0.
+         */
+        const val STEERING_HEAT_STATE_DEV = 1023
+        const val STEERING_HEAT_STATE_FID = 1116733454
 
         /**
          * Candidate (unvalidated) native channels staged for an in-vehicle snap.
@@ -252,6 +304,17 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
             // Same value-less competitor entry problem and same per-model readback fid
             // divergence as ac_wind_level above, so no readbackFid here either (#201).
             WriteEntry("ac_wind_mode", 1000, 501219336, null, 1, 5, "climate", false, "competitor-actions ac_wind_mode; AirConditioningService decompiled; #201"),
+            // Steering wheel heat — SET_STEERING_WHEEL_HEAT_STATE_SET on the Setting device
+            // (dev=1023 carve-out), 2=on, 1=off; the set accepts nothing else (levels live on
+            // separate fids and stay out). Override the competitor's same-named dev=1000
+            // entries; its wheel_heat_on/off (dev=1000) stay as the fallback channel of
+            // [SteeringHeatChannel]. No readbackFid: the state fid lags the write on CAN, so
+            // the channel reads it back itself after a delay.
+            WriteEntry("steering_heat_on",  1023, 944767029, null, 2, 2, "climate", false, "byd-sdk BYDAutoSettingDevice + autovoice"),
+            WriteEntry("steering_heat_off", 1023, 944767029, null, 1, 1, "climate", false, "byd-sdk BYDAutoSettingDevice + autovoice"),
+            // Drive mode rock (8) — BYD voice assistant value, not tried: the Leopard 3 support
+            // flag reports it absent. Same dev=1023 carve-out as the validated modes.
+            WriteEntry("drive_mode_rock", 1023, 1276260400, null, 8, 8, "drive_mode", false, "byd-sdk autovoice DrivingPatternApiImpl"),
             WriteEntry("driver_seat_heat_fallback",    1001, 1125122068, null, 1, 6, "seats", false, "competitor-v80"),
             WriteEntry("driver_seat_vent_fallback",    1001, 1125122064, null, 1, 6, "seats", false, "competitor-v80"),
             WriteEntry("passenger_seat_heat_fallback", 1001, 1125122076, null, 1, 6, "seats", false, "competitor-v80"),
@@ -312,11 +375,7 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
                     val fid = obj.getInt("featureId")
                     val hasValue = obj.has("value")
                     val value = if (hasValue) obj.getInt("value") else 0
-                    if (isBanned(dev, fid)) {
-                        Log.w(TAG, "Dropping banned-dev action=$name dev=$dev")
-                        continue
-                    }
-                    merged[name.lowercase()] = WriteEntry(
+                    val entry = WriteEntry(
                         actionName = name,
                         dev = dev,
                         writeFid = fid,
@@ -327,6 +386,11 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
                         validated = false,
                         source = "competitor-v80",
                     )
+                    if (!admitted(entry)) {
+                        Log.w(TAG, "Dropping banned-dev action=$name dev=$dev fid=$fid value=$value")
+                        continue
+                    }
+                    merged[name.lowercase()] = entry
                 } catch (e: Exception) {
                     Log.w(TAG, "skip malformed competitor entry $name: ${e.message}")
                     continue
@@ -336,7 +400,7 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
             // Candidate (unvalidated) native entries merged after competitor.
             // Carve-out check still applies (only exempt dev=1023 light fids pass).
             for (entry in CANDIDATE_UNVALIDATED) {
-                if (isBanned(entry.dev, entry.writeFid)) {
+                if (!admitted(entry)) {
                     Log.w(TAG, "Dropping banned-dev candidate=${entry.actionName} dev=${entry.dev}")
                     continue
                 }
@@ -345,7 +409,7 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
 
             // LIVE_VALIDATED wins on collision (match by lowercase key, store original entry)
             for (entry in LIVE_VALIDATED) {
-                if (isBanned(entry.dev, entry.writeFid)) {
+                if (!admitted(entry)) {
                     Log.w(TAG, "Dropping banned-dev live entry=${entry.actionName} dev=${entry.dev}")
                     continue
                 }

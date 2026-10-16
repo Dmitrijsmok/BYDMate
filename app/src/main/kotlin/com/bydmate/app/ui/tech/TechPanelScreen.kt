@@ -374,7 +374,7 @@ private fun BatteryNowCard(state: TechPanelUiState, onHint: (String) -> Unit, mo
 @Composable
 private fun FullCyclesRow(state: TechPanelUiState) {
     val cycles = TechPanelVisuals.fullCycles(
-        state.lifetimeKwh?.toDouble(), state.lifetimeChargedKwh, state.nominalCapacityKwh)
+        state.lifetimeKwh?.toDouble(), state.lifetimeChargedKwh, state.nominalCapacityKwh, state.soh)
     TechRow(stringResource(R.string.tech_label_full_cycles), cycles?.value ?: DASH)
     Text(
         cycles
@@ -398,6 +398,10 @@ private fun LimitsAndCellsCard(state: TechPanelUiState, onHint: (String) -> Unit
         TechRow(
             stringResource(R.string.tech_label_max_charge),
             state.bmsMaxChargeKw?.let { stringResource(R.string.tech_value_kw, it.roundToInt()) } ?: DASH,
+        )
+        TechRow(
+            stringResource(R.string.tech_label_max_discharge_allow),
+            state.bmsMaxDischargeAllowKw?.let { stringResource(R.string.tech_value_kw, it.roundToInt()) } ?: DASH,
         )
         TechRow(
             stringResource(R.string.tech_label_max_discharge),

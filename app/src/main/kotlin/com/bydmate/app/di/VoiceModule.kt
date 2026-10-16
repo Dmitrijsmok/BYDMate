@@ -2,6 +2,7 @@ package com.bydmate.app.di
 
 import android.content.Context
 import android.media.AudioManager
+import android.os.Build
 import android.util.Log
 import com.bydmate.app.agent.LlmConnectionResolver
 import com.bydmate.app.data.remote.DiParsData
@@ -55,7 +56,12 @@ object VoiceModule {
 
     @Provides @Singleton
     fun provideContinuousAsr(mm: GigaAmModelManager, guard: AsrLoadGuard): ContinuousAsr =
-        GigaAmAsrEngine(mm, loadGuard = guard)
+        GigaAmAsrEngine(
+            mm,
+            loadGuard = guard,
+            dilink3Optimizations = Build.FINGERPRINT.orEmpty()
+                .contains("DiLink3", ignoreCase = true),
+        )
 
     @Provides @Singleton
     fun provideRuStressMarker(mm: TtsModelManager): RuStressMarker =
@@ -113,6 +119,8 @@ object VoiceModule {
                 }
             },
             selectedGender = { if (prefs().getString("agent_gender", "m") == "f") TtsGender.FEMALE else TtsGender.MALE },
+            precachePhrases = { AgentPersona.fromId(prefs().getString("agent_persona", null)).phrases() },
+            phraseDir = File(ctx.filesDir, "tts_phrases"),
         )
     }
 
@@ -144,13 +152,6 @@ object VoiceModule {
         override fun vehicleSnapshot(): DiParsData? = TrackingService.lastData.value
         override fun snapshotAgeMs(): Long? =
             TrackingService.lastDataAtMs.takeIf { it > 0L }?.let { System.currentTimeMillis() - it }
-        // Fix D: read the language override mirrored by SettingsViewModel.setVoiceLanguage().
-        override fun preferredLang(): VoiceLang? =
-            when (ctx.getSharedPreferences("voice", Context.MODE_PRIVATE).getString("voice_lang", "")) {
-                "RU" -> VoiceLang.RU
-                "EN" -> VoiceLang.EN
-                else -> null
-            }
         override fun ttsEnabled(): Boolean =
             ctx.getSharedPreferences("voice", Context.MODE_PRIVATE)
                 .getBoolean("tts_enabled", false)
