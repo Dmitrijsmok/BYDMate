@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "dilink3-friendly/**"]
   pull_request:
 
 concurrency:
@@ -27,8 +27,12 @@ jobs:
       # гонять 3.5k тестов второй раз на медленном раннере — дубль. На PR локального
       # прогона нет, там тесты обязательны.
       - name: Unit tests
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/heads/dilink3-friendly/')
         run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Compile DiLink3 Friendly debug APK
+        if: startsWith(github.ref, 'refs/heads/dilink3-friendly/')
+        run: ./gradlew :app:assembleDebug --stacktrace
 
       - name: Android Lint
         run: ./gradlew :app:lintDebug --stacktrace

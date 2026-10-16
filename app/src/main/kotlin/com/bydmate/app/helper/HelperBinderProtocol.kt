@@ -71,9 +71,9 @@ import android.os.IBinder
  * status/value carry the raw autoservice transact result (see HelperDaemon).
  */
 object HelperBinderProtocol {
-    const val SERVICE_NAME = "bydmate_helper"
-    const val PROCESS_NAME = "bydmate_helper"   // app_process --nice-name + ps lookup
-    const val DESCRIPTOR = "com.bydmate.app.helper.IHelper"
+    const val SERVICE_NAME = "bydm_d3_helper"
+    const val PROCESS_NAME = "bydm_d3_helper"   // app_process --nice-name + ps lookup
+    const val DESCRIPTOR = "com.bydmate.dilink3.app.helper.IHelper"
 
     /**
      * Broadcast delivery of the daemon's IBinder — the H2 fallback for firmwares where
@@ -86,7 +86,7 @@ object HelperBinderProtocol {
      * THIS spawn, the binder's interface descriptor, and — afterwards — the version the daemon
      * reports over TX_GET_VERSION.
      */
-    const val ACTION_BINDER = "com.bydmate.app.helper.BINDER"
+    const val ACTION_BINDER = "com.bydmate.dilink3.app.helper.BINDER"
     const val RECEIVER_CLASS = "com.bydmate.app.helper.HelperBinderReceiver"
 
     /** Extras of [ACTION_BINDER]: one Bundle (a Binder cannot be an Intent extra directly). */
@@ -514,7 +514,7 @@ object HelperBinderProtocol {
     const val PANE_TYPE_RECENTS = 3
 
     /** Our own package — target of the narrow grantOverlayPermission appops call. */
-    const val APP_PACKAGE = "com.bydmate.app"
+    const val APP_PACKAGE = "com.bydmate.dilink3.app"
 
     /**
      * Flattened ComponentName of our steering-wheel accessibility service — appended
@@ -522,7 +522,7 @@ object HelperBinderProtocol {
      * by the narrow enableAccessibilityService daemon op, since DiLink has no a11y settings UI.
      */
     const val ACCESSIBILITY_SERVICE_COMPONENT =
-        "com.bydmate.app/com.bydmate.app.cluster.SteeringWheelKeyService"
+        "com.bydmate.dilink3.app/com.bydmate.app.cluster.SteeringWheelKeyService"
 
     /**
      * Flattened ComponentName of our notification-listener stub — granted by the narrow
@@ -532,5 +532,5 @@ object HelperBinderProtocol {
      * Grants MediaSessionManager.getActiveSessions() access to our process for Yandex Music.
      */
     const val NOTIFICATION_LISTENER_COMPONENT =
-        "com.bydmate.app/com.bydmate.app.media.MediaSessionListenerService"
+        "com.bydmate.dilink3.app/com.bydmate.app.media.MediaSessionListenerService"
 }

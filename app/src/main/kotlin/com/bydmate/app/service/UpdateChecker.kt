@@ -25,7 +25,7 @@ class UpdateChecker @Inject constructor(
     private val appStrings: AppStrings,
 ) {
     companion object {
-        private const val GITHUB_API = "https://api.github.com/repos/AndyShaman/BYDMate/releases/latest"
+        private const val GITHUB_API = "https://api.github.com/repos/Dmitrijsmok/BYDMate/releases/latest"
         private const val PREFS_NAME = "update_prefs"
         private const val KEY_LAST_CHECK = "last_check"
         private const val KEY_AUTO_CHECK = "auto_check_enabled"
@@ -69,9 +69,10 @@ class UpdateChecker @Inject constructor(
         val request = Request.Builder()
             .url(GITHUB_API)
             .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "BYDMate-UpdateCheck")
+            .header("User-Agent", "DiLink3Friendly-UpdateCheck")
             .build()
         val body = httpClient.newCall(request).execute().use { response ->
+            if (response.code == 404) return@withContext null // No DiLink3 Friendly release yet
             if (!response.isSuccessful) {
                 throw Exception("GitHub API: HTTP ${response.code}")
             }
@@ -93,9 +94,12 @@ class UpdateChecker @Inject constructor(
         for (i in 0 until assets.length()) {
             val asset = assets.getJSONObject(i)
             val name = asset.optString("name", "")
-            if (name.endsWith(".apk")) {
-                apkUrl = asset.optString("browser_download_url")
-                break
+            if (name == "DiLink3Friendly-v${tagName}.apk") {
+                val candidate = asset.optString("browser_download_url")
+                if (candidate.startsWith("https://github.com/Dmitrijsmok/BYDMate/releases/download/")) {
+                    apkUrl = candidate
+                    break
+                }
             }
         }
 
@@ -123,16 +127,16 @@ class UpdateChecker @Inject constructor(
         // Delete old file if exists
         val destFile = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            "BYDMate-${update.version}.apk"
+            "DiLink3Friendly-v${update.version}.apk"
         )
         if (destFile.exists()) destFile.delete()
 
         val request = DownloadManager.Request(Uri.parse(update.downloadUrl))
-            .setTitle("BYDMate ${update.version}")
+            .setTitle("DiLink3 Friendly ${update.version}")
             .setDescription(appStrings.get(R.string.update_download_notification_description))
             .setDestinationInExternalPublicDir(
                 Environment.DIRECTORY_DOWNLOADS,
-                "BYDMate-${update.version}.apk"
+                "DiLink3Friendly-v${update.version}.apk"
             )
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
 
@@ -199,7 +203,7 @@ class UpdateChecker @Inject constructor(
     private fun installApk(context: Context, version: String) {
         val file = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            "BYDMate-$version.apk"
+            "DiLink3Friendly-v$version.apk"
         )
         if (!file.exists()) return
 
