@@ -102,7 +102,7 @@ class UpdateChecker @Inject constructor(
     }
 
     private fun forkAssetUrl(asset: JSONObject, version: String): String? {
-        if (asset.optString("name") != "DiLink3Friendly-v${version}.apk") return null
+        if (asset.optString("name") != "BYDMate-dilink3-v${version}.apk") return null
         return asset.optString("browser_download_url").takeIf {
             it.startsWith("https://github.com/Dmitrijsmok/BYDMate/releases/download/")
         }
@@ -123,7 +123,7 @@ class UpdateChecker @Inject constructor(
         // Delete old file if exists
         val destFile = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            "DiLink3Friendly-v${update.version}.apk"
+            "BYDMate-dilink3-v${update.version}.apk"
         )
         if (destFile.exists()) destFile.delete()
 
@@ -132,7 +132,7 @@ class UpdateChecker @Inject constructor(
             .setDescription(appStrings.get(R.string.update_download_notification_description))
             .setDestinationInExternalPublicDir(
                 Environment.DIRECTORY_DOWNLOADS,
-                "DiLink3Friendly-v${update.version}.apk"
+                "BYDMate-dilink3-v${update.version}.apk"
             )
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
 
@@ -199,7 +199,7 @@ class UpdateChecker @Inject constructor(
     private fun installApk(context: Context, version: String) {
         val file = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            "DiLink3Friendly-v$version.apk"
+            "BYDMate-dilink3-v$version.apk"
         )
         if (!file.exists()) return
 
