@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="voice_button_local_label">Кнопка локального ассистента</string>
+    <string name="voice_button_alice_label">Кнопка Яндекс Алисы</string>
+    <string name="voice_button_not_assigned">Не назначена</string>
+    <string name="voice_button_clear_alice">Убрать кнопку Алисы</string>
+    <string name="voice_button_assignment_hint">Без отдельной кнопки Алисы сохраняется прежний режим одного/двух нажатий. При двух назначенных кнопках каждая запускает только своего ассистента. Для обучения нажмите и отпустите одну физическую кнопку.</string>
+    <string name="voice_button_occupied_automation">Кнопка уже назначена автоматизации. Сначала измените это назначение.</string>
+    <string name="voice_button_handoff_failed">Не удалось подтвердить выход из Алисы. Закройте Алису и нажмите кнопку локального ассистента снова.</string>
+</resources>

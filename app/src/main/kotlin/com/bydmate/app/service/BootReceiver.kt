@@ -32,7 +32,7 @@ class BootReceiver : BroadcastReceiver() {
         const val KEY_LAST_BOOT_ACTION = "last_boot_action"
         const val KEY_CHAIN_LOG = "chain_log"
         /** Explicit restart request from the helper daemon after the Android 10 a11y recovery. */
-        const val ACTION_RECOVER_START = "com.bydmate.app.action.RECOVER_START"
+        const val ACTION_RECOVER_START = "com.bydmate.dilink3.app.action.RECOVER_START"
 
         // Unlock arrives only while the service is down (see onReceive), so whatever job is
         // queued or running has not started it: replace it rather than be dropped behind a

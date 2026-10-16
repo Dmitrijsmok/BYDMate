@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="voice_button_local_label">Przycisk lokalnego asystenta</string>
+    <string name="voice_button_alice_label">Przycisk Yandex Alice</string>
+    <string name="voice_button_not_assigned">Nie przypisano</string>
+    <string name="voice_button_clear_alice">Usuń przypisanie Alice</string>
+    <string name="voice_button_assignment_hint">Bez osobnego przycisku Alice dotychczasowe pojedyncze i podwójne naciśnięcie działają bez zmian. Przy dwóch przyciskach każdy uruchamia tylko przypisanego asystenta. Aby przypisać przycisk, naciśnij go i zwolnij.</string>
+    <string name="voice_button_occupied_automation">Ten przycisk jest przypisany do automatyzacji. Najpierw zmień to przypisanie.</string>
+    <string name="voice_button_handoff_failed">Nie udało się potwierdzić zamknięcia Alice. Zamknij Alice i ponownie naciśnij przycisk lokalnego asystenta.</string>
+</resources>

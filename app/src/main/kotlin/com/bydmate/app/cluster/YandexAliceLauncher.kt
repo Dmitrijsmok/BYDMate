@@ -19,6 +19,21 @@ internal class YandexAliceLauncher(
     private val handler = Handler(Looper.getMainLooper())
     private val ui = YandexAliceUiDriver(service)
 
+    private var starting = false
+    val localHandoff = AliceLocalHandoffRunner(
+        service,
+        ownsSession = { starting || pending || listening },
+        localActive = { voiceController().sessionActive() },
+        cancelAlice = {
+            handler.removeCallbacksAndMessages(null)
+            generation++
+            starting = false
+            pending = false
+            listening = true // Retain ownership until exit and recorder-idle observations agree.
+        },
+        releaseAlice = { finish() },
+        requiresExit = { pending || listening },
+    )
     private var pending = false
     private var generation = 0
     private var attempt = 0
@@ -38,6 +53,7 @@ internal class YandexAliceLauncher(
     }
 
     fun trigger() {
+        localHandoff.cancel()
         val now = SystemClock.elapsedRealtime()
         if (now - lastTrigger < TRIGGER_DEBOUNCE_MS) return
         lastTrigger = now
@@ -45,6 +61,7 @@ internal class YandexAliceLauncher(
 
         val localWasActive = voiceController().stopForExternalAssistant()
         if (localWasActive) {
+            starting = true
             handler.postDelayed({ startAliceUi() }, LOCAL_RELEASE_MS)
         } else {
             startAliceUi()
@@ -52,6 +69,7 @@ internal class YandexAliceLauncher(
     }
 
     private fun startAliceUi() {
+        starting = false
         resetAttempt()
         voiceController().beginExternalAssistantAudio()
 
@@ -83,7 +101,7 @@ internal class YandexAliceLauncher(
         }
 
         if (pending && isAliceContextPackage(packageName)) advance()
-        if (leftYandexWhileListening(listening, event, packageName)) {
+        if (!localHandoff.active && leftYandexWhileListening(listening, event, packageName)) {
             handler.postDelayed({
                 val active = runCatching {
                     service.rootInActiveWindow?.packageName?.toString()
@@ -94,6 +112,7 @@ internal class YandexAliceLauncher(
     }
 
     fun destroy() {
+        localHandoff.cancel()
         handler.removeCallbacksAndMessages(null)
         finish()
     }

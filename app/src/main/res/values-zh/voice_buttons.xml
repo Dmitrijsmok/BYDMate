@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="voice_button_local_label">本地助手按钮</string>
+    <string name="voice_button_alice_label">Yandex Alice 按钮</string>
+    <string name="voice_button_not_assigned">未分配</string>
+    <string name="voice_button_clear_alice">清除 Alice 按钮</string>
+    <string name="voice_button_assignment_hint">未分配 Alice 专用按钮时，保留原有的单击和双击行为。分配两个按钮后，每个按钮仅启动对应的助手。学习时，请按下并松开一个实体按钮。</string>
+    <string name="voice_button_occupied_automation">此按钮已分配给自动化规则。请先更改该分配。</string>
+    <string name="voice_button_handoff_failed">无法确认 Alice 已退出。请关闭 Alice，然后再次按下本地助手按钮。</string>
+</resources>

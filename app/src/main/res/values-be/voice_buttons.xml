@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="voice_button_local_label">Кнопка лакальнага асістэнта</string>
+    <string name="voice_button_alice_label">Кнопка Яндэкс Алісы</string>
+    <string name="voice_button_not_assigned">Не прызначана</string>
+    <string name="voice_button_clear_alice">Прыбраць кнопку Алісы</string>
+    <string name="voice_button_assignment_hint">Без асобнай кнопкі Алісы захоўваецца ранейшы рэжым аднаго/двух націсканняў. З дзвюма кнопкамі кожная запускае толькі свайго асістэнта. Для навучання націсніце і адпусціце адну фізічную кнопку.</string>
+    <string name="voice_button_occupied_automation">Кнопка ўжо прызначана аўтаматызацыі. Спачатку змяніце гэта прызначэнне.</string>
+    <string name="voice_button_handoff_failed">Не ўдалося пацвердзіць выхад з Алісы. Закрыйце Алісу і зноў націсніце кнопку лакальнага асістэнта.</string>
+</resources>

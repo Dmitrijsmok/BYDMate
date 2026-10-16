@@ -25,7 +25,7 @@ class UpdateChecker @Inject constructor(
     private val appStrings: AppStrings,
 ) {
     companion object {
-        private const val GITHUB_API = "https://api.github.com/repos/AndyShaman/BYDMate/releases/latest"
+        private const val GITHUB_API = "https://api.github.com/repos/Dmitrijsmok/BYDMate/releases/latest"
         private const val PREFS_NAME = "update_prefs"
         private const val KEY_LAST_CHECK = "last_check"
         private const val KEY_AUTO_CHECK = "auto_check_enabled"
@@ -69,9 +69,10 @@ class UpdateChecker @Inject constructor(
         val request = Request.Builder()
             .url(GITHUB_API)
             .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "BYDMate-UpdateCheck")
+            .header("User-Agent", "DiLink3Friendly-UpdateCheck")
             .build()
         val body = httpClient.newCall(request).execute().use { response ->
+            if (response.code == 404) return@withContext null // The fork has no release yet.
             if (!response.isSuccessful) {
                 throw Exception("GitHub API: HTTP ${response.code}")
             }
@@ -89,23 +90,22 @@ class UpdateChecker @Inject constructor(
 
         val assets = json.optJSONArray("assets")
             ?: throw Exception("Нет assets в релизе $tagName")
-        var apkUrl: String? = null
-        for (i in 0 until assets.length()) {
-            val asset = assets.getJSONObject(i)
-            val name = asset.optString("name", "")
-            if (name.endsWith(".apk")) {
-                apkUrl = asset.optString("browser_download_url")
-                break
-            }
-        }
-
-        if (apkUrl == null) throw Exception("Нет APK в релизе $tagName")
+        val apkUrl = (0 until assets.length()).firstNotNullOfOrNull {
+            forkAssetUrl(assets.getJSONObject(it), tagName)
+        } ?: throw Exception("Нет APK в релизе $tagName")
 
         UpdateInfo(
             version = tagName,
             downloadUrl = apkUrl,
             releaseNotes = json.optString("body", "")
         )
+    }
+
+    private fun forkAssetUrl(asset: JSONObject, version: String): String? {
+        if (asset.optString("name") != "DiLink3Friendly-v${version}.apk") return null
+        return asset.optString("browser_download_url").takeIf {
+            it.startsWith("https://github.com/Dmitrijsmok/BYDMate/releases/download/")
+        }
     }
 
     /**
@@ -123,7 +123,7 @@ class UpdateChecker @Inject constructor(
         // Delete old file if exists
         val destFile = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            "BYDMate-${update.version}.apk"
+            "DiLink3Friendly-v${update.version}.apk"
         )
         if (destFile.exists()) destFile.delete()
 
@@ -132,7 +132,7 @@ class UpdateChecker @Inject constructor(
             .setDescription(appStrings.get(R.string.update_download_notification_description))
             .setDestinationInExternalPublicDir(
                 Environment.DIRECTORY_DOWNLOADS,
-                "BYDMate-${update.version}.apk"
+                "DiLink3Friendly-v${update.version}.apk"
             )
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
 
@@ -199,7 +199,7 @@ class UpdateChecker @Inject constructor(
     private fun installApk(context: Context, version: String) {
         val file = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            "BYDMate-$version.apk"
+            "DiLink3Friendly-v$version.apk"
         )
         if (!file.exists()) return
 

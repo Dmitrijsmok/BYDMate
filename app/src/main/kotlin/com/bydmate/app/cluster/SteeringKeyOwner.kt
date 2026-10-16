@@ -18,14 +18,21 @@ data class SteeringKeyOwners(
     val splitEnabled: Boolean,
     val splitKey: Int,
     val splitCompanions: Set<Int> = emptySet(),
+    // Fork: the dedicated Yandex Alice voice button (0 = not assigned) and its companion codes.
+    val aliceKey: Int = 0,
+    val aliceCompanions: Set<Int> = emptySet(),
 )
+
+private fun SteeringKeyOwners.isAliceKey(keyCode: Int): Boolean =
+    aliceKey > 0 && (keyCode == aliceKey || keyCode in aliceCompanions)
 
 /**
  * Who owns [keyCode], in SteeringWheelKeyService's own order (voice, knob, projection, split);
  * null = free. The companion codes of the voice and split buttons' presses go to their owner as well.
  */
 fun steeringKeyOwner(keyCode: Int, o: SteeringKeyOwners): SteeringKeyOwner? = when {
-    o.voiceEnabled && (keyCode == o.voiceKey || keyCode in o.voiceCompanions) -> SteeringKeyOwner.VOICE
+    o.voiceEnabled && (keyCode == o.voiceKey || keyCode in o.voiceCompanions || o.isAliceKey(keyCode)) ->
+        SteeringKeyOwner.VOICE
     o.knobEnabled && keyCode in VOLUME_KNOB_PRESS_KEYCODES -> SteeringKeyOwner.KNOB
     o.projectionEnabled && keyCode == o.projectionKey -> SteeringKeyOwner.PROJECTION
     o.splitEnabled && o.splitKey > 0 && (keyCode == o.splitKey || keyCode in o.splitCompanions) ->
@@ -38,7 +45,7 @@ fun steeringKeyOwner(keyCode: Int, o: SteeringKeyOwners): SteeringKeyOwner? = wh
  * feature is on, so switching it on later cannot let its earlier filter stage eat the split key.
  */
 fun splitKeyChooserOwner(keyCode: Int, o: SteeringKeyOwners): SteeringKeyOwner? = when {
-    keyCode == o.voiceKey || keyCode in o.voiceCompanions -> SteeringKeyOwner.VOICE
+    keyCode == o.voiceKey || keyCode in o.voiceCompanions || o.isAliceKey(keyCode) -> SteeringKeyOwner.VOICE
     keyCode in VOLUME_KNOB_PRESS_KEYCODES -> SteeringKeyOwner.KNOB
     keyCode == o.projectionKey -> SteeringKeyOwner.PROJECTION
     else -> null
@@ -49,6 +56,7 @@ fun readSteeringKeyOwners(context: Context): SteeringKeyOwners {
     val clusterPrefs = context.getSharedPreferences(ClusterProjectionManager.PREFS_NAME, Context.MODE_PRIVATE)
     val voicePrefs = context.getSharedPreferences("voice", Context.MODE_PRIVATE)
     val split = SplitPreferencesImpl(context)
+    val alice = voicePrefs.aliceVoiceBinding()
     return SteeringKeyOwners(
         projectionEnabled = clusterPrefs.getBoolean(ClusterProjectionManager.KEY_MIRROR_ENABLED, false),
         projectionKey = clusterPrefs.getInt(ClusterProjectionManager.KEY_TRIGGER_KEYCODE, DEFAULT_TRIGGER_KEYCODE),
@@ -59,5 +67,7 @@ fun readSteeringKeyOwners(context: Context): SteeringKeyOwners {
         splitEnabled = split.isFeatureEnabled(),
         splitKey = split.getSteeringKeyCode(),
         splitCompanions = split.getSteeringKeyCompanions(),
+        aliceKey = alice.primary,
+        aliceCompanions = alice.companions,
     )
 }

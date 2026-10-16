@@ -168,6 +168,10 @@ import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import androidx.compose.material.icons.outlined.Mic
 import com.bydmate.app.cluster.DEFAULT_VOICE_KEYCODE
+import com.bydmate.app.cluster.VoiceButtonBinding
+import com.bydmate.app.cluster.localVoiceBinding
+import com.bydmate.app.cluster.aliceVoiceBinding
+import com.bydmate.app.cluster.LEARN_COMPANION_WINDOW_MS
 import com.bydmate.app.voice.AgentPersona
 import com.bydmate.app.voice.TtsGender
 import com.bydmate.app.voice.TtsVoiceCatalog
@@ -1420,7 +1424,14 @@ private fun DisplaySection() {
                 learning = false
             },
             onDismiss = { learning = false },
-            occupiedReason = splitKeyOccupiedReason(context),
+            occupiedReason = splitKeyOccupiedReason(context).let { splitOccupied ->
+                { code: Int ->
+                    val voicePrefs = context.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                    if (code in (voicePrefs.localVoiceBinding().codes + voicePrefs.aliceVoiceBinding().codes))
+                        context.getString(R.string.automation_steering_key_occupied_voice)
+                    else splitOccupied(code)
+                }
+            },
         )
     }
 
@@ -2152,13 +2163,28 @@ internal fun LearnButtonDialog(
     onDismiss: () -> Unit,
     occupiedReason: (Int) -> String? = { null },
     onSaveWithCompanions: ((Int, Set<Int>) -> Unit)? = null,
+    voiceButton: Boolean = false,
 ) {
     var state by remember { mutableStateOf<LearnUiState>(LearnUiState.Waiting) }
+    // Voice buttons: Save waits until the primary is released plus the companion window, so the
+    // whole press (304 + 327) is captured before it can be saved.
+    var captureReady by remember { mutableStateOf(!voiceButton) }
+    val capture by SteeringWheelKeyService.capturedKey.collectAsState()
+    LaunchedEffect(capture) {
+        if (voiceButton) {
+            captureReady = false
+            if (capture?.primaryReleased == true) {
+                delay(LEARN_COMPANION_WINDOW_MS)
+                captureReady = true
+            }
+        }
+    }
 
     // Clear learn mode AND the captured value on close, so a later reopen can't latch a stale capture.
     DisposableEffect(Unit) {
         onDispose {
             SteeringWheelKeyService.learnMode = false
+            SteeringWheelKeyService.learnVoiceCompanions = false
             SteeringWheelKeyService.capturedKey.value = null
         }
     }
@@ -2168,6 +2194,7 @@ internal fun LearnButtonDialog(
     // stale value left from a previous session — reopening therefore always starts at Waiting.
     LaunchedEffect(Unit) {
         SteeringWheelKeyService.capturedKey.value = null
+        SteeringWheelKeyService.learnVoiceCompanions = voiceButton
         SteeringWheelKeyService.learnMode = true
         SteeringWheelKeyService.capturedKey
             .filterNotNull()
@@ -2243,7 +2270,7 @@ internal fun LearnButtonDialog(
         },
         confirmButton = {
             when (val s = state) {
-                is LearnUiState.Captured -> TextButton(onClick = {
+                is LearnUiState.Captured -> TextButton(enabled = captureReady, onClick = {
                     if (onSaveWithCompanions != null) onSaveWithCompanions(s.keyCode, s.companions)
                     else onSave(s.keyCode)
                 }) {
@@ -4009,6 +4036,7 @@ private fun VoiceSettingsContent(
 
     // Steering-button assignment (reuses LearnButtonDialog from DisplaySection)
     var learningVoiceKey by remember { mutableStateOf(false) }
+    var learningAliceKey by remember { mutableStateOf(false) }
     Card(
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
@@ -4019,21 +4047,45 @@ private fun VoiceSettingsContent(
                 if (state.voiceKeycode == 0) DEFAULT_VOICE_KEYCODE else state.voiceKeycode
             )
             SettingValueRow(
-                title = stringResource(R.string.settings_voice_button_label),
+                title = stringResource(R.string.voice_button_local_label),
                 value = stringResource(R.string.settings_voice_button_current, keyLabel),
                 onClick = { learningVoiceKey = true },
             )
+            SettingValueRow(
+                title = stringResource(R.string.voice_button_alice_label),
+                value = if (state.aliceKeycode == 0) stringResource(R.string.voice_button_not_assigned)
+                    else steeringButtonLabel(state.aliceKeycode),
+                onClick = { learningAliceKey = true },
+            )
+            if (state.aliceKeycode != 0) {
+                TextButton(onClick = { viewModel.saveVoiceButton(VoiceButtonBinding(), true) }) {
+                    Text(stringResource(R.string.voice_button_clear_alice))
+                }
+            }
+            SettingHint(stringResource(R.string.voice_button_assignment_hint))
         }
     }
 
+    val splitOccupied = splitKeyOccupiedReason(context)
     if (learningVoiceKey) {
         LearnButtonDialog(
             onSaveWithCompanions = { code, companions ->
-                viewModel.saveVoiceKeycode(code, companions)
-                learningVoiceKey = false
+                viewModel.saveVoiceButton(VoiceButtonBinding(code, companions), false) { learningVoiceKey = false }
             },
+            occupiedReason = { viewModel.voiceButtonConflict(it, false) ?: splitOccupied(it) },
             onDismiss = { learningVoiceKey = false },
-            occupiedReason = splitKeyOccupiedReason(context),
+            voiceButton = true,
+        )
+    }
+
+    if (learningAliceKey) {
+        LearnButtonDialog(
+            onSaveWithCompanions = { code, companions ->
+                viewModel.saveVoiceButton(VoiceButtonBinding(code, companions), true) { learningAliceKey = false }
+            },
+            occupiedReason = { viewModel.voiceButtonConflict(it, true) ?: splitOccupied(it) },
+            onDismiss = { learningAliceKey = false },
+            voiceButton = true,
         )
     }
 

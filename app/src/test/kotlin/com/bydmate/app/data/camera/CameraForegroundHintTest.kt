@@ -67,7 +67,7 @@ class CameraForegroundHintTest {
     @Test
     fun `hints from our own windows and from the system bars are ignored`() {
         monitor.onForegroundHint(NATIVE_CAMERA, CAMERA_ACTIVITY)
-        monitor.onForegroundHint("com.bydmate.app", "com.bydmate.app.MainActivity")
+        monitor.onForegroundHint(com.bydmate.app.BuildConfig.APPLICATION_ID, "com.bydmate.app.MainActivity")
         monitor.onForegroundHint("com.android.systemui", "android.widget.FrameLayout")
         monitor.onForegroundHint("com.android.inputmethod.latin", "android.inputmethodservice.SoftInputWindow")
         assertTrue(monitor.active.value)

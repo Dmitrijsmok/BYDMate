@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="voice_button_local_label">Botão do assistente local</string>
+    <string name="voice_button_alice_label">Botão da Yandex Alice</string>
+    <string name="voice_button_not_assigned">Não atribuído</string>
+    <string name="voice_button_clear_alice">Remover atribuição da Alice</string>
+    <string name="voice_button_assignment_hint">Sem um botão dedicado à Alice, mantém-se o comportamento de um ou dois toques. Com dois botões, cada um inicia apenas o assistente atribuído. Para atribuir, pressione e solte um botão físico.</string>
+    <string name="voice_button_occupied_automation">Este botão está atribuído a uma automação. Altere primeiro essa atribuição.</string>
+    <string name="voice_button_handoff_failed">Não foi possível confirmar a saída da Alice. Feche a Alice e pressione novamente o botão do assistente local.</string>
+</resources>

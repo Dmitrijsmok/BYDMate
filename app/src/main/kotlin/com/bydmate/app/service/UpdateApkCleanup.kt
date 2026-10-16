@@ -4,7 +4,7 @@ import android.util.Log
 import java.io.File
 
 /**
- * Deletes stale `BYDMate-*.apk` update files left behind in the public Download
+ * Deletes stale `DiLink3Friendly-*.apk` update files left behind in the public Download
  * folder by [UpdateChecker] (and by users downloading release assets by hand).
  * Only versions older than the installed one are removed, so Download doesn't
  * silently fill up over repeated updates; a newer APK the user has not installed
@@ -12,7 +12,7 @@ import java.io.File
  */
 object UpdateApkCleanup {
     private const val TAG = "UpdateApkCleanup"
-    private val NAME_PATTERN = Regex("^BYDMate-v?(\\d+(?:\\.\\d+)*)\\.apk$", RegexOption.IGNORE_CASE)
+    private val NAME_PATTERN = Regex("^DiLink3Friendly-v?(\\d+(?:\\.\\d+)*)\\.apk$", RegexOption.IGNORE_CASE)
     /** Numeric head of the installed version: "3.17.5-test" compares as 3.17.5. */
     private val CURRENT_PATTERN = Regex("^v?(\\d+(?:\\.\\d+)*)")
 
