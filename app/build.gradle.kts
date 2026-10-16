@@ -65,7 +65,7 @@ android {
         val variant = this
         variant.outputs.all {
             val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            output.outputFileName = "DiLink3Friendly-v${variant.versionName}.apk"
+            output.outputFileName = "BYDMate-dilink3-v${variant.versionName}.apk"
         }
     }
 

@@ -67,7 +67,7 @@ awk -v ver="$VER" '
 ' "$CL"
 
 # --- APK SHA-256 for the release notes (AC-12) ---
-APK="$ROOT/app/build/outputs/apk/release/DiLink3Friendly-v$VER.apk"
+APK="$ROOT/app/build/outputs/apk/release/BYDMate-dilink3-v$VER.apk"
 if [ -f "$APK" ]; then
   echo ""
   echo "SHA-256: $(shasum -a 256 "$APK" | cut -d' ' -f1)"
