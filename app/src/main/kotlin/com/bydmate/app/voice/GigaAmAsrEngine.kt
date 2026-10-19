@@ -33,6 +33,7 @@ internal interface VadHandle {
     fun empty(): Boolean
     /** Oldest queued speech segment's samples; caller must pop() after consuming it. */
     fun front(): FloatArray
+    fun frontWithStart(): Pair<Long, FloatArray> = 0L to front()
     fun pop()
     fun close()
 }
@@ -85,6 +86,10 @@ private class RealVadHandle(modelManager: GigaAmModelManager) : VadHandle {
     override fun isSpeechDetected(): Boolean = vad.isSpeechDetected()
     override fun empty(): Boolean = vad.empty()
     override fun front(): FloatArray = vad.front().samples
+    override fun frontWithStart(): Pair<Long, FloatArray> {
+        val segment = vad.front()
+        return segment.start.toLong() to segment.samples
+    }
     override fun pop() = vad.pop()
     override fun close() = vad.release()
 }
@@ -95,7 +100,8 @@ private class RealVadHandle(modelManager: GigaAmModelManager) : VadHandle {
  *  released in transcribe()'s finally block, so neither cancellation nor a second collect can
  *  leak or clobber a VAD handle. With [warmVad] (Android 10 head units) that per-collection VAD
  *  is built ahead of the session instead of on its path, see spareVad. */
-internal class GigaAmAsrEngine(
+@Suppress("TooManyFunctions") // Prewarming and measured transcription share the same native-handle lifecycle.
+internal class GigaAmAsrEngine @Suppress("LongParameterList") constructor(
     private val modelManager: GigaAmModelManager,
     private val recognizerFactory: () -> RecognizerHandle = { RealRecognizerHandle(modelManager) },
     private val vadFactory: () -> VadHandle = { RealVadHandle(modelManager) },
@@ -105,6 +111,7 @@ internal class GigaAmAsrEngine(
     private val prewarmExecutor: Executor = Executor { task ->
         thread(name = "gigaam-vad-prewarm", isDaemon = true) { task.run() }
     },
+    private val preRollMs: () -> Int = { 0 },
 ) : ContinuousAsr {
 
     // A tripped guard means the last loads aborted the whole process from native code
@@ -210,7 +217,9 @@ internal class GigaAmAsrEngine(
     // (even concurrent) collect can never clobber or double-release another collection's VAD.
     // The recognizer is shared (cachedRecognizer above) and deliberately outlives every
     // collection's finally block.
-    override fun transcribe(pcm: Flow<ShortArray>): Flow<ContinuousAsrEvent> = flow {
+    override fun transcribe(pcm: Flow<ShortArray>): Flow<ContinuousAsrEvent> = transcribeMeasured(pcm, null)
+
+    override fun transcribeMeasured(pcm: Flow<ShortArray>, attempt: AsrLabAttempt?): Flow<ContinuousAsrEvent> = flow {
         if (!isReady()) return@flow
         // All builds go through the synchronized obtainRecognizer(): warmUp() (fired from
         // TrackingService/SettingsViewModel outside VoiceController's busy gate) is a second
@@ -229,10 +238,15 @@ internal class GigaAmAsrEngine(
             if (warmVad) prewarmNextVad()
             var speaking = false
             var silentMs = 0L
+            val preRoll = SpeechPreRoll(preRollMs)
             pcm.collect { shorts ->
-                vad.acceptWaveform(FloatArray(shorts.size) { i -> shorts[i] / 32768f })
+                val frame = FloatArray(shorts.size) { i -> shorts[i] / 32768f }
+                vad.acceptWaveform(frame)
+                preRoll.append(frame)
                 if (vad.isSpeechDetected()) {
                     if (!speaking) {
+                        preRoll.speechStart()
+                        attempt?.speechStart(preRoll.selectedMs)
                         speaking = true
                         silentMs = 0L
                         emit(ContinuousAsrEvent.SpeechStart)
@@ -242,11 +256,14 @@ internal class GigaAmAsrEngine(
                     emit(ContinuousAsrEvent.SilenceTick(silentMs))
                 }
                 while (!vad.empty()) {
-                    val segment = vad.front()
+                    val (segmentStart, segment) = vad.frontWithStart()
                     vad.pop()
                     speaking = false
-                    val text = recognizer.decode(segment)
-                    if (text.isNotBlank()) emit(ContinuousAsrEvent.Utterance(text))
+                    val samples = preRoll.finish(segmentStart, segment)
+                    attempt?.decodeStart(segmentStart, segment.size, samples.size)
+                    val text = recognizer.decode(samples)
+                    attempt?.decoded(text)
+                    if (text.isNotBlank() || attempt != null) emit(ContinuousAsrEvent.Utterance(text))
                 }
             }
         } finally {

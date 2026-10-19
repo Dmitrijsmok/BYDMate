@@ -308,6 +308,7 @@ fun AppNavigation(
             composable(Screen.Automation.route) { AutomationScreen() }
             composable(Screen.Settings.route) {
                 SettingsScreen(
+                    onNavigateToAsrLab = { navController.navigate("asr_lab") },
                     onNavigateToAgentChat = { navController.navigate("agent_chat") },
                     onNavigateToVoiceJournal = { navController.navigate("voice_journal") },
                     onNavigateToVoiceUserPhrases = { navController.navigate("voice_user_phrases") },
@@ -334,6 +335,9 @@ fun AppNavigation(
             }
             composable("voice_journal") {
                 com.bydmate.app.ui.debug.VoiceJournalScreen(onBack = { navController.popBackStack() })
+            }
+            composable("asr_lab") {
+                com.bydmate.app.ui.debug.AsrLabScreen(onBack = { navController.popBackStack() })
             }
             composable("voice_user_phrases") {
                 com.bydmate.app.ui.settings.VoiceUserPhrasesScreen(onBack = { navController.popBackStack() })

@@ -19,6 +19,7 @@ interface ContinuousAsr {
     fun requiresWarmBeforeListening(): Boolean = false
     /** Cold flow: collecting consumes pcm frames (16kHz ShortArray), cancelling stops. */
     fun transcribe(pcm: Flow<ShortArray>): Flow<ContinuousAsrEvent>
+    fun transcribeMeasured(pcm: Flow<ShortArray>, attempt: AsrLabAttempt?): Flow<ContinuousAsrEvent> = transcribe(pcm)
     /** Pre-build the recognizer ahead of the first PTT so its cold model load doesn't
      *  delay transcribe(). Default no-op so fakes/tests don't need to implement it. */
     fun warmUp() {}

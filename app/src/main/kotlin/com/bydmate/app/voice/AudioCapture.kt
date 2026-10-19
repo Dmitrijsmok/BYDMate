@@ -63,7 +63,11 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
     // [mark] runs on the capture thread right after each read, with the samples just read, so it
     // describes the moment the audio was captured -- frames can wait in the channel while the
     // consumer blocks (a decode).
-    fun <T> captureSession(maxMs: Long = 8000, mark: (ShortArray) -> T): Flow<MicFrame<T>> = callbackFlow {
+    fun <T> captureSession(maxMs: Long = 8000, mark: (ShortArray) -> T): Flow<MicFrame<T>> =
+        captureSessionObserved(maxMs, null, mark)
+
+    fun <T> captureSessionObserved(maxMs: Long, attempt: AsrLabAttempt?, mark: (ShortArray) -> T): Flow<MicFrame<T>> = callbackFlow {
+        attempt?.opening()
         val minBuf = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         ).coerceAtLeast(SAMPLE_RATE) // ~0.5s
@@ -90,6 +94,7 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
         try {
             audioManager.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
             record.startRecording()
+            attempt?.ready()
         } catch (t: Throwable) {
             runCatching { record.release() }
             runCatching { audioManager.abandonAudioFocus(null) }
@@ -104,7 +109,10 @@ class AudioCapture(private val audioManager: AudioManager, private val prefs: Sh
             try {
                 while (!isClosedForSend) {
                     val n = record.read(buf, 0, buf.size)
-                    if (n > 0) buf.copyOf(n).let { pcm -> trySend(MicFrame(pcm, mark(pcm))) }
+                    if (n > 0) {
+                        attempt?.firstPcm()
+                        buf.copyOf(n).let { pcm -> trySend(MicFrame(pcm, mark(pcm))) }
+                    }
                     if ((System.nanoTime() - start) / 1_000_000 >= maxMs) break
                 }
             } finally {

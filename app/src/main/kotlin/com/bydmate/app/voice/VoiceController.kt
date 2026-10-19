@@ -75,6 +75,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
 
     private val busy = AtomicBoolean(false)
     @Volatile private var sessionJob: Job? = null
+    @Volatile private var labActive = false
     // Android 10 head units: the press is waiting for the ASR warm-up (startContinuousSessionWhenWarm).
     @Volatile private var warmupJob: Job? = null
     @Volatile private var routingJob: Job? = null
@@ -243,7 +244,9 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
      *  model is ready, whatever the app language: voice is always Russian), else report the
      *  missing model without starting a session (#87); a continuous session already listening
      *  -> stop it immediately (barge-in stops TTS too). */
+    @Synchronized
     fun onPttPressed() {
+        if (labActive) return
         val ptt = Trace.event(TraceArea.USER, "ptt", "listening" to _listening.value)
         if (!gate.isEnabled()) {
             Trace.event(TraceArea.VOICE, "ptt-ignored", "reason" to "voice-off", by = ptt)
@@ -285,6 +288,22 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             busy.set(false)
             scheduleIdleReset()
             scope.launch { announce("Голос", msg, msg) }
+        }
+    }
+
+    suspend fun runAsrLab(attempt: AsrLabAttempt): AsrLabResult {
+        val reserved = synchronized(this) {
+            if (warmupJob?.isActive == true || !busy.compareAndSet(false, true)) false else {
+                labActive = true
+                true
+            }
+        }
+        if (!reserved) return attempt.result("voice session busy")
+        return try {
+            runRecognitionOnly(audioCapture, continuousAsr, attempt)
+        } finally {
+            labActive = false
+            busy.set(false)
         }
     }
 

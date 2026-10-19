@@ -33,6 +33,7 @@ class LegacyHeadUnitBranchesTest {
     private fun productionAsr() = VoiceModule.provideContinuousAsr(
         mockk<GigaAmModelManager>(relaxed = true).also { every { it.isReady() } returns true },
         AsrLoadGuard(ApplicationProvider.getApplicationContext<android.content.Context>()),
+        com.bydmate.app.voice.AsrLabStore(ApplicationProvider.getApplicationContext()),
     )
 
     private fun trackRoute(): String {

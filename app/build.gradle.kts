@@ -24,14 +24,15 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.bydmate.app"
+        applicationId = "com.bydmate.dilink3.app"
         minSdk = 29
         // targetSdk 29 matches TripInfo — grants full legacy file access
         // on DiLink Android 12 (requestLegacyExternalStorage works).
         // targetSdk 30+ would break listFiles() on /storage/emulated/0/energydata/
         targetSdk = 29
-        versionCode = 508
-        versionName = "4.0.1"
+        versionCode = 100002
+        versionName = "4.0.1-asr-lab.1"
+        buildConfigField("String", "ASR_LAB_BASELINE", "\"b47ead7fc9f0741ed2d4b2ff61a785da337f0500\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -65,7 +66,7 @@ android {
         val variant = this
         variant.outputs.all {
             val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            output.outputFileName = "BYDMate-v${variant.versionName}.apk"
+            output.outputFileName = "BYDMate-dilink3-v${variant.versionName}.apk"
         }
     }
 

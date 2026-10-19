@@ -55,8 +55,8 @@ object VoiceModule {
         AsrLoadGuard(ctx.getSharedPreferences("tts_load_guard", Context.MODE_PRIVATE))
 
     @Provides @Singleton
-    fun provideContinuousAsr(mm: GigaAmModelManager, guard: AsrLoadGuard): ContinuousAsr =
-        GigaAmAsrEngine(mm, loadGuard = guard, warmVad = LegacyHeadUnit.isAndroid10)
+    fun provideContinuousAsr(mm: GigaAmModelManager, guard: AsrLoadGuard, lab: AsrLabStore): ContinuousAsr =
+        GigaAmAsrEngine(mm, loadGuard = guard, warmVad = LegacyHeadUnit.isAndroid10, preRollMs = { lab.selectedMs.value })
 
     @Provides @Singleton
     fun provideRuStressMarker(mm: TtsModelManager): RuStressMarker =

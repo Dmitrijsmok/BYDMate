@@ -200,6 +200,7 @@ fun SettingsScreen(
     onNavigateToVoiceJournal: () -> Unit = {},
     onNavigateToVoiceUserPhrases: () -> Unit = {},
     onNavigateToTariffPeriods: () -> Unit = {},
+    onNavigateToAsrLab: () -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
@@ -260,6 +261,8 @@ fun SettingsScreen(
         )
 
         Spacer(modifier = Modifier.height(12.dp))
+
+        TextButton(onClick = onNavigateToAsrLab) { Text("ASR Lab · SpeechPreRoll") }
 
         var selected by rememberSaveable { mutableStateOf(SettingsSection.VOICE) }
         val hiddenSelected = selected == SettingsSection.SMART_HOME
