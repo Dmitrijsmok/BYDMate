@@ -104,12 +104,17 @@ class AsrLabSafetyTest {
     }
 
     @Test fun `normal listening keeps microphone ownership when the lab requests a test`() = runBlocking {
+        val started = CompletableDeferred<Unit>()
         val asr = object : ContinuousAsr {
             override fun isReady() = true
-            override fun transcribe(pcm: Flow<ShortArray>) = flow<ContinuousAsrEvent> { awaitCancellation() }
+            override fun transcribe(pcm: Flow<ShortArray>) = flow<ContinuousAsrEvent> {
+                started.complete(Unit)
+                awaitCancellation()
+            }
         }
         val voice = controller(asr)
         voice.onPttPressed()
+        withTimeout(5000) { started.await() }
         assertTrue(voice.listening.value)
         assertEquals("voice session busy", voice.runAsrLab(AsrLabAttempt(0)).error)
         verify(exactly = 0) { capture.captureSessionObserved(any(), any(), any<(ShortArray) -> Unit>()) }
