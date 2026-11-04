@@ -1674,6 +1674,21 @@ class AgentTools @Inject constructor(
     /** Per-command options of a route: «поехали» vs «построй маршрут», and which map app. */
     private data class NavOptions(val go: Boolean = false, val app: String = "")
 
+    /**
+     * Entry points of the Alice bridge: the same navigation engine as navigate_to / search_on_map /
+     * show_on_map (places, Home/Work, geocoding, the navigator choice and its fallback), with no LLM
+     * involved. [app] is a RouteNavigatorUris id or blank for the app chosen in settings. Each
+     * returns the tool's JSON result.
+     */
+    internal suspend fun navigateDirect(destination: String, go: Boolean, app: String): String =
+        navigateTo(JSONObject().put("destination", destination).put("go", go).putApp(app))
+
+    internal suspend fun searchMapDirect(query: String, app: String): String =
+        searchOnMap(JSONObject().put("query", query).putApp(app))
+
+    internal suspend fun showPointDirect(destination: String, app: String): String =
+        showPointOnMap(JSONObject().put("destination", destination).putApp(app))
+
     private suspend fun navigateTo(args: JSONObject): String {
         val destination = args.optString("destination").trim()
         // «поехали туда» vs «построй маршрут»: only the first one lets us press «Поехали».

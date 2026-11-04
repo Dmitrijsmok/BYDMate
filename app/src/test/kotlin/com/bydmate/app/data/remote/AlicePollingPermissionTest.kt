@@ -1,5 +1,6 @@
 package com.bydmate.app.data.remote
 
+import com.bydmate.app.agent.AgentTools
 import com.bydmate.app.data.automation.ActionDispatcher
 import com.bydmate.app.data.automation.DispatchResult
 import com.bydmate.app.data.local.entity.ActionDef
@@ -39,6 +40,7 @@ class AlicePollingPermissionTest {
     private val actionDispatcher = mockk<ActionDispatcher>(relaxed = true)
     private val aperture = mockk<AliceApertureController>(relaxed = true)
     private val apps = mockk<AliceAppActionDispatcher>(relaxed = true)
+    private val agentTools = mockk<AgentTools>(relaxed = true)
     private val loop = mockk<SharedAdaptiveLoop>()
     private lateinit var manager: AlicePollingManager
 
@@ -70,6 +72,8 @@ class AlicePollingPermissionTest {
         every { loop.flow } returns MutableSharedFlow()
         coEvery { actionDispatcher.dispatch(any(), any()) } returns DispatchResult(true)
         coEvery { aperture.positionWindow(any(), any(), any()) } returns Result.success(Unit)
+        coEvery { agentTools.navigateDirect(any(), any(), any()) } returns """{"ok":true,"mode":"route"}"""
+        coEvery { agentTools.searchMapDirect(any(), any()) } returns """{"error":"не получилось открыть Навигатор"}"""
     }
 
     @After fun tearDown() {
@@ -83,7 +87,7 @@ class AlicePollingPermissionTest {
     }
 
     private fun runOnce(): Map<String, JSONObject> {
-        manager = AlicePollingManager(OkHttpClient(), settings, loop, AliceBridgeExecutor(actionDispatcher, aperture, apps))
+        manager = AlicePollingManager(OkHttpClient(), settings, loop, AliceBridgeExecutor(actionDispatcher, aperture, apps, dagger.Lazy { agentTools }))
         manager.start()
         val ack = acks.poll(10, TimeUnit.SECONDS)
         assertNotNull("the worker got no ack", ack)
@@ -104,7 +108,7 @@ class AlicePollingPermissionTest {
             assertEquals(id, AliceBridgeRouter.NAVIGATION_DISABLED, results.getValue(id).getString("error"))
         }
         coVerify(exactly = 0) { actionDispatcher.dispatch(any(), any()) }
-        confirmVerified(actionDispatcher, aperture, apps)
+        confirmVerified(actionDispatcher, aperture, apps, agentTools)
     }
 
     @Test fun `with vehicle control on the commands run as gated ActionDispatcher steps`() {
@@ -119,5 +123,16 @@ class AlicePollingPermissionTest {
         coVerify { actionDispatcher.dispatch(ActionDef("车门解锁", "Alice", "param"), any()) }
         // Percentages go to the closed-loop controller with a direct speed read.
         coVerify { aperture.positionWindow("window.driver.position", 40, any()) }
+    }
+
+    @Test fun `with navigation on routes reach the navigation engine and vehicle commands stay refused`() {
+        permissions(vehicle = false, navigation = true)
+        val results = runOnce()
+
+        assertEquals(true, results.getValue("n1").getBoolean("success"))
+        assertEquals("не получилось открыть Навигатор", results.getValue("n2").getString("error"))
+        assertEquals(AliceBridgeRouter.VEHICLE_CONTROL_DISABLED, results.getValue("v1").getString("error"))
+        coVerify { agentTools.navigateDirect("Рига", false, "") }
+        coVerify(exactly = 0) { actionDispatcher.dispatch(any(), any()) }
     }
 }

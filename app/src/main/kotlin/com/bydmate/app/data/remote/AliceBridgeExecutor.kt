@@ -1,5 +1,6 @@
 package com.bydmate.app.data.remote
 
+import com.bydmate.app.agent.AgentTools
 import com.bydmate.app.data.automation.ActionDispatcher
 import com.bydmate.app.data.automation.DispatchResult
 import com.bydmate.app.data.local.entity.ActionDef
@@ -12,13 +13,15 @@ import javax.inject.Singleton
  * is an ActionDispatcher "param" step, so the bridge gets the same allowlist, safety and speed
  * gates as an automation (speed-gated commands on a direct speed read, fail-closed); on top of
  * them the rear trunk opens only at a known standstill. Window and sunroof percentages go to
- * [AliceApertureController], which gates its opening moves on the same direct read.
+ * [AliceApertureController], which gates its opening moves on the same direct read; routes,
+ * map search and points go to the agent's navigation engine directly.
  */
 @Singleton
 class AliceBridgeExecutor @Inject constructor(
     private val actionDispatcher: ActionDispatcher,
     private val apertureController: AliceApertureController,
     private val appDispatcher: AliceAppActionDispatcher,
+    private val agentTools: dagger.Lazy<AgentTools>,
 ) : AliceBridgeActions {
 
     /** The latest poll of the car, fed by [AlicePollingManager]. */
@@ -33,8 +36,20 @@ class AliceBridgeExecutor @Inject constructor(
         return dispatchCommands(listOf(vehicleCommand))
     }
 
-    override suspend fun navigation(command: AliceBridgeCommand): Result<Unit> =
-        AliceBridgeRouter.failure(AliceBridgeRouter.UNSUPPORTED_ACTION)
+    /** Route, map search, point: the agent's navigation engine called directly, no LLM. */
+    override suspend fun navigation(command: AliceBridgeCommand): Result<Unit> {
+        val request = AliceLocalCommandRouter.navigationRequest(command.action, command.text)
+            ?: return AliceBridgeRouter.failure("missing_navigation_target")
+        val tools = agentTools.get()
+        val response = when (request.mode) {
+            AliceNavigationRequest.Mode.ROUTE -> tools.navigateDirect(request.target, request.go, request.app)
+            AliceNavigationRequest.Mode.SEARCH -> tools.searchMapDirect(request.target, request.app)
+            AliceNavigationRequest.Mode.SHOW -> tools.showPointDirect(request.target, request.app)
+        }
+        val json = runCatching { JSONObject(response) }.getOrNull()
+        return if (json?.optBoolean("ok", false) == true) Result.success(Unit)
+        else AliceBridgeRouter.failure((json?.opt("error") as? String)?.takeIf(String::isNotBlank) ?: "navigation_failed")
+    }
 
     override suspend fun app(command: AliceBridgeCommand): Result<Unit> = appDispatcher.app(command, latestData)
 

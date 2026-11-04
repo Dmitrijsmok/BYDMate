@@ -69,4 +69,36 @@ class AlicePollingManagerRoutingTest {
             AliceLocalCommandRouter.planVehicleText("сделай теплее", acTemp = null),
         )
     }
+
+    @Test
+    fun `navigation payloads of the worker`() {
+        assertEquals(
+            AliceNavigationRequest(AliceNavigationRequest.Mode.ROUTE, "Дом", go = true, app = "waze"),
+            AliceLocalCommandRouter.navigationRequest(
+                "navigation.route", """{"destination":"Дом","go":true,"app":"waze"}""",
+            ),
+        )
+        assertEquals(
+            AliceNavigationRequest(AliceNavigationRequest.Mode.SEARCH, "заправка"),
+            AliceLocalCommandRouter.navigationRequest("navigation.search", """{"query":"заправка","app":""}"""),
+        )
+        assertEquals(
+            AliceNavigationRequest(AliceNavigationRequest.Mode.SHOW, "Минск", app = "google_maps"),
+            AliceLocalCommandRouter.navigationRequest(
+                "navigation.show", """{"destination":"Минск","go":true,"app":"Google_Maps"}""",
+            ),
+        )
+        // Plain text is the destination itself; an unknown app falls back to the chosen one.
+        assertEquals(
+            AliceNavigationRequest(AliceNavigationRequest.Mode.ROUTE, "аэропорт"),
+            AliceLocalCommandRouter.navigationRequest("navigation.route", "аэропорт"),
+        )
+        assertEquals(
+            AliceNavigationRequest(AliceNavigationRequest.Mode.ROUTE, "Рига"),
+            AliceLocalCommandRouter.navigationRequest("navigation.route", """{"destination":"Рига","app":"here"}"""),
+        )
+        assertNull(AliceLocalCommandRouter.navigationRequest("navigation.search", """{"destination":"Рига"}"""))
+        assertNull(AliceLocalCommandRouter.navigationRequest("navigation.route", " "))
+        assertNull(AliceLocalCommandRouter.navigationRequest("navigation.cluster_on", "x"))
+    }
 }

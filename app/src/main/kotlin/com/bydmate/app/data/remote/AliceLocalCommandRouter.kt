@@ -1,7 +1,10 @@
 package com.bydmate.app.data.remote
 
+import com.bydmate.app.data.automation.RouteNavigatorUris
 import com.bydmate.app.voice.NluParser
 import com.bydmate.app.voice.ParseResult
+import org.json.JSONObject
+import java.util.Locale
 
 /** What a free-text `vehicle.command` from Alice turns into, decided without an LLM. */
 internal sealed interface AliceTextPlan {
@@ -15,6 +18,12 @@ internal sealed interface AliceTextPlan {
     data class OpenNavigator(val app: String?) : AliceTextPlan
 
     data class Failed(val reason: String) : AliceTextPlan
+}
+
+/** A navigation.route / .search / .show command: [target] is the destination or the query, [app] a
+ *  RouteNavigatorUris id or blank for the app chosen in settings. */
+internal data class AliceNavigationRequest(val mode: Mode, val target: String, val go: Boolean = false, val app: String = "") {
+    enum class Mode { ROUTE, SEARCH, SHOW }
 }
 
 /**
@@ -41,6 +50,28 @@ internal object AliceLocalCommandRouter {
     )
 
     fun isNavigationAction(action: String): Boolean = action in navigationTextActions
+
+    /**
+     * The worker sends the navigation payload as JSON in `text` ({"destination", "go", "app"} or
+     * {"query", "app"}); plain text is the destination / query itself. Null when there is nothing
+     * to go to or the action is not a navigation one.
+     */
+    fun navigationRequest(action: String, text: String): AliceNavigationRequest? {
+        val mode = when (action) {
+            "navigation.route" -> AliceNavigationRequest.Mode.ROUTE
+            "navigation.search" -> AliceNavigationRequest.Mode.SEARCH
+            "navigation.show" -> AliceNavigationRequest.Mode.SHOW
+            else -> return null
+        }
+        val payload = text.trim().takeIf { it.startsWith("{") }?.let { runCatching { JSONObject(it) }.getOrNull() }
+        val key = if (mode == AliceNavigationRequest.Mode.SEARCH) "query" else "destination"
+        val target = (if (payload != null) (payload.opt(key) as? String).orEmpty() else text).trim()
+        if (target.isEmpty()) return null
+        val app = (payload?.opt("app") as? String).orEmpty().trim().lowercase(Locale.ROOT)
+            .takeIf { it in RouteNavigatorUris.ALL }.orEmpty()
+        val go = mode == AliceNavigationRequest.Mode.ROUTE && payload?.optBoolean("go", false) == true
+        return AliceNavigationRequest(mode, target, go, app)
+    }
 
     /** The BYDMate agent answers questions about the car only; the rest stays with Alice. */
     fun isAutomotiveAgentQuery(prompt: String): Boolean {
