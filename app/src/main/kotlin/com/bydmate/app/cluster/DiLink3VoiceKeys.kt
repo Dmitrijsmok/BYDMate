@@ -7,14 +7,24 @@ package com.bydmate.app.cluster
 /**
  * Double-press shortcut while Local BYDMate is selected. Hold the first press briefly instead
  * of starting Local immediately. A second DOWN edge cancels the pending Local start and routes
- * directly to Alice, so the two providers never compete for the microphone.
+ * directly to Alice, so the two providers never compete for the microphone. 400 ms: a relaxed
+ * double press on the wheel is 300-400 ms apart (field 1.1.1: four presses, none a double at
+ * 250 ms); Local starts that much later, so no longer than this.
  */
-const val VOICE_DOUBLE_PRESS_WINDOW_MS = 250L
+const val VOICE_DOUBLE_PRESS_WINDOW_MS = 400L
 
 fun isVoiceDoublePress(previousDownMs: Long, nowMs: Long): Boolean =
     previousDownMs > 0L &&
         nowMs >= previousDownMs &&
         nowMs - previousDownMs <= VOICE_DOUBLE_PRESS_WINDOW_MS
+
+/**
+ * How long after [nowMs] Local may start for a press that went down at [downMs] (both on the
+ * key events' uptime clock): the rest of the double-press window, never less than 0. A press the
+ * service handles late (a slow window lookup ahead of it) does not wait the whole window again.
+ */
+fun localVoiceStartDelayMs(downMs: Long, nowMs: Long): Long =
+    (VOICE_DOUBLE_PRESS_WINDOW_MS - (nowMs - downMs)).coerceIn(0L, VOICE_DOUBLE_PRESS_WINDOW_MS)
 
 /**
  * DiLink 3 / Android 10 microphone key path observed in the field. The firmware emits 304 for
