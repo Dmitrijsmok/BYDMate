@@ -553,7 +553,7 @@ class VoiceControllerSessionTest {
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
 
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
 
         awaitTrue { controller.state.value == VoiceUiState.AgentAnswer("Уточните, пожалуйста") }
         assertTrue(controller.listening.value)
@@ -596,7 +596,7 @@ class VoiceControllerSessionTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
 
         awaitVerify { coVerify(exactly = 1) { automationEngine.fireVoiceRule(42L, null) } }
         assertTrue(controller.listening.value)
@@ -794,7 +794,7 @@ class VoiceControllerSessionTest {
         awaitSubscribed(rawFrames)
         awaitSubscribed(fakeAsr.events)
 
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         // Wait for agentFallback()'s Answer branch to actually run and stamp lastSpeakingSeenMs
         // at call time -- audible stays false throughout, so this can only be the call-time
         // stamp, never the per-frame one.
@@ -852,7 +852,7 @@ class VoiceControllerSessionTest {
         awaitSubscribed(rawFrames)
         awaitSubscribed(fakeAsr.events)
 
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         // Once speak() (which returned false) has been invoked, the surrounding conditional has
         // already been evaluated synchronously in the same statement -- no separate wait needed
         // for the stamp decision itself.
@@ -863,7 +863,7 @@ class VoiceControllerSessionTest {
         awaitTrue { fakeAsr.recordedFrames.isNotEmpty() }
         awaitTrue { controller.routingJobForTest() == null }
         fakeAsr.events.tryEmit(ContinuousAsrEvent.SpeechStart)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         awaitVerify { coVerify(exactly = 2) { agentOrchestrator.ask(any(), any(), any()) } }
     }
 

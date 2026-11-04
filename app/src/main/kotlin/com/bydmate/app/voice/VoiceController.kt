@@ -677,7 +677,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         // AgentOrchestrator.expectsFollowUp.
         val followUp = runCatching { agentOrchestrator.expectsFollowUp() }.getOrDefault(false)
         val res = if (followUp) Resolution.None(VoiceRefusal.AGENT_FOLLOWUP_WINDOW) else resolve(command)
-        if (!followUp && res is Resolution.None && routeLocally(command, decodeMs)) return
+        if (!followUp && res is Resolution.None && routeLocally(command, decodeMs, res.reason)) return
         heard(decodeMs, res.route, (res as? Resolution.None)?.reason)
         _state.value = VoiceUiState.Thinking
         when (res) {
@@ -695,8 +695,11 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
      * table the agent and Alice share ([localAppLaunch]). Anything else, ambiguous included,
      * continues to the agent path. True when one of them ran.
      */
-    private suspend fun routeLocally(command: String, decodeMs: Long): Boolean {
-        val localReply = LocalVehicleQuery.answer(command, gate.vehicleSnapshot())
+    private suspend fun routeLocally(command: String, decodeMs: Long, reason: String): Boolean {
+        // A built-in car question whose value is unknown or stale (VALUE_UNKNOWN) was handed to
+        // the agent on purpose; the fork's fallback only covers phrases the dictionary missed.
+        val localReply = if (reason == VoiceRefusal.VALUE_UNKNOWN) null
+            else LocalVehicleQuery.answer(command, gate.vehicleSnapshot())
         if (localReply != null) {
             heard(decodeMs, "local_query")
             _state.value = VoiceUiState.Thinking

@@ -115,11 +115,11 @@ class VoiceControllerAgentFallbackTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         Thread.sleep(500)
 
         assertEquals(VoiceUiState.AgentAnswer("Заряд 80%"), controller.state.value)
-        coVerify(exactly = 1) { agentOrchestrator.ask("навигатор", any(), any()) }
+        coVerify(exactly = 1) { agentOrchestrator.ask("расскажи анекдот", any(), any()) }
         assertEquals(1, presentedCount.get())
         assertEquals("Заряд 80%", presentedText.get())
     }
@@ -133,10 +133,10 @@ class VoiceControllerAgentFallbackTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         Thread.sleep(500)
 
-        assertEquals(VoiceUiState.NotUnderstood("навигатор"), controller.state.value)
+        assertEquals(VoiceUiState.NotUnderstood("расскажи анекдот"), controller.state.value)
     }
 
     @Test fun `agent Error maps to Blocked with the agent message`() {
@@ -149,7 +149,7 @@ class VoiceControllerAgentFallbackTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         Thread.sleep(500)
 
         assertEquals(VoiceUiState.Blocked("нет сети"), controller.state.value)
@@ -201,7 +201,7 @@ class VoiceControllerAgentFallbackTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         Thread.sleep(500)
 
         verify { ttsEngine.speak("ответ") }
@@ -224,7 +224,7 @@ class VoiceControllerAgentFallbackTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         Thread.sleep(500)
 
         verify(exactly = 0) { ttsEngine.speak(any()) }
@@ -248,7 +248,7 @@ class VoiceControllerAgentFallbackTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         Thread.sleep(500)
 
         val entry = journal.entries.value.first()
@@ -278,7 +278,7 @@ class VoiceControllerAgentFallbackTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         Thread.sleep(500)
 
         val entry = journal.entries.value.first()
@@ -299,7 +299,7 @@ class VoiceControllerAgentFallbackTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         Thread.sleep(500)
 
         val entry = journal.entries.value.first()
@@ -321,7 +321,7 @@ class VoiceControllerAgentFallbackTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         Thread.sleep(500)
 
         assertEquals(1, answerCount.get())
@@ -341,7 +341,7 @@ class VoiceControllerAgentFallbackTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         Thread.sleep(500)
 
         assertEquals(1, answerCount.get())
@@ -413,7 +413,7 @@ class VoiceControllerAgentFallbackTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         Thread.sleep(500)
 
         verify { queue.enqueue("Первое.") }
@@ -436,7 +436,7 @@ class VoiceControllerAgentFallbackTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         Thread.sleep(500)
 
         verify { ttsEngine.speak("Ответ.") }
@@ -461,7 +461,7 @@ class VoiceControllerAgentFallbackTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         Thread.sleep(500)
 
         // The queue never started, so the turn must not go silent: legacy speak() takes over.
@@ -489,7 +489,7 @@ class VoiceControllerAgentFallbackTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         Thread.sleep(500)
 
         assertEquals(listOf("Первое.", "Первое. Второе."), answerHookCalls)
