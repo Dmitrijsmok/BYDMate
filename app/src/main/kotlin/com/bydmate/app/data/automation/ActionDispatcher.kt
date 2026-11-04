@@ -1241,9 +1241,10 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         val payload = parsePayload(action.payload)
         val pkg = payload?.optString("packageName")?.takeIf(String::isNotBlank)
             ?: return DispatchResult(false, appStrings.get(R.string.dispatch_package_missing))
-        if (context.packageManager.getLaunchIntentForPackage(pkg) == null) {
-            return DispatchResult(false, appStrings.get(R.string.dispatch_app_not_installed, pkg))
-        }
+        // Not only getLaunchIntentForPackage: a vendor or ReVanced build can have none and still
+        // open (fork 96251b23). Nothing that opens at all is still "not installed".
+        val intent = openIntentFor(pkg)
+            ?: return DispatchResult(false, appStrings.get(R.string.dispatch_app_not_installed, pkg))
         // Authoritative launch via the shell-uid daemon (am start): a startActivity from
         // this @ApplicationContext can lose the foreground race when BYDMate is on top
         // (e.g. a voice session started from the Settings screen), so the launched app
@@ -1253,11 +1254,28 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
             maybeMinimize(payload)
             return DispatchResult(true)
         }
-        val intent = context.packageManager.getLaunchIntentForPackage(pkg)!!
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val result = tryStartActivity(intent, "app_launch:$pkg")
+        val result = tryStartActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), "app_launch:$pkg")
         if (result.success) maybeMinimize(payload)
         return result
+    }
+
+    /**
+     * What opens [pkg]: its launch intent, else a launcher activity of the package found by
+     * queryIntentActivities, else its main activity; null when the package has none of them (not
+     * installed, or nothing to open).
+     */
+    private fun openIntentFor(pkg: String): Intent? {
+        val pm = context.packageManager
+        runCatching { pm.getLaunchIntentForPackage(pkg) }.getOrNull()?.let { return it }
+        fun main(category: String?): Intent = Intent(Intent.ACTION_MAIN).also { if (category != null) it.addCategory(category) }
+        fun activity(category: String?): Intent? {
+            val probe = main(category).setPackage(pkg)
+            val name = runCatching { pm.queryIntentActivities(probe, 0) }.getOrNull()
+                ?.firstNotNullOfOrNull { info -> info.activityInfo?.takeIf { it.packageName == pkg }?.name }
+                ?: return null
+            return main(category).setClassName(pkg, name)
+        }
+        return activity(Intent.CATEGORY_LAUNCHER) ?: activity(null)
     }
 
     /**
@@ -1734,8 +1752,8 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         return result
     }
 
-    private fun isPackageInstalled(pkg: String): Boolean =
-        context.packageManager.getLaunchIntentForPackage(pkg) != null
+    // Like app_launch: a build without a standard launch intent still counts when it opens.
+    private fun isPackageInstalled(pkg: String): Boolean = openIntentFor(pkg) != null
 
     private fun goHome(): DispatchResult {
         val home = Intent(Intent.ACTION_MAIN)
