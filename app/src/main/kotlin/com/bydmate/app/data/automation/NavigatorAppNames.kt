@@ -21,6 +21,9 @@ object NavigatorAppNames {
     fun of(name: String): String? =
         NAMES[name.trim().lowercase(Locale.ROOT).replace('ё', 'е').replace(WHITESPACE, " ")]
 
+    /** The names that mean [navigator] ([DEFAULT] or a [RouteNavigatorUris] id), for Settings. */
+    fun namesOf(navigator: String): List<String> = NAMES.filterValues { it == navigator }.keys.toList()
+
     private val WHITESPACE = Regex("\\s+")
 
     private val NAMES: Map<String, String> = buildMap {

@@ -14,7 +14,7 @@ import javax.inject.Singleton
 /**
  * App launches, the cluster projection and media from the Alice bridge, all through
  * ActionDispatcher: app_launch (shell-first), openNavigatorApp (the navigation-app table and
- * resolver the local assistant uses), cluster_projection, media_key / media_volume, and the
+ * resolver the local assistant uses), system_settings, cluster_projection, media_key / media_volume, and the
  * session-targeted [ActionDispatcher.dispatchMediaTransport] (no global media key).
  */
 @Singleton
@@ -38,6 +38,9 @@ class AliceAppActionDispatcher @Inject constructor(
         return when (target) {
             is AliceAppTarget.Navigator -> dispatcher.openNavigatorApp(target.navigator).asResult()
             AliceAppTarget.Self -> launch(context.packageName, data)
+            is AliceAppTarget.Settings -> dispatcher.dispatch(
+                ActionDef("", ALICE, "system_settings", JSONObject().put("section", target.section).toString()), data,
+            ).asResult()
             is AliceAppTarget.App -> {
                 val pkg = appResolver.resolve(target).getOrElse { return Result.failure(it) }
                 launch(pkg, data)

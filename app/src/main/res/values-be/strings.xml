@@ -1939,6 +1939,7 @@
     <string name="dispatch_volume_invalid">Некарэктны ўзровень гучнасці: %1$s</string>
     <string name="dispatch_package_missing">packageName не зададзены</string>
     <string name="dispatch_app_not_installed">Праграма не ўсталявана: %1$s</string>
+    <string name="dispatch_settings_section_unknown">Невядомы раздзел налад: %1$s</string>
     <string name="dispatch_app_close_self">BYDMate не закрывае сам сябе</string>
     <string name="dispatch_app_close_failed">Не ўдалося закрыць праграму: %1$s</string>
     <string name="dispatch_media_no_session">Няма запушчанага плэера</string>
@@ -2362,7 +2363,7 @@
     <string name="settings_alice_last_command_none">Каманд ад Алісы яшчэ не было</string>
     <string name="settings_alice_refresh">Абнавіць</string>
     <string name="settings_voice_app_matches_title">Праграмы галасавых каманд</string>
-    <string name="settings_voice_app_matches_desc">Паказвае, якую ўсталяваную праграму BYDMate знайшоў для кожнай каманды Алісы.</string>
+    <string name="settings_voice_app_matches_desc">Паказвае, якая ўсталяваная праграма адкрыецца на кожную назву і каманду. Табліца адна для лакальнага памочніка і для Алісы.</string>
     <string name="settings_voice_app_matches_button">Паказаць</string>
     <string name="settings_voice_app_matches_dialog_title">Супадзенні праграм</string>
     <string name="settings_voice_app_matches_not_found">Не знойдзена на гэтай прыладзе</string>

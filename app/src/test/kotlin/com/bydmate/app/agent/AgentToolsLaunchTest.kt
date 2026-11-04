@@ -485,6 +485,67 @@ class AgentToolsLaunchTest {
         assertEquals("com.byd.mediacenter", payload.getString("packageName"))
     }
 
+    // --- the app table shared with Alice (AliceAppCatalog): fork a6918f26, f8465e49 ---
+
+    // Fork f8465e49: the Russian spaced name opens TikTok.
+    @Test fun launch_app_alias_tiktok_resolves_russian_spaced_name() = runTest {
+        assertEquals("com.zhiliaoapp.musically",
+            launchedPackage("тик ток", listOf("TikTok" to "com.zhiliaoapp.musically")))
+    }
+
+    // A Cyrillic name finds a build under another package by its Latin launcher label.
+    @Test fun launch_app_cyrillic_tiktok_finds_the_latin_label() = runTest {
+        assertEquals("com.example.tiktok.lite",
+            launchedPackage("тикток", launcherFixture + ("TikTok Lite" to "com.example.tiktok.lite")))
+    }
+
+    // Fork a6918f26: the RVX and ReVanced YouTube builds answer to «ютуб».
+    @Test fun launch_app_youtube_opens_the_rvx_build() = runTest {
+        assertEquals("app.rvx.android.youtube",
+            launchedPackage("ютуб", launcherFixture + ("YouTube RVX" to "app.rvx.android.youtube")))
+        assertEquals("app.revanced.android.youtube",
+            launchedPackage("youtube", listOf("YouTube ReVanced" to "app.revanced.android.youtube")))
+    }
+
+    // A patched YouTube under a vendor package is found by its package token.
+    @Test fun launch_app_youtube_finds_a_vendor_build_by_package() = runTest {
+        assertEquals("com.vendor.youtube.patched",
+            launchedPackage("ютуб", listOf("Видео" to "com.vendor.youtube.patched")))
+    }
+
+    // «хром» is Chrome, not the browser the catalog prefers for «браузер».
+    @Test fun launch_app_chrome_is_chrome() = runTest {
+        val apps = listOf("Яндекс Браузер" to "com.yandex.browser", "Chrome" to "com.android.chrome")
+        assertEquals("com.android.chrome", launchedPackage("хром", apps))
+        assertEquals("com.yandex.browser", launchedPackage("браузер", apps))
+    }
+
+    @Test fun open_settings_dispatches_the_section() = runTest {
+        val captured = slot<ActionDef>()
+        coEvery { dispatcher.dispatch(capture(captured), any()) } returns DispatchResult(true)
+        val out = JSONObject(tools().execute(AgentToolCall("1", "open_settings", """{"section":"wifi"}""")))
+        assertTrue(out.getBoolean("ok"))
+        assertEquals("system_settings", captured.captured.kind)
+        assertEquals("wifi", JSONObject(captured.captured.payload!!).getString("section"))
+    }
+
+    @Test fun open_settings_refuses_a_section_outside_the_allowlist() = runTest {
+        val out = JSONObject(tools().execute(AgentToolCall("1", "open_settings", """{"section":"developer"}""")))
+        assertTrue(out.getString("error").contains("неизвестный раздел"))
+        coVerify(exactly = 0) { dispatcher.dispatch(any(), any()) }
+    }
+
+    // A settings name given to launch_app opens the screen, not a launcher search (fork a6918f26).
+    @Test fun launch_app_settings_names_open_the_settings_screen() = runTest {
+        val captured = mutableListOf<ActionDef>()
+        coEvery { dispatcher.dispatch(capture(captured), any()) } returns DispatchResult(true)
+        val t = tools().apply { launcherAppsProvider = { launcherFixture } }
+        t.execute(AgentToolCall("1", "launch_app", """{"name":"настройки машины"}"""))
+        t.execute(AgentToolCall("2", "launch_app", """{"name":"настройки bluetooth"}"""))
+        assertEquals(listOf("system_settings", "system_settings"), captured.map { it.kind })
+        assertEquals(listOf("car", "bluetooth"), captured.map { JSONObject(it.payload!!).getString("section") })
+    }
+
     // --- set_cluster_projection ---
 
     // (a) on=true, before=OFF -> dispatched as a cluster_projection action, ok:true with label.

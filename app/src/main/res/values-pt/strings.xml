@@ -1783,6 +1783,7 @@
     <string name="dispatch_volume_invalid">Nível de volume inválido: %1$s</string>
     <string name="dispatch_package_missing">packageName não definido</string>
     <string name="dispatch_app_not_installed">Aplicativo não instalado: %1$s</string>
+    <string name="dispatch_settings_section_unknown">Seção de configurações desconhecida: %1$s</string>
     <string name="dispatch_app_close_self">O BYDMate não fecha a si mesmo</string>
     <string name="dispatch_app_close_failed">Não foi possível fechar o aplicativo: %1$s</string>
     <string name="dispatch_media_no_session">Nenhum player aberto</string>
@@ -2201,7 +2202,7 @@
     <string name="settings_alice_last_command_none">Nenhum comando da Alice ainda</string>
     <string name="settings_alice_refresh">Atualizar</string>
     <string name="settings_voice_app_matches_title">Apps de comandos de voz</string>
-    <string name="settings_voice_app_matches_desc">Mostra qual app instalado o BYDMate associou a cada comando da Alice.</string>
+    <string name="settings_voice_app_matches_desc">Mostra qual app instalado cada nome e comando abre. O assistente local e a Alice usam a mesma tabela.</string>
     <string name="settings_voice_app_matches_button">Mostrar</string>
     <string name="settings_voice_app_matches_dialog_title">Correspondências de apps</string>
     <string name="settings_voice_app_matches_not_found">Não encontrado neste dispositivo</string>

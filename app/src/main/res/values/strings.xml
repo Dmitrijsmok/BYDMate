@@ -1954,6 +1954,7 @@
     <string name="dispatch_volume_invalid">Некорректный уровень громкости: %1$s</string>
     <string name="dispatch_package_missing">packageName не задан</string>
     <string name="dispatch_app_not_installed">Приложение не установлено: %1$s</string>
+    <string name="dispatch_settings_section_unknown">Неизвестный раздел настроек: %1$s</string>
     <string name="dispatch_app_close_self">BYDMate не закрывает сам себя</string>
     <string name="dispatch_app_close_failed">Не удалось закрыть приложение: %1$s</string>
     <string name="dispatch_media_no_session">Нет запущенного плеера</string>
@@ -2378,7 +2379,7 @@
     <string name="settings_alice_last_command_none">Команд от Алисы ещё не было</string>
     <string name="settings_alice_refresh">Обновить</string>
     <string name="settings_voice_app_matches_title">Приложения голосовых команд</string>
-    <string name="settings_voice_app_matches_desc">Показывает, какое установленное приложение BYDMate нашёл для каждой команды Алисы.</string>
+    <string name="settings_voice_app_matches_desc">Показывает, какое установленное приложение откроется на каждое название и команду. Таблица одна для локального помощника и для Алисы.</string>
     <string name="settings_voice_app_matches_button">Показать</string>
     <string name="settings_voice_app_matches_dialog_title">Совпадения приложений</string>
     <string name="settings_voice_app_matches_not_found">Не найдено на этом устройстве</string>

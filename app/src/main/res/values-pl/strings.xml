@@ -1939,6 +1939,7 @@
     <string name="dispatch_volume_invalid">Nieprawidłowy poziom głośności: %1$s</string>
     <string name="dispatch_package_missing">nie podano packageName</string>
     <string name="dispatch_app_not_installed">Aplikacja nie jest zainstalowana: %1$s</string>
+    <string name="dispatch_settings_section_unknown">Nieznana sekcja ustawień: %1$s</string>
     <string name="dispatch_app_close_self">BYDMate nie zamyka samego siebie</string>
     <string name="dispatch_app_close_failed">Nie udało się zamknąć aplikacji: %1$s</string>
     <string name="dispatch_media_no_session">Żaden odtwarzacz nie jest uruchomiony</string>
@@ -2362,7 +2363,7 @@
     <string name="settings_alice_last_command_none">Brak jeszcze poleceń od Alice</string>
     <string name="settings_alice_refresh">Odśwież</string>
     <string name="settings_voice_app_matches_title">Aplikacje poleceń głosowych</string>
-    <string name="settings_voice_app_matches_desc">Pokazuje, którą zainstalowaną aplikację BYDMate dopasował do każdego polecenia Alice.</string>
+    <string name="settings_voice_app_matches_desc">Pokazuje, którą zainstalowaną aplikację otwiera każda nazwa i polecenie. Lokalny asystent i Alice korzystają z jednej tabeli.</string>
     <string name="settings_voice_app_matches_button">Pokaż</string>
     <string name="settings_voice_app_matches_dialog_title">Dopasowania aplikacji</string>
     <string name="settings_voice_app_matches_not_found">Nie znaleziono na tym urządzeniu</string>

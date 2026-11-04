@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.MediaStore
+import android.provider.Settings
 import androidx.test.core.app.ApplicationProvider
 import com.bydmate.app.cluster.ClusterVoiceControl
 import com.bydmate.app.data.local.LocalePreferences
@@ -91,6 +92,31 @@ class ActionDispatcherLaunchTest {
         dispatcher.dispatch(launchAction("com.example.app"), null)
         coVerify(exactly = 1) { helper.launchApp("com.example.app") }
         verify(exactly = 1) { context.startActivity(any()) }
+    }
+
+    // --- system_settings: an allowlisted set of screens (fork a6918f26) ---
+
+    private fun settingsAction(section: String) = ActionDef(command = "", displayName = "Настройки",
+        kind = "system_settings", payload = """{"section":"$section"}""")
+
+    @Test fun `system_settings opens the asked Android settings screen`() {
+        val (result, intent) = dispatchAndCapture(settingsAction("wifi"))
+        assertTrue(result.success)
+        assertEquals(Settings.ACTION_WIFI_SETTINGS, intent.action)
+    }
+
+    @Test fun `system_settings car launches BYD's own settings app`() = runBlocking {
+        every { packageManager.getLaunchIntentForPackage("com.byd.carsettings") } returns mockk<Intent>(relaxed = true)
+        coEvery { helper.launchApp("com.byd.carsettings") } returns true
+        assertTrue(dispatcher.dispatch(settingsAction("car"), null).success)
+        coVerify(exactly = 1) { helper.launchApp("com.byd.carsettings") }
+    }
+
+    @Test fun `system_settings refuses a screen outside the allowlist`() = runBlocking {
+        val result = dispatcher.dispatch(settingsAction("developer"), null)
+        assertFalse(result.success)
+        assertEquals("Неизвестный раздел настроек: developer", result.reason)
+        verify(exactly = 0) { context.startActivity(any()) }
     }
 
     // --- navigate ---

@@ -1787,6 +1787,7 @@
     <string name="dispatch_volume_invalid">Invalid volume level: %1$s</string>
     <string name="dispatch_package_missing">packageName not set</string>
     <string name="dispatch_app_not_installed">App not installed: %1$s</string>
+    <string name="dispatch_settings_section_unknown">Unknown settings section: %1$s</string>
     <string name="dispatch_app_close_self">BYDMate does not close itself</string>
     <string name="dispatch_app_close_failed">Could not close the app: %1$s</string>
     <string name="dispatch_media_no_session">No player is running</string>
@@ -2200,7 +2201,7 @@
     <string name="settings_alice_last_command_none">No commands from Alice yet</string>
     <string name="settings_alice_refresh">Refresh</string>
     <string name="settings_voice_app_matches_title">Voice command apps</string>
-    <string name="settings_voice_app_matches_desc">Shows which installed app BYDMate matched to each Alice command.</string>
+    <string name="settings_voice_app_matches_desc">Shows which installed app each name and command opens. The local assistant and Alice share one table.</string>
     <string name="settings_voice_app_matches_button">Show</string>
     <string name="settings_voice_app_matches_dialog_title">Application matches</string>
     <string name="settings_voice_app_matches_not_found">Not found on this device</string>

@@ -13,7 +13,6 @@ import com.bydmate.app.data.automation.ActionValidationError
 import com.bydmate.app.data.automation.AutomationEngine
 import com.bydmate.app.data.automation.ConfirmOverlayManager
 import com.bydmate.app.data.automation.DispatchResult
-import com.bydmate.app.data.automation.NavigatorAppNames
 import com.bydmate.app.data.automation.PlaceGeometry
 import com.bydmate.app.data.automation.PowerStateRuleMigration
 import com.bydmate.app.data.automation.RouteNavigatorDiscovery
@@ -35,6 +34,8 @@ import com.bydmate.app.data.local.entity.PlaceEntity
 import com.bydmate.app.data.local.entity.RuleEntity
 import com.bydmate.app.data.local.entity.TriggerDef
 import com.bydmate.app.data.autoservice.SentinelDecoder
+import com.bydmate.app.data.remote.AliceAppCatalog
+import com.bydmate.app.data.remote.AliceAppTarget
 import com.bydmate.app.data.remote.InsightStatsAggregator
 import com.bydmate.app.data.nativestack.MotorSplit
 import com.bydmate.app.data.nativestack.VehicleKind
@@ -714,11 +715,22 @@ class AgentTools @Inject constructor(
             "Запустить установленное приложение по названию. Понимает русские названия штатных " +
                 "приложений машины: навигатор (приложение, выбранное в настройках), яндекс навигатор, " +
                 "яндекс карты, 2гис, waze, google maps, музыка, камера, видеорегистратор, " +
-                "браузер, ютуб, настройки машины, файлы, режимы вождения, часовой, АБРП, " +
-                "медиацентр, телефон. Названное приложение открывается именно оно, а не навигатор из настроек.",
+                "браузер, ютуб, тикток, файлы, режимы вождения, часовой, АБРП, " +
+                "медиацентр, телефон. Названное приложение открывается именно оно, а не навигатор из настроек. " +
+                "Для системных настроек используй open_settings.",
             JSONObject().put("name", JSONObject().put("type", "string")
                 .put("description", "Название приложения, как на домашнем экране")),
             listOf("name"),
+        ))
+        put(tool(
+            "open_settings",
+            "Открыть раздел настроек головного устройства: car = штатные настройки машины BYD, " +
+                "display = экран, android = общие настройки Android, wifi, bluetooth, sound = звук, " +
+                "apps = приложения.",
+            JSONObject().put("section", JSONObject().put("type", "string")
+                .put("enum", JSONArray(AliceAppCatalog.SETTINGS_SECTIONS.toList()))
+                .put("description", "Какой раздел настроек открыть")),
+            listOf("section"),
         ))
         put(tool(
             "set_cluster_projection",
@@ -983,6 +995,7 @@ class AgentTools @Inject constructor(
                 "play_music" -> playMusic(args)
                 "youtube" -> youtubeTool(args)
                 "launch_app" -> launchAppTool(args)
+                "open_settings" -> openSettings(args.optString("section"))
                 "set_cluster_projection" -> setClusterProjection(args)
                 "set_sentry" -> setSentry(args)
                 "set_hotspot" -> setHotspot(args)
@@ -2295,44 +2308,49 @@ class AgentTools @Inject constructor(
         else JSONObject().put("error", result.reason ?: "не получилось открыть YouTube").toString()
     }
 
-    /** Resolve a human app name to (label, packageName) via aliases + launcher labels. */
+    /**
+     * Resolve a human app name to (label, packageName) through the app table the local assistant
+     * and Alice share ([AliceAppCatalog]): a navigation app the way routes resolve it, a known app
+     * by its packages, ReVanced/RVX builds and launcher label, any other name by launcher label and
+     * package token. A known package counts only with a launcher entry, so a name never launches
+     * an app this car does not have.
+     */
     private suspend fun resolveLauncherApp(name: String): Built<Pair<String, String>> {
         val apps = runCatchingCancellable { launcherAppsProvider() }.getOrNull()
             ?: return Built.Error("список приложений недоступен")
-        val needle = name.lowercase()
-        // Alias hit: resolve to the first candidate package present in the launcher list, so an
-        // alias never launches an app this car does not have; miss falls through to label match.
-        // Navigation apps go through the shared name table and resolver (manual package, builds).
-        val navigator = NavigatorAppNames.of(name)
-        val candidates = if (navigator != null) navigatorPackages(navigator, apps) else APP_ALIASES[needle]
-        val aliasMatch = candidates?.firstNotNullOfOrNull { pkg ->
-            apps.firstOrNull { it.second == pkg }
+        val launcher = apps.map { (label, pkg) -> RouteNavigatorDiscovery.LauncherApp(pkg, label) }
+        val matches = when (val target = AliceAppCatalog.forName(name)) {
+            // A navigation app name that none of its candidates answers still gets the label match.
+            is AliceAppTarget.Navigator -> navigatorPackages(target.navigator, launcher)
+                .firstNotNullOfOrNull { pkg -> launcher.firstOrNull { it.packageName == pkg } }
+                ?.let { listOf(it) }
+                ?: AliceAppCatalog.pick(AliceAppCatalog.byLabel(name), launcher)
+            is AliceAppTarget.App -> AliceAppCatalog.pick(target, launcher)
+            is AliceAppTarget.Settings -> AliceAppCatalog.settingsPackage(target.section)
+                .let { pkg -> launcher.filter { it.packageName == pkg }.take(1) }
+            AliceAppTarget.Self -> listOf(launcher.firstOrNull { it.packageName == context.packageName }
+                ?: RouteNavigatorDiscovery.LauncherApp(context.packageName, "BYDMate"))
         }
-        if (aliasMatch != null) return Built.Value(aliasMatch)
-        val exact = apps.filter { it.first.lowercase() == needle }
-        val matches = exact.ifEmpty { apps.filter { it.first.lowercase().contains(needle) } }
         return when {
             matches.isEmpty() -> Built.Error("приложение не найдено: $name")
             matches.size > 1 -> Built.Error(
-                "несколько совпадений: ${matches.take(5).joinToString(", ") { it.first }}. Уточни название")
-            else -> Built.Value(matches.single())
+                "несколько совпадений: ${matches.take(5).joinToString(", ") { it.label }}. Уточни название")
+            else -> Built.Value(matches.single().let { it.label to it.packageName })
         }
     }
 
-    /** A navigation app name ([NavigatorAppNames]) as candidate packages, resolved the way routes
-     *  are: the manual package, the app's builds (by package or launcher label). "навигатор" is the
-     *  app chosen in «Навигатор для маршрутов» (#334), then Yandex Navigator's packages, so a chosen
-     *  app that is not installed falls back the way routes do; a named app stays that app. */
-    private fun navigatorPackages(navigator: String, apps: List<Pair<String, String>>): List<String> =
-        RouteNavigatorResolver.launchCandidates(
-            RouteNavigatorResolver.choice(context),
-            navigator = navigator.takeUnless { it == NavigatorAppNames.DEFAULT },
-            launcher = apps.map { (label, pkg) -> RouteNavigatorDiscovery.LauncherApp(pkg, label) },
-        )
+    /** A navigation app as candidate packages, resolved the way routes are: the manual package,
+     *  the app's builds (by package or launcher label). [navigator] null is the app chosen in
+     *  «Навигатор для маршрутов» (#334), then Yandex Navigator's packages, so a chosen app that is
+     *  not installed falls back the way routes do; a named app stays that app. */
+    private fun navigatorPackages(navigator: String?, launcher: List<RouteNavigatorDiscovery.LauncherApp>): List<String> =
+        RouteNavigatorResolver.launchCandidates(RouteNavigatorResolver.choice(context), navigator, launcher)
 
     private suspend fun launchAppTool(args: JSONObject): String {
         val name = args.optString("name").trim()
         if (name.isEmpty()) return """{"error":"не указано название приложения"}"""
+        // A settings screen by name opens through open_settings, not a launcher search (fork a6918f26).
+        AliceAppCatalog.settingsSection(name)?.let { return openSettings(it) }
         val (label, pkg) = when (val r = resolveLauncherApp(name)) {
             is Built.Error -> return JSONObject().put("error", r.message).toString()
             is Built.Value -> r.value
@@ -2342,6 +2360,18 @@ class AgentTools @Inject constructor(
                 payload = JSONObject().put("packageName", pkg).toString()), data = null)
         return if (result.success) JSONObject().put("ok", true).put("app", label).toString()
         else JSONObject().put("error", result.reason ?: "не получилось запустить $label").toString()
+    }
+
+    /** open_settings: one screen of [AliceAppCatalog.SETTINGS_SECTIONS], nothing else. */
+    private suspend fun openSettings(section: String): String {
+        val s = section.trim().lowercase()
+        if (s !in AliceAppCatalog.SETTINGS_SECTIONS) {
+            return JSONObject().put("error", "неизвестный раздел настроек: $s").toString()
+        }
+        val result = actionDispatcher.dispatch(
+            ActionDef(command = "", displayName = "Настройки", kind = "system_settings",
+                payload = JSONObject().put("section", s).toString()), data = null)
+        return dispatchJson(result)
     }
 
     // --- cluster projection ---
@@ -3094,7 +3124,7 @@ class AgentTools @Inject constructor(
         internal val ALWAYS_ALLOWED_TOOLS = setOf(
             "get_vehicle_state", "query_trips", "query_charges", "get_stats_summary", "get_weather",
             "where_am_i", "web_search", "get_route_info", "find_chargers", "range_to_destination",
-            "media_volume", "play_music", "youtube", "launch_app", "set_cluster_projection",
+            "media_volume", "play_music", "youtube", "launch_app", "open_settings", "set_cluster_projection",
             "list_automations", "list_places", "create_place", "remember_fact", "forget_fact",
             "add_charge", "end_conversation")
 
@@ -3159,39 +3189,5 @@ class AgentTools @Inject constructor(
 
         // Any wheel below this is clearly deflated (Leopard 3 cold placard ~250 kPa).
         private const val TIRE_WARN_MIN_KPA = 210
-
-        // RU aliases for stock DiLink apps whose launcher labels are Chinese/English and thus
-        // unreachable by label match. Values are candidate packages in priority order; an alias
-        // fires only when one of them is actually installed on this car (fleet cars differ).
-        // App store and fridge app are excluded deliberately (user decision, 2026-07-05).
-        // Navigation apps (навигатор, яндекс карты, waze, google maps, ...) are not here: they go
-        // through NavigatorAppNames, shared with the offline voice path.
-        internal val APP_ALIASES: Map<String, List<String>> = mapOf(
-            "музыка" to listOf("ru.yandex.music"),
-            "яндекс музыка" to listOf("ru.yandex.music"),
-            "камера" to listOf("com.byd.avc"),
-            "камеры" to listOf("com.byd.avc"),
-            "видеорегистратор" to listOf("com.byd.cdr"),
-            "регистратор" to listOf("com.byd.cdr"),
-            "браузер" to listOf("com.android.chrome"),
-            "хром" to listOf("com.android.chrome"),
-            "ютуб" to listOf("anddea.youtube", "com.google.android.youtube"),
-            "настройки машины" to listOf("com.byd.carsettings"),
-            "настройки автомобиля" to listOf("com.byd.carsettings"),
-            "файлы" to listOf("com.byd.filemanager"),
-            "файловый менеджер" to listOf("com.byd.filemanager"),
-            "режимы вождения" to listOf("com.byd.drivemode"),
-            "режим вождения" to listOf("com.byd.drivemode"),
-            "часовой" to listOf("com.byd.sentrymode"),
-            "охрана" to listOf("com.byd.sentrymode"),
-            "охранный режим" to listOf("com.byd.sentrymode"),
-            "абрп" to listOf("com.iternio.abrpapp"),
-            "маршрутный планировщик" to listOf("com.iternio.abrpapp"),
-            "медиацентр" to listOf("com.byd.mediacenter"),
-            "медиа центр" to listOf("com.byd.mediacenter"),
-            "плеер" to listOf("com.byd.mediacenter"),
-            "телефон" to listOf("com.byd.bluetoothcall"),
-            "звонки" to listOf("com.byd.bluetoothcall"),
-        )
     }
 }

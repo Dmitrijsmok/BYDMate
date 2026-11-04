@@ -15,6 +15,7 @@ import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
+import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
 import androidx.core.app.NotificationCompat
@@ -25,6 +26,7 @@ import com.bydmate.app.cluster.ClusterVoiceControl
 import com.bydmate.app.data.autoservice.SentinelDecoder
 import com.bydmate.app.data.local.entity.ActionDef
 import com.bydmate.app.data.nativestack.FidAddresses
+import com.bydmate.app.data.remote.AliceAppCatalog
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.telegram.TELEGRAM_REPORT_KIND
 import com.bydmate.app.data.telegram.TelegramReporter
@@ -91,7 +93,9 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         private const val BT_CALL_ACTION_DIAL_HANGUP = "com.byd.btcall.action.DIAL_HANGUP"
         private const val BT_CALL_KEYCODE_DIAL = 313
         private const val YANDEX_MUSIC_PACKAGE = "ru.yandex.music"
-        private val YOUTUBE_PACKAGES = listOf("anddea.youtube", "com.google.android.youtube")
+        // The shared app table's YouTube builds, ReVanced/RVX included (fork a6918f26).
+        private val YOUTUBE_PACKAGES = AliceAppCatalog.YOUTUBE_PACKAGES
+        private const val CAR_SETTINGS_PACKAGE = "com.byd.carsettings"
         private const val NAVI_PACKAGE = "ru.yandex.yandexnavi"
         // Hard cap on user-set delay action; protects against typos like "60000000".
         private const val MAX_DELAY_MS = 60_000L
@@ -676,6 +680,7 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
             "param" -> dispatchParam(action, data)
             "notification", "notification_silent", "notification_sound" -> showNotification(action)
             "app_launch" -> launchApp(action)
+            "system_settings" -> openSystemSettings(action)
             "app_close" -> closeApp(action)
             "call" -> dial(action)
             "navigate" -> navigate(action)
@@ -1253,6 +1258,27 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         val result = tryStartActivity(intent, "app_launch:$pkg")
         if (result.success) maybeMinimize(payload)
         return result
+    }
+
+    /**
+     * "system_settings": one screen of the system settings, from the closed set of
+     * [AliceAppCatalog.SETTINGS_SECTIONS] only (fork a6918f26). "car" is BYD's own settings app,
+     * launched like any app; the rest are the Android settings intents.
+     */
+    private suspend fun openSystemSettings(action: ActionDef): DispatchResult {
+        val section = parsePayload(action.payload)?.optString("section")?.trim()?.lowercase().orEmpty()
+        val intentAction = when (section) {
+            "car" -> return launchApp(ActionDef(command = "", displayName = action.displayName, kind = "app_launch",
+                payload = JSONObject().put("packageName", CAR_SETTINGS_PACKAGE).toString()))
+            "android" -> Settings.ACTION_SETTINGS
+            "display" -> Settings.ACTION_DISPLAY_SETTINGS
+            "wifi" -> Settings.ACTION_WIFI_SETTINGS
+            "bluetooth" -> Settings.ACTION_BLUETOOTH_SETTINGS
+            "sound" -> Settings.ACTION_SOUND_SETTINGS
+            "apps" -> Settings.ACTION_APPLICATION_SETTINGS
+            else -> return DispatchResult(false, appStrings.get(R.string.dispatch_settings_section_unknown, section))
+        }
+        return tryStartActivity(Intent(intentAction).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), "system_settings:$section")
     }
 
     /**

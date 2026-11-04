@@ -4487,6 +4487,14 @@ private fun AliceAppMatchesDialog(
                             fontWeight = FontWeight.SemiBold,
                             fontFamily = FontFamily.Monospace,
                         )
+                        // The spoken names, the local assistant's and Alice's alike: one table.
+                        if (match.names.isNotEmpty()) {
+                            Text(
+                                text = match.names.joinToString(", ") { "«$it»" },
+                                color = TextSecondary,
+                                fontSize = 12.sp,
+                            )
+                        }
                         Text(
                             text = match.packageName
                                 ?.let { pkg -> listOfNotNull(match.appLabel, pkg).distinct().joinToString(" · ") }

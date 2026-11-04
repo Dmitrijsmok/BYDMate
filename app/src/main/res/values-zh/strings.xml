@@ -1901,6 +1901,7 @@
     <string name="dispatch_volume_invalid">音量无效：%1$s</string>
     <string name="dispatch_package_missing">未设置 packageName</string>
     <string name="dispatch_app_not_installed">应用未安装：%1$s</string>
+    <string name="dispatch_settings_section_unknown">未知的设置页面：%1$s</string>
     <string name="dispatch_app_close_self">BYDMate 不会关闭自身</string>
     <string name="dispatch_app_close_failed">无法关闭应用：%1$s</string>
     <string name="dispatch_media_no_session">没有正在运行的播放器</string>
@@ -2309,7 +2310,7 @@
     <string name="settings_alice_last_command_none">尚未收到 Alice 的指令</string>
     <string name="settings_alice_refresh">刷新</string>
     <string name="settings_voice_app_matches_title">语音命令应用</string>
-    <string name="settings_voice_app_matches_desc">显示 BYDMate 为每条 Alice 指令匹配到的已安装应用。</string>
+    <string name="settings_voice_app_matches_desc">显示每个名称和指令会打开哪个已安装的应用。本地助手和 Alice 共用同一张表。</string>
     <string name="settings_voice_app_matches_button">显示</string>
     <string name="settings_voice_app_matches_dialog_title">应用匹配</string>
     <string name="settings_voice_app_matches_not_found">此设备上未找到</string>
