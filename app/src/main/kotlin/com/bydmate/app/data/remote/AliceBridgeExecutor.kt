@@ -11,11 +11,13 @@ import javax.inject.Singleton
  * Runs Alice bridge commands once [AliceBridgeRouter] has let them through. Every vehicle write
  * is an ActionDispatcher "param" step, so the bridge gets the same allowlist, safety and speed
  * gates as an automation (speed-gated commands on a direct speed read, fail-closed); on top of
- * them the rear trunk opens only at a known standstill.
+ * them the rear trunk opens only at a known standstill. Window and sunroof percentages go to
+ * [AliceApertureController], which gates its opening moves on the same direct read.
  */
 @Singleton
 class AliceBridgeExecutor @Inject constructor(
     private val actionDispatcher: ActionDispatcher,
+    private val apertureController: AliceApertureController,
 ) : AliceBridgeActions {
 
     /** The latest poll of the car, fed by [AlicePollingManager]. */
@@ -24,6 +26,7 @@ class AliceBridgeExecutor @Inject constructor(
     override suspend fun vehicle(command: AliceBridgeCommand): Result<Unit> {
         if (command.action.isEmpty()) return dispatchCommands(listOf(command.rawCommand))
         if (command.action == "vehicle.command") return vehicleText(command.text)
+        aperture(command)?.let { return it }
         val vehicleCommand = AliceBridgeCommandTranslator.resolve(command.action, command.value)
             ?: return AliceBridgeRouter.failure(AliceBridgeRouter.UNSUPPORTED_ACTION)
         return dispatchCommands(listOf(vehicleCommand))
@@ -49,6 +52,20 @@ class AliceBridgeExecutor @Inject constructor(
         val payload = JSONObject().put("prompt", prompt).toString()
         return actionDispatcher.dispatch(ActionDef("", ALICE, "agent_query", payload), latestData)
             .asResult("agent_query_failed")
+    }
+
+    /** Window and sunroof percentages: the closed-loop controller, or null for other actions. */
+    private suspend fun aperture(command: AliceBridgeCommand): Result<Unit>? {
+        val speedNow: suspend () -> Int? = { actionDispatcher.readSpeedNow() }
+        return when (command.action) {
+            in WINDOW_POSITION_ACTIONS -> command.value
+                ?.let { apertureController.positionWindow(command.action, it, speedNow) }
+                ?: AliceBridgeRouter.failure("invalid_window_position")
+            "sunroof.position" -> command.value
+                ?.let { apertureController.positionSunroof(it, speedNow) }
+                ?: AliceBridgeRouter.failure("sunroof_percent_not_supported")
+            else -> null
+        }
     }
 
     private suspend fun vehicleText(text: String): Result<Unit> =
@@ -84,5 +101,11 @@ class AliceBridgeExecutor @Inject constructor(
 
     private companion object {
         const val ALICE = "Alice"
+        val WINDOW_POSITION_ACTIONS = setOf(
+            "window.driver.position",
+            "window.passenger.position",
+            "window.rear_left.position",
+            "window.rear_right.position",
+        )
     }
 }

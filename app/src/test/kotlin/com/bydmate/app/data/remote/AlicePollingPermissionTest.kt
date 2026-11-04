@@ -37,6 +37,7 @@ class AlicePollingPermissionTest {
     private val served = AtomicBoolean(false)
     private val settings = mockk<SettingsRepository>()
     private val actionDispatcher = mockk<ActionDispatcher>(relaxed = true)
+    private val aperture = mockk<AliceApertureController>(relaxed = true)
     private val loop = mockk<SharedAdaptiveLoop>()
     private lateinit var manager: AlicePollingManager
 
@@ -67,6 +68,7 @@ class AlicePollingPermissionTest {
         coEvery { settings.getString(SettingsRepository.KEY_ALICE_API_KEY, any()) } returns "test-key"
         every { loop.flow } returns MutableSharedFlow()
         coEvery { actionDispatcher.dispatch(any(), any()) } returns DispatchResult(true)
+        coEvery { aperture.positionWindow(any(), any(), any()) } returns Result.success(Unit)
     }
 
     @After fun tearDown() {
@@ -80,7 +82,7 @@ class AlicePollingPermissionTest {
     }
 
     private fun runOnce(): Map<String, JSONObject> {
-        manager = AlicePollingManager(OkHttpClient(), settings, loop, AliceBridgeExecutor(actionDispatcher))
+        manager = AlicePollingManager(OkHttpClient(), settings, loop, AliceBridgeExecutor(actionDispatcher, aperture))
         manager.start()
         val ack = acks.poll(10, TimeUnit.SECONDS)
         assertNotNull("the worker got no ack", ack)
@@ -101,7 +103,7 @@ class AlicePollingPermissionTest {
             assertEquals(id, AliceBridgeRouter.NAVIGATION_DISABLED, results.getValue(id).getString("error"))
         }
         coVerify(exactly = 0) { actionDispatcher.dispatch(any(), any()) }
-        confirmVerified(actionDispatcher)
+        confirmVerified(actionDispatcher, aperture)
     }
 
     @Test fun `with vehicle control on the commands run as gated ActionDispatcher steps`() {
@@ -114,5 +116,7 @@ class AlicePollingPermissionTest {
         coVerify { actionDispatcher.dispatch(ActionDef("自动空调", "Alice", "param"), any()) }
         // Upstream's raw command goes through the same param step, gates included.
         coVerify { actionDispatcher.dispatch(ActionDef("车门解锁", "Alice", "param"), any()) }
+        // Percentages go to the closed-loop controller with a direct speed read.
+        coVerify { aperture.positionWindow("window.driver.position", 40, any()) }
     }
 }
