@@ -181,7 +181,9 @@ class AgentToolsNavigateVerifyTest {
         assertTrue(out.toString(), out.optBoolean("ok"))
     }
 
-    /** Home/Work always opens Yandex Navigator's own shortcut, so that is what the check waits for. */
+    /** The check follows what the dispatcher pins for Home/Work, not for routes: unpinned (Yandex
+     *  Navigator's own shortcut, as with 2GIS chosen) waits for the Navigator. With Waze chosen the
+     *  dispatcher now pins Home/Work to Waze's favourite, which the pinned check covers. */
     @Test fun `waze chosen home shortcut waits for the navigator`() = runTest {
         coEvery { places.getAllSnapshot() } returns emptyList()
         every { dispatcher.willOpenPinned(match { it.has("shortcut") }) } returns null

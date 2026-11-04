@@ -1794,6 +1794,7 @@
     <string name="dispatch_waze_fallback">Waze não está instalado, foi aberto o Yandex Navigator</string>
     <string name="dispatch_google_maps_fallback">Google Maps não está instalado, foi aberto o Yandex Navigator</string>
     <string name="dispatch_google_maps_shortcut_unsupported">O Google Maps não traça a rota Casa/Trabalho por comando: adicione um Local «Casa» ou «Trabalho» no BYDMate</string>
+    <string name="dispatch_dgis_shortcut_unsupported">O 2GIS não traça a rota Casa/Trabalho por comando: adicione um Local «Casa» ou «Trabalho» no BYDMate</string>
     <string name="dispatch_shortcut_unknown">shortcut desconhecido: %1$s</string>
     <string name="dispatch_coords_missing">lat/lon não definidos</string>
     <string name="dispatch_url_missing">url não definida</string>

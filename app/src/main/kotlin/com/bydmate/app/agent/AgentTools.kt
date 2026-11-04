@@ -570,10 +570,11 @@ class AgentTools @Inject constructor(
         put(tool(
             "navigate_to",
             "Построить маршрут от текущей позиции: по умолчанию в приложении, выбранном в " +
-                "настройках (Навигатор/2ГИС/Карты), app=\"maps\" - явно в Яндекс Картах, если " +
-                "пользователь просит именно их. Команды поехали домой, до дома, " +
+                "настройках, app - в приложении, которое пользователь явно назвал (в Waze, в Google " +
+                "Maps, в Яндекс Картах, в 2ГИС, в Яндекс Навигаторе). Команды поехали домой, до дома, " +
                 "на работу - ЭТОТ инструмент: передай destination \"Дом\" или \"Работа\", маршрут " +
-                "построится по Месту BYDMate или по адресу, сохранённому в самом Навигаторе. " +
+                "построится по Месту BYDMate или по адресу, сохранённому в самом навигаторе " +
+                "(Яндекс Навигатор, Waze; в Google Maps и 2ГИС так нельзя). " +
                 "destination: имя сохранённого Места, город или населённый пункт (маршрут строится " +
                 "сразу) либо точный адрес (откроется поиск на карте, пользователь выберет точку). " +
                 "Ответ может содержать проверку запаса хода: если enough=false или есть charge_note, " +
@@ -590,31 +591,25 @@ class AgentTools @Inject constructor(
                         "начать движение по маршруту, кнопку Поехали нажмёт приложение. " +
                         "false (по умолчанию) для построй/покажи/проложи маршрут - только " +
                         "построить, водитель нажмёт Поехали сам"))
-                .put("app", JSONObject().put("type", "string")
-                    .put("enum", JSONArray().put("navigator").put("maps"))
-                    .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты, по умолчанию), " +
-                        "maps = явно Яндекс Карты; maps передавай только когда пользователь явно просит Яндекс Карты")),
+                .put("app", navAppParam()),
             emptyList(),
         ))
         put(tool(
             "search_on_map",
-            "Открыть поиск места в приложении, выбранном в настройках (app=\"maps\" - явно в " +
-                "Яндекс Картах, если пользователь просит именно их): на карте появится выдача, " +
+            "Открыть поиск места в приложении, выбранном в настройках (app - в явно названном " +
+                "пользователем приложении): на карте появится выдача, " +
                 "пользователь сам выберет точку. Использовать для команд вроде: поищи кафе, найди заправку, " +
                 "где ближайшая аптека. Если пользователь просит ПОЕХАТЬ куда-то, в том числе " +
                 "домой или на работу, используй navigate_to.",
             JSONObject().put("query", JSONObject().put("type", "string")
                 .put("description", "Что искать: название места или категория"))
-                .put("app", JSONObject().put("type", "string")
-                    .put("enum", JSONArray().put("navigator").put("maps"))
-                    .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты, по умолчанию), " +
-                        "maps = явно Яндекс Карты; maps передавай только когда пользователь явно просит Яндекс Карты")),
+                .put("app", navAppParam()),
             listOf("query"),
         ))
         put(tool(
             "show_point_on_map",
             "Показать точку на карте БЕЗ построения маршрута (по умолчанию приложение из " +
-                "настроек, app=\"maps\" - явно Яндекс Карты): команды вроде " +
+                "настроек, app - явно названное приложение): команды вроде " +
                 "покажи на карте, где находится. destination: имя Места, город или адрес; " +
                 "либо lat/lon, если координаты известны (например из find_chargers). " +
                 "Для маршрута используй navigate_to, для поиска по категории search_on_map.",
@@ -622,10 +617,7 @@ class AgentTools @Inject constructor(
                 .put("description", "Что показать: имя Места, адрес или название"))
                 .put("lat", JSONObject().put("type", "number").put("description", "Широта, если известна"))
                 .put("lon", JSONObject().put("type", "number").put("description", "Долгота"))
-                .put("app", JSONObject().put("type", "string")
-                    .put("enum", JSONArray().put("navigator").put("maps"))
-                    .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты, по умолчанию), " +
-                        "maps = явно Яндекс Карты; maps передавай только когда пользователь явно просит Яндекс Карты")),
+                .put("app", navAppParam()),
             emptyList(),
         ))
         put(tool(
@@ -1663,12 +1655,21 @@ class AgentTools @Inject constructor(
 
     // --- navigation ---
 
-    // app rides the navigate payload only when the driver named Maps explicitly: without it
-    // the dispatcher's default (Navigator) path stays byte-identical. #200.
+    // app rides the navigate payload only when the driver named an app explicitly (Maps #200,
+    // Waze, Google Maps, 2GIS, Yandex Navigator): without it the dispatcher's default path stays
+    // byte-identical.
     private fun JSONObject.putApp(app: String): JSONObject = if (app.isEmpty()) this else put("app", app)
 
     private fun navApp(args: JSONObject): String =
-        if (args.optString("app").trim().equals("maps", ignoreCase = true)) "maps" else ""
+        args.optString("app").trim().lowercase(Locale.ROOT).takeIf { it in RouteNavigatorUris.ALL }.orEmpty()
+
+    /** The `app` parameter of the three navigation tools: the settings default or one named app. */
+    private fun navAppParam(): JSONObject = JSONObject().put("type", "string")
+        .put("enum", JSONArray().put("navigator").apply { RouteNavigatorUris.ALL.forEach { put(it) } })
+        .put("description", "navigator = приложение из настроек (по умолчанию). Явно названное " +
+            "пользователем приложение: yandex = Яндекс Навигатор, dgis = 2ГИС, maps = Яндекс Карты, " +
+            "waze = Waze, google_maps = Google Maps; передавай его, только когда пользователь сам назвал " +
+            "приложение, даже если в настройках выбрано другое")
 
     /** Per-command options of a route: «поехали» vs «построй маршрут», and which map app. */
     private data class NavOptions(val go: Boolean = false, val app: String = "")

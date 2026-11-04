@@ -1950,6 +1950,7 @@
     <string name="dispatch_waze_fallback">Waze не ўсталяваны, адкрыты Яндэкс Навігатар</string>
     <string name="dispatch_google_maps_fallback">Google Maps не ўсталяваны, адкрыты Яндэкс Навігатар</string>
     <string name="dispatch_google_maps_shortcut_unsupported">Google Maps не будуе маршрут Дом/Праца па камандзе: дадайце Месца «Дом» або «Праца» ў BYDMate</string>
+    <string name="dispatch_dgis_shortcut_unsupported">2ГІС не будуе маршрут Дом/Праца па камандзе: дадайце Месца «Дом» або «Праца» ў BYDMate</string>
     <string name="dispatch_shortcut_unknown">невядомы shortcut: %1$s</string>
     <string name="dispatch_coords_missing">lat/lon не зададзены</string>
     <string name="dispatch_url_missing">url не зададзены</string>

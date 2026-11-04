@@ -241,7 +241,9 @@ class ActionDispatcherNavigateTest {
     }
 
     /** #305: AgentTools waits for the package the intent was pinned to, so this must agree with
-     *  sendNavigateIntent: pinned only for an installed 2GIS/Waze and never for Maps or Home/Work. */
+     *  sendNavigateIntent: pinned for an installed 2GIS/Waze, never for Maps. Home/Work with Waze
+     *  chosen now opens Waze's own favourite, so it is pinned to Waze too (it was Yandex Navigator's
+     *  shortcut before); with 2GIS chosen it still is the Navigator's. */
     @Test fun willOpenPinned_follows_the_routing() {
         selectNavigator("waze")
         assertEquals(null, dispatcher.willOpenPinned(org.json.JSONObject("""{"lat":57.0,"lon":36.0}""")))
@@ -249,7 +251,101 @@ class ActionDispatcherNavigateTest {
         installWaze()
         assertEquals("com.waze", dispatcher.willOpenPinned(org.json.JSONObject("""{"lat":57.0,"lon":36.0}""")))
         assertEquals(null, dispatcher.willOpenPinned(org.json.JSONObject("""{"app":"maps","lat":57.0,"lon":36.0}""")))
+        assertEquals("com.waze", dispatcher.willOpenPinned(org.json.JSONObject("""{"shortcut":"home"}""")))
+
+        selectNavigator(RouteNavigatorUris.DGIS)
+        installDgis()
         assertEquals(null, dispatcher.willOpenPinned(org.json.JSONObject("""{"shortcut":"home"}""")))
+    }
+
+    /** Fork 76aca583: «домой» with Waze chosen opens Waze's saved Home, navigation started. */
+    @Test fun waze_home_shortcut_uses_the_favorite_deep_link() = runTest {
+        selectNavigator("waze")
+        installWaze()
+
+        val res = dispatcher.dispatch(actionDef("""{"shortcut":"home","go":true}"""), null)
+        assertTrue(res.reason ?: "", res.success)
+        val intent = shadowOf(app).nextStartedActivity
+        assertEquals("waze://?favorite=home&navigate=yes", intent.dataString)
+        assertEquals("com.waze", intent.`package`)
+        assertFalse(dispatcher.autoGoSupported(org.json.JSONObject("""{"shortcut":"home","go":true}""")))
+
+        dispatcher.dispatch(actionDef("""{"shortcut":"work"}"""), null)
+        assertEquals("waze://?favorite=work&navigate=yes", shadowOf(app).nextStartedActivity.dataString)
+    }
+
+    @Test fun waze_unknown_shortcut_is_refused() = runTest {
+        selectNavigator("waze")
+        installWaze()
+
+        val res = dispatcher.dispatch(actionDef("""{"shortcut":"dacha"}"""), null)
+        assertFalse(res.success)
+        assertEquals(null, shadowOf(app).nextStartedActivity)
+    }
+
+    // --- one command, one named app (`app`), whatever is chosen in settings ---
+
+    /** Fork e9110fc5/00b5d4a5: an explicit Google Maps is not redirected into the Waze default. */
+    @Test fun explicit_google_maps_ignores_default_waze() = runTest {
+        selectNavigator("waze")
+        installWaze()
+        installLauncherApp("com.google.android.apps.maps", "Карты")
+
+        val res = dispatcher.dispatch(actionDef("""{"app":"google_maps","lat":57.0,"lon":36.0}"""), null)
+        assertTrue(res.success)
+        val intent = shadowOf(app).nextStartedActivity
+        assertEquals("com.google.android.apps.maps", intent.`package`)
+        assertTrue(intent.dataString!!.startsWith("https://www.google.com/maps/dir/"))
+    }
+
+    /** The Waze manual package is the default's: a command naming Google Maps does not take it. */
+    @Test fun explicit_google_maps_is_not_sent_to_the_manual_waze_package() = runTest {
+        selectNavigator("waze")
+        setManualPackage("com.vendor.waze")
+        installLauncherApp("app.revanced.android.apps.maps", "Google Maps")
+
+        dispatcher.dispatch(actionDef("""{"app":"google_maps","lat":57.0,"lon":36.0}"""), null)
+        assertEquals("app.revanced.android.apps.maps", shadowOf(app).nextStartedActivity.`package`)
+    }
+
+    @Test fun explicit_waze_with_yandex_chosen_goes_to_waze() = runTest {
+        installWaze()
+
+        dispatcher.dispatch(actionDef("""{"app":"waze","lat":57.0,"lon":36.0}"""), null)
+        val intent = shadowOf(app).nextStartedActivity
+        assertEquals("waze://?ll=57.0,36.0&navigate=yes", intent.dataString)
+        assertEquals("com.waze", intent.`package`)
+        assertEquals("com.waze", dispatcher.willOpenPinned(org.json.JSONObject("""{"app":"waze","lat":57.0,"lon":36.0}""")))
+    }
+
+    /** A named app that is not installed is not swapped for Yandex Navigator: its own package is
+     *  asked, and a missing one fails honestly on the car. */
+    @Test fun explicit_missing_app_does_not_fall_back() = runTest {
+        val res = dispatcher.dispatch(actionDef("""{"app":"waze","lat":57.0,"lon":36.0}"""), null)
+        assertEquals(null, res.reason)
+        val intent = shadowOf(app).nextStartedActivity
+        assertEquals("com.waze", intent.`package`)
+        assertEquals("waze://?ll=57.0,36.0&navigate=yes", intent.dataString)
+    }
+
+    @Test fun explicit_yandex_with_waze_chosen_goes_to_the_navigator() = runTest {
+        selectNavigator("waze")
+        installWaze()
+
+        dispatcher.dispatch(actionDef("""{"app":"yandex","lat":57.0,"lon":36.0}"""), null)
+        assertEquals("yandexnavi://build_route_on_map?lat_to=57.0&lon_to=36.0",
+            shadowOf(app).nextStartedActivity.dataString)
+        assertTrue(dispatcher.autoGoSupported(org.json.JSONObject("""{"app":"yandex","lat":57.0,"lon":36.0}""")))
+    }
+
+    /** Home/Work in a named 2GIS is refused with advice, not opened in Yandex Navigator. */
+    @Test fun explicit_dgis_home_shortcut_is_refused() = runTest {
+        installDgis()
+
+        val res = dispatcher.dispatch(actionDef("""{"app":"dgis","shortcut":"home"}"""), null)
+        assertFalse(res.success)
+        assertTrue(res.reason!!, res.reason!!.contains("BYDMate"))
+        assertEquals(null, shadowOf(app).nextStartedActivity)
     }
 
     /** Field build 64023: Waze was installed, but the getLaunchIntentForPackage probe said it was

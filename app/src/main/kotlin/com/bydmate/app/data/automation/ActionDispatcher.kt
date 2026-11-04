@@ -1333,13 +1333,19 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         if (payload.optBoolean("show", false) || payload.optString("query").isNotBlank()) return false
         val navigator = resolveNavigator(payload).navigator
         if (navigator == RouteNavigatorUris.MAPS) return false
-        return if (payload.optString("shortcut").isNotBlank()) !ownsHomeWork(navigator)
+        return if (payload.optString("shortcut").isNotBlank()) !ownsHomeWork(navigator, payload)
         else navigator == RouteNavigatorUris.YANDEX
     }
 
-    /** Home/Work for [navigator] is its own business, not Yandex Navigator's shortcut action:
-     *  Google Maps has no such deep link and refuses it. */
-    private fun ownsHomeWork(navigator: String): Boolean = navigator == RouteNavigatorUris.GOOGLE_MAPS
+    /**
+     * Whether Home/Work for [navigator] is the app's own business rather than Yandex Navigator's
+     * shortcut action: Waze opens its saved favourite, Google Maps has no such link. A 2GIS the
+     * command named is not sent to another app either; 2GIS from settings keeps Yandex
+     * Navigator's Home/Work, as it always had.
+     */
+    private fun ownsHomeWork(navigator: String, payload: JSONObject): Boolean =
+        navigator == RouteNavigatorUris.WAZE || navigator == RouteNavigatorUris.GOOGLE_MAPS ||
+            (navigator == RouteNavigatorUris.DGIS && requestedNavigator(payload) != null)
 
     /** Whether [navigate] will press «Поехали» itself for [payload]: asked for, and possible here. */
     fun autoGoWillRun(payload: JSONObject): Boolean = autoGoRequested(payload) && autoGoSupported(payload)
@@ -1393,11 +1399,7 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         // app="maps" (voice: «…в Яндекс Картах») or Maps as the settings default mirror the
         // whole command set, Home/Work shortcut included, into Yandex Maps.
         if (navigator == RouteNavigatorUris.MAPS) return navigateMaps(payload, shortcut, target.pkg)
-        // Google Maps has no Home/Work deep link: refuse with the BYDMate Place advice rather than
-        // open a different app than the one chosen.
-        if (shortcut != null && navigator == RouteNavigatorUris.GOOGLE_MAPS) {
-            return DispatchResult(false, appStrings.get(R.string.dispatch_google_maps_shortcut_unsupported))
-        }
+        if (shortcut != null && ownsHomeWork(navigator, payload)) return ownHomeWork(target, shortcut)
         // Navigator's own saved Home/Work: exported shortcut actions on its MapActivity
         // resolve the address internally, so no coordinates are needed. Undocumented
         // (launcher-shortcut contract); tryStartActivity degrades to a clear error if
@@ -1442,9 +1444,30 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         )
     }
 
-    /** Per-command target of a navigate payload: Maps only when the driver named it. */
+    /**
+     * Home/Work in the app itself ([ownsHomeWork]): Waze's saved favourite; Google Maps and a
+     * named 2GIS have no such link and refuse with the BYDMate Place advice rather than open a
+     * different app than the one asked for.
+     */
+    private fun ownHomeWork(target: NavigatorTarget, shortcut: String): DispatchResult = when {
+        shortcut != "home" && shortcut != "work" ->
+            DispatchResult(false, appStrings.get(R.string.dispatch_shortcut_unknown, shortcut))
+        target.navigator == RouteNavigatorUris.WAZE -> startNavigate(
+            target, RouteNavigatorUris.MODE_ROUTE, RouteNavigatorUris.wazeFavorite(shortcut),
+            "navigate_waze_shortcut:$shortcut", fallbackReason = null,
+        )
+        target.navigator == RouteNavigatorUris.GOOGLE_MAPS ->
+            DispatchResult(false, appStrings.get(R.string.dispatch_google_maps_shortcut_unsupported))
+        else -> DispatchResult(false, appStrings.get(R.string.dispatch_dgis_shortcut_unsupported))
+    }
+
+    /**
+     * The app the navigate payload itself names (`app`), or null for the settings default: Maps
+     * («…в Яндекс Картах», #200) or any other route app by its id («…в Waze»). Unknown values
+     * keep the default.
+     */
     private fun requestedNavigator(payload: JSONObject): String? =
-        RouteNavigatorUris.MAPS.takeIf { payload.optString("app").trim().equals(it, ignoreCase = true) }
+        payload.optString("app").trim().lowercase(java.util.Locale.ROOT).takeIf { it in RouteNavigatorUris.ALL }
 
     /**
      * The package Yandex Navigator's own Home/Work action goes to: the manual package when the
@@ -1475,7 +1498,8 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         val target = resolveNavigator(payload)
         val pinned = when {
             target.navigator == RouteNavigatorUris.MAPS -> target.pkg
-            payload.optString("shortcut").isNotBlank() -> yandexShortcutPackage(target)
+            payload.optString("shortcut").isNotBlank() && !ownsHomeWork(target.navigator, payload) ->
+                yandexShortcutPackage(target)
             else -> target.pkg
         }
         return pinned?.takeUnless { it == NAVI_PACKAGE }

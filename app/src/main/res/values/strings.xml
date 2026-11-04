@@ -1965,6 +1965,7 @@
     <string name="dispatch_waze_fallback">Waze не установлен, открыт Яндекс Навигатор</string>
     <string name="dispatch_google_maps_fallback">Google Maps не установлен, открыт Яндекс Навигатор</string>
     <string name="dispatch_google_maps_shortcut_unsupported">Google Maps не строит маршрут Дом/Работа по команде: добавьте Место «Дом» или «Работа» в BYDMate</string>
+    <string name="dispatch_dgis_shortcut_unsupported">2ГИС не строит маршрут Дом/Работа по команде: добавьте Место «Дом» или «Работа» в BYDMate</string>
     <string name="dispatch_shortcut_unknown">неизвестный shortcut: %1$s</string>
     <string name="dispatch_coords_missing">lat/lon не заданы</string>
     <string name="dispatch_url_missing">url не задан</string>

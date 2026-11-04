@@ -108,6 +108,9 @@ object RouteNavigatorUris {
         else -> "yandexnavi://build_route_on_map?lat_to=$lat&lon_to=$lon"
     }
 
+    /** Waze's saved Home or Work ([shortcut] "home"/"work"), navigation started like its routes. */
+    fun wazeFavorite(shortcut: String): String = "waze://?favorite=$shortcut&navigate=yes"
+
     /**
      * Yandex Maps' own dialect (#200), reached either per command with `app="maps"` or, since
      * the setting grew a third value, when [MAPS] is the chosen navigator — Maps is a separate
