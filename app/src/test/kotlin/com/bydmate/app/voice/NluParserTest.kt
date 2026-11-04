@@ -56,6 +56,29 @@ class NluParserTest {
         assertEquals(listOf("主驾座椅加热1档", "副驾座椅加热1档"), commands("подогрев сидений"))
     }
 
+    /** Fork deb2a91d: opening the navigator is local; the generic word is the app from settings. */
+    @Test fun navigator_launch_is_local() {
+        assertEquals(ParseResult.Navigator(), NluParser.parse("открой навигатор"))
+        assertEquals(ParseResult.Navigator(), NluParser.parse("запусти навигатор"))
+        assertEquals(ParseResult.Navigator(), NluParser.parse("включи навигацию"))
+        assertEquals(ParseResult.Navigator(), NluParser.parse("навигатор"))
+    }
+
+    /** A named app is that app, not the one from settings. */
+    @Test fun a_named_navigation_app_is_that_app() {
+        assertEquals(ParseResult.Navigator("waze"), NluParser.parse("открой вейз"))
+        assertEquals(ParseResult.Navigator("google_maps"), NluParser.parse("открой гугл карты"))
+        assertEquals(ParseResult.Navigator("yandex"), NluParser.parse("запусти яндекс навигатор"))
+        assertEquals(ParseResult.Navigator("maps"), NluParser.parse("открой яндекс карты"))
+    }
+
+    /** A route or a search needs the agent (destination, places, geocoding), even in a named app. */
+    @Test fun routes_in_a_navigation_app_stay_with_the_agent() {
+        assertEquals(ParseResult.Unrecognized, NluParser.parse("построй маршрут в вейзе"))
+        assertEquals(ParseResult.Unrecognized, NluParser.parse("открой навигатор и построй маршрут домой"))
+        assertEquals(ParseResult.Unrecognized, NluParser.parse("навигатор и закрой окно"))
+    }
+
     @Test fun empty_and_filler_only_are_unrecognized() {
         assertEquals(ParseResult.Unrecognized, NluParser.parse(""))
         assertEquals(ParseResult.Unrecognized, NluParser.parse("пожалуйста спасибо"))

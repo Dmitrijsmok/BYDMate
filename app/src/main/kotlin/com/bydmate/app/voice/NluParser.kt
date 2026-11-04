@@ -15,6 +15,9 @@ sealed interface ParseResult {
     data class Ask(val question: VehicleQuestion) : ParseResult
     /** Yandex Music's personal mix, started like the agent's play_music with no query. */
     data object Music : ParseResult
+    /** Open a navigation app, nothing routed: [app] is a RouteNavigatorUris id, null = the app
+     *  chosen in «Навигатор для маршрутов». */
+    data class Navigator(val app: String? = null) : ParseResult
     data object Unrecognized : ParseResult
 }
 

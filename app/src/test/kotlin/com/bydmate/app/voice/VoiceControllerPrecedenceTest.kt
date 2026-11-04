@@ -266,6 +266,27 @@ class VoiceControllerPrecedenceTest {
         assertEquals(listOf("车窗关闭"), r.dispatched.toList())
     }
 
+    /** Fork b1701042: «открой навигатор» opens the app from settings locally, with no agent. */
+    @Test fun `the generic navigator phrase opens the chosen app locally`() {
+        val r = rig(null, VoiceUserPhrases())
+        coEvery { r.dispatcher.openNavigatorApp(any()) } returns DispatchResult(true)
+        val entry = r.say("открой навигатор")
+
+        assertEquals(VoiceJournalEntry.Route.NLU, entry.route)
+        assertEquals("navigator:open", entry.command)
+        coVerify(exactly = 1) { r.dispatcher.openNavigatorApp(null) }
+    }
+
+    /** A named app is opened as itself, whatever is chosen in settings. */
+    @Test fun `a named navigation app opens that app locally`() {
+        val r = rig(null, VoiceUserPhrases())
+        coEvery { r.dispatcher.openNavigatorApp(any()) } returns DispatchResult(true)
+        val entry = r.say("открой гугл карты")
+
+        assertEquals("navigator:open:google_maps", entry.command)
+        coVerify(exactly = 1) { r.dispatcher.openNavigatorApp("google_maps") }
+    }
+
     @Test fun `nothing matched goes to the agent with the unrecognized reason`() {
         val r = rig(null, VoiceUserPhrases())
         val entry = r.say("расскажи анекдот")

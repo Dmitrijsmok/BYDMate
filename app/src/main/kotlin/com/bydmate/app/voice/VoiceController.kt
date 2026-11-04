@@ -7,6 +7,7 @@ import com.bydmate.app.agent.AgentResult
 import com.bydmate.app.agent.AgentTrace
 import com.bydmate.app.data.automation.ActionDispatcher
 import com.bydmate.app.data.automation.AutomationEngine
+import com.bydmate.app.data.automation.DispatchResult
 import com.bydmate.app.data.automation.VoiceFireResult
 import com.bydmate.app.R
 import com.bydmate.app.data.local.entity.ActionDef
@@ -742,6 +743,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             is ParseResult.RelativeTemp -> Resolution.RelTemp(r.sign)
             is ParseResult.Volume -> Resolution.Vol(r.payload)
             ParseResult.Music -> Resolution.Music
+            is ParseResult.Navigator -> Resolution.Navigator(r.app)
             // A value the car does not report goes to the agent, never a made-up answer; so does
             // every question while the snapshot is not live: it is never cleared on transport
             // loss, and the range, kept elsewhere, would be just as old.
@@ -761,6 +763,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             is Resolution.RelTemp -> dispatchRelativeTemp(res.sign, transcript, decodeMs)
             is Resolution.Vol -> dispatchVolume(res.payload, transcript, decodeMs)
             Resolution.Music -> dispatchMusic(transcript, decodeMs)
+            is Resolution.Navigator -> dispatchNavigator(res, transcript, decodeMs)
             is Resolution.Answer -> answer(res, transcript, decodeMs)
             is Resolution.Auto -> fireAutomation(res.match, transcript, decodeMs)
             is Resolution.None -> agentFallback(transcript, decodeMs)
@@ -948,15 +951,31 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         }
     }
 
+    /** «открой навигатор» / «открой вейз»: the app opened as the agent's launch_app opens it
+     *  (same names, same resolver), offline and without the agent. Nothing is routed. */
+    private suspend fun dispatchNavigator(res: Resolution.Navigator, transcript: String, decodeMs: Long?) {
+        val result = actionDispatcher.openNavigatorApp(res.app)
+        reportDispatch(result, res.label, "cmd=navigator app=${res.app ?: "default"}", transcript, decodeMs)
+    }
+
     /** Runs a dictionary media [action] (never speed-gated) and reports it like any command;
      *  [label] is its journal command. True when it ran. */
     private suspend fun dispatchMedia(action: ActionDef, label: String, transcript: String, decodeMs: Long?): Boolean {
         val result = actionDispatcher.dispatch(action, data = gate.vehicleSnapshot())
+        reportDispatch(result, label, "cmd=${action.kind} payload=${action.payload}", transcript, decodeMs)
+        return result.success
+    }
+
+    /** Reports a dictionary dispatch like any command: earcon, UI state, journal [label], speech;
+     *  [detail] is what the log line says ran. */
+    private suspend fun reportDispatch(
+        result: DispatchResult, label: String, detail: String, transcript: String, decodeMs: Long?,
+    ) {
         if (result.success) {
             earcon.ok()
             _state.value = VoiceUiState.Done(transcript)
             record(nluEntry(transcript, decodeMs, label, VoiceJournalEntry.Outcome.OK),
-                "NLU dispatched: cmd=${action.kind} payload=${action.payload} transcript=\"$transcript\"")
+                "NLU dispatched: $detail transcript=\"$transcript\"")
             announce("Голос", "Услышал: «$transcript». Выполнено", "Готово", done = true)
             scope.launch { runCatching { agentOrchestrator.noteAction(transcript) } }
         } else {
@@ -964,10 +983,9 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             earcon.fail()
             _state.value = VoiceUiState.Blocked(reason)
             record(nluEntry(transcript, decodeMs, label, VoiceJournalEntry.Outcome.BLOCKED)
-                .copy(reason = reason, refusal = VoiceRefusal.DISPATCH_FAILED), "NLU blocked: cmd=${action.kind} payload=${action.payload} transcript=\"$transcript\" reason=$reason")
+                .copy(reason = reason, refusal = VoiceRefusal.DISPATCH_FAILED), "NLU blocked: $detail transcript=\"$transcript\" reason=$reason")
             announce("Голос", "Услышал: «$transcript». Отказ: $reason", "Не получилось")
         }
-        return result.success
     }
 
     /** A dictionary question answered from the car's readings: said and shown like any other
@@ -1199,6 +1217,10 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         data class RelTemp(val sign: Int) : Resolution
         data class Vol(val payload: String) : Resolution
         data object Music : Resolution
+        /** A navigation app to open, [app] null = the one chosen in settings. */
+        data class Navigator(val app: String?) : Resolution {
+            val label: String get() = "navigator:open" + (app?.let { ":$it" } ?: "")
+        }
         /** A dictionary question with the value known: [text] is said, nothing is dispatched. */
         data class Answer(val question: VehicleQuestion, val text: String) : Resolution {
             val label: String get() = "ask:${question.id}"
@@ -1210,7 +1232,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         /** The route code of the trace. */
         val route: String get() = when (this) {
             is Cmd -> if (label.startsWith("phrase:")) "phrase" else "nlu"
-            is RelTemp, is Vol, Music, is Answer -> "nlu"
+            is RelTemp, is Vol, Music, is Navigator, is Answer -> "nlu"
             is Auto -> "automation"
             is None -> "agent"
         }

@@ -1178,6 +1178,24 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
 
     // --- external activities ---
 
+    /**
+     * Opens a navigation app without a route — the offline «открой навигатор» / «открой вейз».
+     * [navigator] is a [RouteNavigatorUris] id, null = the app chosen in settings (then Yandex
+     * Navigator when that one is missing). Packages come from [RouteNavigatorResolver] exactly as
+     * for the agent's launch_app: the first one with a launcher entry, else the first candidate,
+     * whose launch reports honestly that it is not installed.
+     */
+    suspend fun openNavigatorApp(navigator: String?): DispatchResult {
+        val launcher = RouteNavigatorDiscovery.launcherApps(context.packageManager)
+        val candidates = RouteNavigatorResolver.launchCandidates(
+            RouteNavigatorResolver.choice(context), navigator, launcher)
+        val launchable = launcher.mapTo(HashSet()) { it.packageName }
+        val pkg = candidates.firstOrNull { it in launchable } ?: candidates.firstOrNull() ?: NAVI_PACKAGE
+        Log.i(TAG, "navigator open: app=${navigator ?: "default"} pkg=$pkg")
+        return launchApp(ActionDef(command = "", displayName = "Навигатор", kind = "app_launch",
+            payload = JSONObject().put("packageName", pkg).toString()))
+    }
+
     private suspend fun launchApp(action: ActionDef): DispatchResult {
         val payload = parsePayload(action.payload)
         val pkg = payload?.optString("packageName")?.takeIf(String::isNotBlank)

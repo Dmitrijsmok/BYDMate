@@ -29,6 +29,9 @@
 #                       the phrase to the agent
 #   MUSIC               Yandex Music's personal mix («Моя волна»), as the agent's play_music
 #                       starts it with no query
+#   NAVIGATOR [APP]     open a navigation app, nothing routed: without APP the one chosen in
+#                       «Навигатор для маршрутов», else that app (yandex, maps, waze,
+#                       google_maps), as the agent's launch_app opens it
 # Every template phrase has a row in app/src/test/resources/voice/ru_commands_golden.tsv.
 
 # ---- Verbs ---------------------------------------------------------------------------------
@@ -286,6 +289,20 @@ solo громкость [на] {vol} [<pct_word>] => VOL {vol}
 rule yandex_music: яндекс (музыку|музыка|мьюзик)
 (включи|запусти|открой|поставь) <yandex_music> => MUSIC
 solo <yandex_music> => MUSIC
+
+# ---- Navigation app ------------------------------------------------------------------------
+# Opening the app only: a route or a search needs a destination, places and geocoding, and stays
+# with the agent. «навигатор»/«навигацию» is the app chosen in settings; an app named is that app,
+# whatever is chosen (the names of NavigatorAppNames). 2GIS is left to the agent: «два гис» is a
+# number to this file.
+
+rule launch: открой|открыть|запусти|запустить|включи|включить
+<launch> (навигатор|навигацию) => NAVIGATOR
+solo навигатор => NAVIGATOR
+<launch> яндекс навигатор => NAVIGATOR yandex
+<launch> яндекс карты => NAVIGATOR maps
+<launch> (вейз|вэйз|уэйз|waze) => NAVIGATOR waze
+<launch> (гугл карты|гугл мапс|карты гугл|google maps) => NAVIGATOR google_maps
 
 # ---- Locks and trunk -----------------------------------------------------------------------
 # "закрой дверь" said to a passenger is not addressed to the car: only "машину" and the lock
