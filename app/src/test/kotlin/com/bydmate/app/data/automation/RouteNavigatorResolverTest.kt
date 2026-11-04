@@ -87,6 +87,31 @@ class RouteNavigatorResolverTest {
         assertNull(RouteNavigatorDiscovery.navigatorOf("com.example.player"))
     }
 
+    /** ReVanced, RVX and other MicroG builds of Google Maps are Google Maps (fork da8209b1). */
+    @Test fun `google maps builds are told by their package`() {
+        assertEquals(RouteNavigatorUris.GOOGLE_MAPS, RouteNavigatorDiscovery.navigatorOf("app.revanced.android.apps.maps"))
+        assertEquals(RouteNavigatorUris.GOOGLE_MAPS, RouteNavigatorDiscovery.navigatorOf("app.rvx.android.apps.maps"))
+        assertEquals(RouteNavigatorUris.GOOGLE_MAPS, RouteNavigatorDiscovery.navigatorOf("com.google.android.apps.maps"))
+        // MicroG itself is not a map app.
+        assertNull(RouteNavigatorDiscovery.navigatorOf("app.revanced.android.gms"))
+    }
+
+    /** Google Maps is labelled a bare «Карты» in Russian: that must not make it Yandex Maps, and
+     *  Yandex Maps must not pass for Google Maps. */
+    @Test fun `the russian google maps label does not collide with yandex maps`() {
+        assertEquals(false, RouteNavigatorDiscovery.matches(RouteNavigatorUris.MAPS, "com.google.android.apps.maps", "Карты"))
+        assertEquals(true, RouteNavigatorDiscovery.matches(RouteNavigatorUris.GOOGLE_MAPS, "com.google.android.apps.maps", "Карты"))
+        assertEquals(false, RouteNavigatorDiscovery.matches(RouteNavigatorUris.GOOGLE_MAPS, "ru.yandex.yandexmaps", "Яндекс Карты"))
+        assertEquals(false, RouteNavigatorDiscovery.matches(RouteNavigatorUris.GOOGLE_MAPS, "com.vendor.maps", "Карты"))
+    }
+
+    @Test fun `google maps missing falls back to yandex and says which`() {
+        assertEquals(
+            NavigatorTarget(RouteNavigatorUris.YANDEX, null, fellBackFrom = RouteNavigatorUris.GOOGLE_MAPS),
+            RouteNavigatorResolver.resolve(choice(RouteNavigatorUris.GOOGLE_MAPS), null, installed()),
+        )
+    }
+
     /** "Яндекс Карты и Навигатор" is the Maps app; the Navigator is not told by one shared word. */
     @Test fun `labels tell maps from the navigator`() {
         assertEquals(true, RouteNavigatorDiscovery.matches(RouteNavigatorUris.MAPS, "x.y", "Яндекс Карты и Навигатор"))

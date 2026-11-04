@@ -1308,12 +1308,20 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
      * result list, and 2GIS has no such node at all. Maps is excluded too, whether by
      * app="maps" or as the settings default (#200, willOpenMaps): the a11y read that finds
      * and presses «Поехали» looks at the Navigator's window, not Maps' - including for the
-     * Home/Work shortcut, which now can land on Maps as well.
+     * Home/Work shortcut, which now can land on Maps as well, and for an app whose Home/Work
+     * is its own ([ownsHomeWork]).
      */
-    fun autoGoSupported(payload: JSONObject): Boolean =
-        !payload.optBoolean("show", false) && payload.optString("query").isBlank() && !willOpenMaps(payload) &&
-            (payload.optString("shortcut").isNotBlank() ||
-                resolveNavigator(payload).navigator == RouteNavigatorUris.YANDEX)
+    fun autoGoSupported(payload: JSONObject): Boolean {
+        if (payload.optBoolean("show", false) || payload.optString("query").isNotBlank()) return false
+        val navigator = resolveNavigator(payload).navigator
+        if (navigator == RouteNavigatorUris.MAPS) return false
+        return if (payload.optString("shortcut").isNotBlank()) !ownsHomeWork(navigator)
+        else navigator == RouteNavigatorUris.YANDEX
+    }
+
+    /** Home/Work for [navigator] is its own business, not Yandex Navigator's shortcut action:
+     *  Google Maps has no such deep link and refuses it. */
+    private fun ownsHomeWork(navigator: String): Boolean = navigator == RouteNavigatorUris.GOOGLE_MAPS
 
     /** Whether [navigate] will press «Поехали» itself for [payload]: asked for, and possible here. */
     fun autoGoWillRun(payload: JSONObject): Boolean = autoGoRequested(payload) && autoGoSupported(payload)
@@ -1353,6 +1361,7 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         RouteNavigatorUris.DGIS -> appStrings.get(R.string.dispatch_dgis_fallback)
         RouteNavigatorUris.MAPS -> appStrings.get(R.string.dispatch_maps_fallback)
         RouteNavigatorUris.WAZE -> appStrings.get(R.string.dispatch_waze_fallback)
+        RouteNavigatorUris.GOOGLE_MAPS -> appStrings.get(R.string.dispatch_google_maps_fallback)
         else -> null
     }
 
@@ -1366,6 +1375,11 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         // app="maps" (voice: «…в Яндекс Картах») or Maps as the settings default mirror the
         // whole command set, Home/Work shortcut included, into Yandex Maps.
         if (navigator == RouteNavigatorUris.MAPS) return navigateMaps(payload, shortcut, target.pkg)
+        // Google Maps has no Home/Work deep link: refuse with the BYDMate Place advice rather than
+        // open a different app than the one chosen.
+        if (shortcut != null && navigator == RouteNavigatorUris.GOOGLE_MAPS) {
+            return DispatchResult(false, appStrings.get(R.string.dispatch_google_maps_shortcut_unsupported))
+        }
         // Navigator's own saved Home/Work: exported shortcut actions on its MapActivity
         // resolve the address internally, so no coordinates are needed. Undocumented
         // (launcher-shortcut contract); tryStartActivity degrades to a clear error if

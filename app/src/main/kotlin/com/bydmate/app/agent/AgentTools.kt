@@ -321,6 +321,7 @@ class AgentTools @Inject constructor(
             else -> when (pinned?.let(RouteNavigatorDiscovery::navigatorOf)) {
                 RouteNavigatorUris.DGIS -> "2ГИС"
                 RouteNavigatorUris.WAZE -> "Waze"
+                RouteNavigatorUris.GOOGLE_MAPS -> "Google Maps"
                 else -> "Навигатор"
             }
         }

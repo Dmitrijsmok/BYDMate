@@ -23,6 +23,7 @@ internal object RouteNavigatorDiscovery {
         RouteNavigatorUris.DGIS -> listOf(RouteNavigatorUris.DGIS_PACKAGE)
         RouteNavigatorUris.MAPS -> NavPackages.YANDEX_MAPS.toList()
         RouteNavigatorUris.WAZE -> listOf(RouteNavigatorUris.WAZE_PACKAGE)
+        RouteNavigatorUris.GOOGLE_MAPS -> RouteNavigatorUris.GOOGLE_MAPS_PACKAGES
         else -> NavPackages.YANDEX_NAVI.toList()
     }
 
@@ -31,13 +32,22 @@ internal object RouteNavigatorDiscovery {
         val pkg = packageName.lowercase(Locale.ROOT)
         val name = label.trim().lowercase(Locale.ROOT).replace('ё', 'е')
         return when (RouteNavigatorUris.normalize(navigator)) {
-            RouteNavigatorUris.DGIS -> "dublgis" in pkg || "2gis" in pkg || "2гис" in name || "2gis" in name
+            RouteNavigatorUris.DGIS -> listOf("dublgis", "2gis").any { it in pkg } || listOf("2гис", "2gis").any { it in name }
             // "Яндекс Карты и Навигатор" is Maps, so the Navigator needs its own two words together.
-            RouteNavigatorUris.MAPS -> "yandexmaps" in pkg || "яндекс карты" in name || "yandex maps" in name
+            RouteNavigatorUris.MAPS -> "yandexmaps" in pkg || listOf("яндекс карты", "yandex maps").any { it in name }
             RouteNavigatorUris.WAZE -> "waze" in pkg || name == "waze"
-            else -> "yandexnavi" in pkg || "яндекс навигатор" in name || "yandex navigator" in name
+            // The Russian launcher label of Google Maps is a bare "Карты", which says nothing:
+            // only the package and the explicit names count.
+            RouteNavigatorUris.GOOGLE_MAPS -> isGoogleMapsPackage(pkg) || name in GOOGLE_MAPS_LABELS
+            else -> "yandexnavi" in pkg || listOf("яндекс навигатор", "yandex navigator").any { it in name }
         }
     }
+
+    /** ReVanced/RVX and other MicroG builds keep "android.apps.maps" (or "maps" and their name) in the package. */
+    private fun isGoogleMapsPackage(pkg: String): Boolean =
+        pkg.endsWith(".android.apps.maps") || ("maps" in pkg && ("google" in pkg || "revanced" in pkg))
+
+    private val GOOGLE_MAPS_LABELS = setOf("google maps", "карты google", "гугл карты", "google карты")
 
     /** The navigator id [packageName] is a build of, or null for any other app. Pure. */
     fun navigatorOf(packageName: String): String? =

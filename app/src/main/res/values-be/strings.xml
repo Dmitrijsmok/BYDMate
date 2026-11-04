@@ -1486,11 +1486,12 @@
     <string name="settings_route_navigator_dgis">2ГІС</string>
     <string name="settings_route_navigator_maps">Яндэкс Карты</string>
     <string name="settings_route_navigator_waze">Waze</string>
+    <string name="settings_route_navigator_google_maps">Google Maps</string>
     <string name="settings_route_navigator_hint">Якую праграму адкрываць для маршрутаў і пошуку на карце</string>
     <string name="settings_route_navigator_resolved">Выкарыстоўваецца пакет: %1$s</string>
     <string name="settings_route_navigator_resolved_missing">Усталяваны пакет для выбранага навігатара не знойдзены</string>
     <string name="settings_route_navigator_package_label">Пакет навігатара (неабавязкова)</string>
-    <string name="settings_route_navigator_package_hint">Для нестандартнай зборкі ўкажыце дакладны пакет, напрыклад ru.yandex.yandexnavi.inhouse. Пуста — усталяваная праграма вызначаецца аўтаматычна</string>
+    <string name="settings_route_navigator_package_hint">Для нестандартнай зборкі ўкажыце дакладны пакет, напрыклад app.revanced.android.apps.maps (Google Maps для MicroG). Пуста — усталяваная праграма вызначаецца аўтаматычна</string>
     <string name="settings_agent_memory_title">Памяць пра кіроўцу</string>
     <string name="settings_agent_memory_hint">Агент запамінае імя і ўстойлівыя перавагі, калі вы яму пра гэта кажаце. Скажыце «забудзь …», каб прыбраць адзін факт</string>
     <string name="settings_agent_memory_empty">Пакуль нічога не запомнена</string>
@@ -1947,6 +1948,8 @@
     <string name="dispatch_dgis_fallback">2ГІС не ўсталяваны, адкрыты Яндэкс Навігатар</string>
     <string name="dispatch_maps_fallback">Яндэкс Карты не ўсталяваны, адкрыты Яндэкс Навігатар</string>
     <string name="dispatch_waze_fallback">Waze не ўсталяваны, адкрыты Яндэкс Навігатар</string>
+    <string name="dispatch_google_maps_fallback">Google Maps не ўсталяваны, адкрыты Яндэкс Навігатар</string>
+    <string name="dispatch_google_maps_shortcut_unsupported">Google Maps не будуе маршрут Дом/Праца па камандзе: дадайце Месца «Дом» або «Праца» ў BYDMate</string>
     <string name="dispatch_shortcut_unknown">невядомы shortcut: %1$s</string>
     <string name="dispatch_coords_missing">lat/lon не зададзены</string>
     <string name="dispatch_url_missing">url не зададзены</string>

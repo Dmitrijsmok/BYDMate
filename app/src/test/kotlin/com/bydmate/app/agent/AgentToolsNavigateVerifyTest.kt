@@ -146,6 +146,27 @@ class AgentToolsNavigateVerifyTest {
         assertTrue(out.getString("error"), out.getString("error").contains("Waze не вышел на передний план"))
     }
 
+    /** A route pinned to the ReVanced Google Maps waits for that build and names Google Maps (fork 1739840d). */
+    @Test fun `google maps route waits for its build and names it`() = runTest {
+        every { dispatcher.willOpenPinned(any()) } returns "app.revanced.android.apps.maps"
+        coEvery { dispatcher.dispatch(any(), any()) } returns DispatchResult(true)
+        val ok = tools().also {
+            it.naviForegroundCheck = { false }
+            it.pinnedForegroundCheck = { _, pkg -> pkg == "app.revanced.android.apps.maps" }
+            it.naviVerifyAttempts = 2
+            it.naviVerifyIntervalMs = 1L
+        }
+        assertTrue(JSONObject(ok.execute(call("navigate_to", """{"lat":55.0,"lon":37.0}"""))).optBoolean("ok"))
+
+        val never = tools().also {
+            it.pinnedForegroundCheck = { _, _ -> false }
+            it.naviVerifyAttempts = 1
+            it.naviVerifyIntervalMs = 1L
+        }
+        val out = JSONObject(never.execute(call("navigate_to", """{"lat":55.0,"lon":37.0}""")))
+        assertTrue(out.toString(), out.getString("error").contains("Google Maps не вышел на передний план"))
+    }
+
     /** #190: 2GIS had the same defect - the check now waits for its package as well. */
     @Test fun `2gis route waits for 2gis`() = runTest {
         every { dispatcher.willOpenPinned(any()) } returns "ru.dublgis.dgismobile"

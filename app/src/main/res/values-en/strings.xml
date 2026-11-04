@@ -1334,11 +1334,12 @@
     <string name="settings_route_navigator_dgis">2GIS</string>
     <string name="settings_route_navigator_maps">Yandex Maps</string>
     <string name="settings_route_navigator_waze">Waze</string>
+    <string name="settings_route_navigator_google_maps">Google Maps</string>
     <string name="settings_route_navigator_hint">Which app opens for routes and map search</string>
     <string name="settings_route_navigator_resolved">Package in use: %1$s</string>
     <string name="settings_route_navigator_resolved_missing">No installed package found for the selected navigator</string>
     <string name="settings_route_navigator_package_label">Navigator package (optional)</string>
-    <string name="settings_route_navigator_package_hint">For a custom build, enter the exact package, for example ru.yandex.yandexnavi.inhouse. Leave blank to detect the installed app automatically</string>
+    <string name="settings_route_navigator_package_hint">For a custom build, enter the exact package, for example app.revanced.android.apps.maps (Google Maps for MicroG). Leave blank to detect the installed app automatically</string>
     <string name="settings_agent_memory_title">Driver memory</string>
     <string name="settings_agent_memory_hint">The agent remembers your name and lasting preferences when you tell it to. Say “forget …” to drop a single fact</string>
     <string name="settings_agent_memory_empty">Nothing remembered yet</string>
@@ -1795,6 +1796,8 @@
     <string name="dispatch_dgis_fallback">2GIS is not installed, Yandex Navigator opened</string>
     <string name="dispatch_maps_fallback">Yandex Maps is not installed, Yandex Navigator opened</string>
     <string name="dispatch_waze_fallback">Waze is not installed, Yandex Navigator opened</string>
+    <string name="dispatch_google_maps_fallback">Google Maps is not installed, Yandex Navigator opened</string>
+    <string name="dispatch_google_maps_shortcut_unsupported">Google Maps cannot route to Home/Work on command: add a «Home» or «Work» Place in BYDMate</string>
     <string name="dispatch_shortcut_unknown">unknown shortcut: %1$s</string>
     <string name="dispatch_coords_missing">lat/lon not set</string>
     <string name="dispatch_url_missing">url not set</string>

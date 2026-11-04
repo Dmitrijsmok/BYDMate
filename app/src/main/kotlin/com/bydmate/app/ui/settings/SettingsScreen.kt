@@ -4645,6 +4645,7 @@ private fun routeNavigatorLabel(id: String): String = stringResource(
         com.bydmate.app.data.automation.RouteNavigatorUris.DGIS -> R.string.settings_route_navigator_dgis
         com.bydmate.app.data.automation.RouteNavigatorUris.MAPS -> R.string.settings_route_navigator_maps
         com.bydmate.app.data.automation.RouteNavigatorUris.WAZE -> R.string.settings_route_navigator_waze
+        com.bydmate.app.data.automation.RouteNavigatorUris.GOOGLE_MAPS -> R.string.settings_route_navigator_google_maps
         else -> R.string.settings_route_navigator_yandex
     },
 )
