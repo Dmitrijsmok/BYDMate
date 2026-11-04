@@ -347,6 +347,29 @@ class VoiceControllerPrecedenceTest {
         assertTrue(r.actions.none { it.kind == "app_launch" })
     }
 
+    @Test fun `a name of the shared app table closes that app offline`() {
+        val r = rig(null, VoiceUserPhrases(), withTiktok())
+        val entry = r.say("закрой тик ток")
+
+        assertEquals(VoiceJournalEntry.Route.NLU, entry.route)
+        assertEquals(VoiceJournalEntry.Outcome.OK, entry.outcome)
+        assertEquals("app:close:тик ток", entry.command)
+        val action = r.actions.single()
+        assertEquals("app_close", action.kind)
+        assertEquals("com.zhiliaoapp.musically", JSONObject(action.payload!!).getString("packageName"))
+    }
+
+    @Test fun `the close step never shadows a dictionary command`() {
+        val resolver = withTiktok()
+        val r = rig(null, VoiceUserPhrases(), resolver)
+
+        for (phrase in listOf("закрой окна", "закрой люк", "закрой багажник")) {
+            assertEquals(parserLabel(phrase), r.say(phrase).command)
+        }
+        verify(exactly = 0) { resolver.packageFor(any()) }
+        assertTrue(r.actions.none { it.kind == "app_close" })
+    }
+
     @Test fun `an unknown app goes to the agent`() {
         val r = rig(null, VoiceUserPhrases(), withTiktok())
         assertEquals(VoiceJournalEntry.Route.REFUSED, r.say("открой калькулятор").route)

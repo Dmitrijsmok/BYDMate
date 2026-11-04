@@ -691,8 +691,9 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
 
     /**
      * The local fallbacks after a dictionary miss, before the agent: a GigaAM-clipped read-only
-     * vehicle question ([LocalVehicleQuery]), then «открой <приложение>» with a name of the app
-     * table the agent and Alice share ([localAppLaunch]). Anything else, ambiguous included,
+     * vehicle question ([LocalVehicleQuery]), then «открой <приложение>» / «закрой <приложение>»
+     * with a name of the app table the agent and Alice share ([localAppLaunch], [localAppClose]).
+     * Anything else, ambiguous included,
      * continues to the agent path. True when one of them ran.
      */
     private suspend fun routeLocally(command: String, decodeMs: Long, reason: String): Boolean {
@@ -719,7 +720,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             announce("Голос", localReply.text, localReply.text)
             return true
         }
-        val app = localAppLaunch(command) ?: return false
+        val app = localAppLaunch(command) ?: localAppClose(command) ?: return false
         heard(decodeMs, "local_app")
         _state.value = VoiceUiState.Thinking
         val result = actionDispatcher.dispatch(app.action, data = gate.vehicleSnapshot())
@@ -727,7 +728,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         return true
     }
 
-    /** What the offline «открой <приложение>» runs: [action], journaled as [label]. */
+    /** What the offline «открой / закрой <приложение>» runs: [action], journaled as [label]. */
     private class LocalAppLaunch(val action: ActionDef, val label: String, val detail: String)
 
     /**
@@ -752,6 +753,24 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         val payload = JSONObject().put("packageName", pkg).toString()
         return LocalAppLaunch(ActionDef("", "Запуск ${hit.name}", "app_launch", payload),
             "app:open:${hit.name}", "app=${hit.name} pkg=$pkg")
+    }
+
+    /**
+     * The offline «закрой / выключи <приложение>» ([LocalAppLaunchQuery.matchClose]) as the
+     * "app_close" action (a force-stop through the daemon), or null: not such a phrase, not a name
+     * of the table, or the app is not installed (then the agent gets the phrase).
+     */
+    private fun localAppClose(command: String): LocalAppLaunch? {
+        val resolver = appResolver ?: return null
+        val hit = LocalAppLaunchQuery.matchClose(command) ?: return null
+        val pkg = runCatching { resolver.packageFor(hit.target) }.getOrNull()
+        if (pkg == null) {
+            Log.i(TAG, "Local app close: \"${hit.name}\" is not installed, the phrase goes to the agent")
+            return null
+        }
+        val payload = JSONObject().put("packageName", pkg).put("appLabel", hit.name).toString()
+        return LocalAppLaunch(ActionDef("", "Закрыть ${hit.name}", "app_close", payload),
+            "app:close:${hit.name}", "close app=${hit.name} pkg=$pkg")
     }
 
     /** Trace event of the phrase: where it went (never what was said); the cause of the turn. */

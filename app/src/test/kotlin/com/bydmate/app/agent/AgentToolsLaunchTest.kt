@@ -401,6 +401,42 @@ class AgentToolsLaunchTest {
         coVerify(exactly = 0) { dispatcher.dispatch(any(), any()) }
     }
 
+    // --- close_app: «закрой тик ток» closes, never launches (field log 1.1.1) ---
+
+    @Test fun close_app_force_stops_the_named_app() = runTest {
+        val captured = slot<ActionDef>()
+        coEvery { dispatcher.dispatch(capture(captured), any()) } returns DispatchResult(true)
+        val t = tools().apply { launcherAppsProvider = { listOf("TikTok" to "com.zhiliaoapp.musically") } }
+        val out = JSONObject(t.execute(AgentToolCall("1", "close_app", """{"name":"тик ток"}""")))
+        assertTrue(out.getBoolean("ok"))
+        assertEquals("TikTok", out.getString("closed"))
+        assertEquals("app_close", captured.captured.kind)
+        assertEquals("com.zhiliaoapp.musically", JSONObject(captured.captured.payload!!).getString("packageName"))
+    }
+
+    @Test fun close_app_reports_the_dispatcher_refusal() = runTest {
+        coEvery { dispatcher.dispatch(any(), any()) } returns DispatchResult(false, "служебный процесс перезапускается")
+        val t = tools().apply { launcherAppsProvider = { listOf("TikTok" to "com.zhiliaoapp.musically") } }
+        val out = JSONObject(t.execute(AgentToolCall("1", "close_app", """{"name":"тикток"}""")))
+        assertFalse(out.has("ok"))
+        assertEquals("служебный процесс перезапускается", out.getString("error"))
+    }
+
+    @Test fun close_app_unknown_app_is_not_found() = runTest {
+        val t = tools().apply { launcherAppsProvider = { launcherFixture } }
+        val out = JSONObject(t.execute(AgentToolCall("1", "close_app", """{"name":"калькулятор"}""")))
+        assertTrue(out.getString("error").contains("приложение не найдено"))
+        coVerify(exactly = 0) { dispatcher.dispatch(any(), any()) }
+    }
+
+    @Test fun the_tool_descriptions_steer_closing_to_close_app() = runTest {
+        val schemas = tools().schemas()
+        fun description(name: String) = (0 until schemas.length()).map { schemas.getJSONObject(it).getJSONObject("function") }
+            .single { it.getString("name") == name }.getString("description")
+        assertTrue(description("launch_app").contains("close_app"))
+        assertTrue(description("close_app").contains("закрой тикток"))
+    }
+
     // (a2) RU alias "камера" resolves to the Chinese label via com.byd.avc.
     @Test fun launch_app_alias_camera_resolves_chinese_label() = runTest {
         val captured = slot<ActionDef>()

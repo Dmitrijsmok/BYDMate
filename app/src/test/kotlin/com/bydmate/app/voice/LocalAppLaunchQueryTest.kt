@@ -42,4 +42,40 @@ class LocalAppLaunchQueryTest {
         assertNull(target("открой"))
         assertNull(target("включи тикток"))
     }
+
+    private fun closeTarget(text: String) = LocalAppLaunchQuery.matchClose(text)?.target
+
+    @Test fun apps_of_the_table_are_closed_by_name() {
+        val tiktok = AliceAppCatalog.forAction("app.tiktok.open")
+        assertEquals(tiktok, closeTarget("закрой тик ток"))
+        assertEquals(tiktok, closeTarget("выключи тикток"))
+        assertEquals(tiktok, closeTarget("закрой приложение тикток"))
+        assertEquals(AliceAppCatalog.forAction("app.youtube.open"), closeTarget("закрой пожалуйста ютуб"))
+        assertEquals("тик ток", LocalAppLaunchQuery.matchClose("Закрой тик ток")?.name)
+        assertEquals(AliceAppTarget.Navigator(null), closeTarget("закрой навигатор"))
+    }
+
+    @Test fun close_takes_only_exact_app_names() {
+        assertNull(closeTarget("закрой окна"))
+        assertNull(closeTarget("закрой окно водителя"))
+        assertNull(closeTarget("закрой люк"))
+        assertNull(closeTarget("закрой багажник"))
+        assertNull(closeTarget("выключи свет"))
+        assertNull(closeTarget("закрой калькулятор"))
+        assertNull(closeTarget("закрой тикток и ютуб"))
+        assertNull(closeTarget("открой тикток"))
+        assertNull(closeTarget("закрой"))
+    }
+
+    @Test fun settings_bydmate_and_sentry_are_never_closed() {
+        assertNull(closeTarget("закрой настройки"))
+        assertNull(closeTarget("закрой bydmate"))
+        assertNull(closeTarget("выключи охрану"))
+        assertNull(closeTarget("выключи часовой"))
+    }
+
+    @Test fun open_never_matches_a_close_phrase() {
+        assertNull(target("закрой тикток"))
+        assertNull(target("выключи ютуб"))
+    }
 }
