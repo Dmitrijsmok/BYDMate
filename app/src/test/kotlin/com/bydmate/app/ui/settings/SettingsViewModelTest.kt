@@ -1532,6 +1532,20 @@ class SettingsViewModelTest {
         )
     }
 
+    /** Fork 166c2cb0: the choice is in the trace, with the package routes will use. */
+    @Test fun `choosing a navigator is traced`() = runTest {
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        org.robolectric.Shadows.shadowOf(ctx.packageManager)
+            .installPackage(android.content.pm.PackageInfo().apply { packageName = "com.waze" })
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.setRouteNavigator(RouteNavigatorUris.WAZE)
+
+        val event = trace.events().single { "navigator-select" in it }
+        assertTrue(event, "value=waze" in event && "pkg=com.waze" in event)
+    }
+
     @Test fun `every navigator is offered when none was detected`() {
         assertEquals(RouteNavigatorUris.ALL, routeNavigatorOptions(emptyMap(), RouteNavigatorUris.YANDEX, ""))
         assertEquals(
