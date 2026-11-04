@@ -57,6 +57,14 @@ object CommandTranslator {
         "后右打开100" to Resolved("window_rear_right_open",  1),
         "后右打开0"   to Resolved("window_rear_right_close", 2),
 
+        // ── Windows (stop) ── value 3 of the per-door CTRL family (1=open, 2=close, 3=stop),
+        // the family both DiLink generations carry (#79). Used by the Alice bridge to halt a
+        // pane at an arbitrary percentage; a stop is never an open, so it is not speed-gated.
+        "主驾停止" to Resolved("window_driver_ctrl",     3),
+        "副驾停止" to Resolved("window_passenger_ctrl",  3),
+        "后左停止" to Resolved("window_rear_left_ctrl",  3),
+        "后右停止" to Resolved("window_rear_right_ctrl", 3),
+
         // ── Windows (vent, individual) ── crack one window to VENT_PCT via the
         // validated % path. The all-window vent (车窗通风) is a composite fan-out
         // below (the competitor windows_vent fid 1125122104 val=5 only moved the
@@ -99,6 +107,10 @@ object CommandTranslator {
         "吹脚"     to Resolved("ac_wind_mode", 3),
         "吹脚除霜" to Resolved("ac_wind_mode", 4),
         "除霜"     to Resolved("ac_wind_mode", 5),
+        // Values 6/7 of the same fid exist on some models only, so they sit on their own
+        // allowlist entry (ac_wind_mode_ext) and the 1..5 entry stays as narrow as it was.
+        "吹面吹脚除霜" to Resolved("ac_wind_mode_ext", 6),
+        "吹面除霜"     to Resolved("ac_wind_mode_ext", 7),
 
         // ── Locks ── LIVE_VALIDATED ───────────────────────────────────────────
         "车门上锁"  to Resolved("doors_lock",   2),

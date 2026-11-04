@@ -370,10 +370,14 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
             // unsupported off Leopard 3. Not live-validated yet (#201).
             WriteEntry("ac_wind_level", 1000, 501219340, null, 1, 7, "climate", false, "competitor-actions ac_wind_level; #201"),
             // Blow direction (AC_WIND_MODE_SET, dev=1000): 1=face, 2=face+feet, 3=feet,
-            // 4=feet+windshield, 5=windshield. 6/7 exist on some models and stay out.
+            // 4=feet+windshield, 5=windshield. 6/7 exist on some models only and get their own
+            // entry below, so this one keeps the 1..5 range.
             // Same value-less competitor entry problem and same per-model readback fid
             // divergence as ac_wind_level above, so no readbackFid here either (#201).
             WriteEntry("ac_wind_mode", 1000, 501219336, null, 1, 5, "climate", false, "competitor-actions ac_wind_mode; AirConditioningService decompiled; #201"),
+            // Blow direction 6 = face+feet+windshield, 7 = face+windshield, same fid. Seen on a
+            // BYD e2 live log; a car without them refuses the write. Unvalidated (#201).
+            WriteEntry("ac_wind_mode_ext", 1000, 501219336, null, 6, 7, "climate", false, "BYD e2 live log; #201"),
             // Steering wheel heat — SET_STEERING_WHEEL_HEAT_STATE_SET on the Setting device
             // (dev=1023 carve-out), 2=on, 1=off; the set accepts nothing else (levels live on
             // separate fids and stay out). Override the competitor's same-named dev=1000

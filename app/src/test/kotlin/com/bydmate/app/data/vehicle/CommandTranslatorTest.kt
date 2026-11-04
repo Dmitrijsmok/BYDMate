@@ -464,6 +464,18 @@ class CommandTranslatorTest {
         }
     }
 
+    @Test fun `extended blow directions use their own allowlist action`() {
+        assertEquals(CommandTranslator.Resolved("ac_wind_mode_ext", 6), one("吹面吹脚除霜"))
+        assertEquals(CommandTranslator.Resolved("ac_wind_mode_ext", 7), one("吹面除霜"))
+    }
+
+    @Test fun `window stop commands are value 3 of the per-door ctrl family`() {
+        assertEquals(CommandTranslator.Resolved("window_driver_ctrl", 3), one("主驾停止"))
+        assertEquals(CommandTranslator.Resolved("window_passenger_ctrl", 3), one("副驾停止"))
+        assertEquals(CommandTranslator.Resolved("window_rear_left_ctrl", 3), one("后左停止"))
+        assertEquals(CommandTranslator.Resolved("window_rear_right_ctrl", 3), one("后右停止"))
+    }
+
     // 吹前挡 drives defrost_front_on on a different fid — the new 除霜 entry must not
     // have shadowed it.
     @Test fun `windshield defrost command still maps to defrost_front_on`() {
