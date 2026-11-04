@@ -717,7 +717,18 @@ class AgentTools @Inject constructor(
                 "яндекс карты, 2гис, waze, google maps, музыка, камера, видеорегистратор, " +
                 "браузер, ютуб, тикток, файлы, режимы вождения, часовой, АБРП, " +
                 "медиацентр, телефон. Названное приложение открывается именно оно, а не навигатор из настроек. " +
-                "Для системных настроек используй open_settings.",
+                "Для системных настроек используй open_settings. Только ОТКРЫВАЕТ: \"закрой X\", " +
+                "\"выключи X\", \"выйди из X\" про приложение - это close_app, никогда не launch_app.",
+            JSONObject().put("name", JSONObject().put("type", "string")
+                .put("description", "Название приложения, как на домашнем экране")),
+            listOf("name"),
+        ))
+        put(tool(
+            "close_app",
+            "Закрыть (полностью остановить) запущенное приложение по названию: \"закрой тикток\", " +
+                "\"выключи ютуб\", \"выйди из браузера\", \"останови X\", где X - приложение. Названия те же, " +
+                "что у launch_app. Не путай с машиной: \"закрой окна/люк/багажник\" - это vehicle_control, " +
+                "\"выключи охрану\" - set_sentry. Никогда не вызывай launch_app, чтобы закрыть приложение.",
             JSONObject().put("name", JSONObject().put("type", "string")
                 .put("description", "Название приложения, как на домашнем экране")),
             listOf("name"),
@@ -995,6 +1006,7 @@ class AgentTools @Inject constructor(
                 "play_music" -> playMusic(args)
                 "youtube" -> youtubeTool(args)
                 "launch_app" -> launchAppTool(args)
+                "close_app" -> closeAppTool(args)
                 "open_settings" -> openSettings(args.optString("section"))
                 "set_cluster_projection" -> setClusterProjection(args)
                 "set_sentry" -> setSentry(args)
@@ -2362,6 +2374,21 @@ class AgentTools @Inject constructor(
         else JSONObject().put("error", result.reason ?: "не получилось запустить $label").toString()
     }
 
+    /** close_app: the app [resolveLauncherApp] finds, force-stopped by the "app_close" action. */
+    private suspend fun closeAppTool(args: JSONObject): String {
+        val name = args.optString("name").trim()
+        if (name.isEmpty()) return """{"error":"не указано название приложения"}"""
+        val (label, pkg) = when (val r = resolveLauncherApp(name)) {
+            is Built.Error -> return JSONObject().put("error", r.message).toString()
+            is Built.Value -> r.value
+        }
+        val result = actionDispatcher.dispatch(
+            ActionDef(command = "", displayName = "Закрыть $label", kind = "app_close",
+                payload = JSONObject().put("packageName", pkg).put("appLabel", label).toString()), data = null)
+        return if (result.success) JSONObject().put("ok", true).put("closed", label).toString()
+        else JSONObject().put("error", result.reason ?: "не получилось закрыть $label").toString()
+    }
+
     /** open_settings: one screen of [AliceAppCatalog.SETTINGS_SECTIONS], nothing else. */
     private suspend fun openSettings(section: String): String {
         val s = section.trim().lowercase()
@@ -3124,7 +3151,7 @@ class AgentTools @Inject constructor(
         internal val ALWAYS_ALLOWED_TOOLS = setOf(
             "get_vehicle_state", "query_trips", "query_charges", "get_stats_summary", "get_weather",
             "where_am_i", "web_search", "get_route_info", "find_chargers", "range_to_destination",
-            "media_volume", "play_music", "youtube", "launch_app", "open_settings", "set_cluster_projection",
+            "media_volume", "play_music", "youtube", "launch_app", "close_app", "open_settings", "set_cluster_projection",
             "list_automations", "list_places", "create_place", "remember_fact", "forget_fact",
             "add_charge", "end_conversation")
 

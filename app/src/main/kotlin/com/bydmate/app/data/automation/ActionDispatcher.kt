@@ -1300,16 +1300,17 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
     }
 
     /**
-     * Force-stop through the shell-uid daemon (#280). Only an app with a launcher entry is
-     * closed, never BYDMate itself, and the package is checked again here because a shared
-     * rule or the agent can carry any string.
+     * Force-stop through the shell-uid daemon (#280). Only an app that launch would open is
+     * closed ([openIntentFor]: a ReVanced or vendor build without a launch intent too), never
+     * BYDMate itself, and the package is checked again here because a shared rule or the agent
+     * can carry any string.
      */
     private suspend fun closeApp(action: ActionDef): DispatchResult {
         val pkg = parsePayload(action.payload)?.optString("packageName")?.takeIf(String::isNotBlank)
             ?: return DispatchResult(false, appStrings.get(R.string.dispatch_package_missing))
         val refusal = when {
             pkg == context.packageName -> appStrings.get(R.string.dispatch_app_close_self)
-            context.packageManager.getLaunchIntentForPackage(pkg) == null ->
+            openIntentFor(pkg) == null ->
                 appStrings.get(R.string.dispatch_app_not_installed, pkg)
             !helper.isAlive() -> appStrings.get(R.string.dispatch_cluster_daemon_restarting)
             else -> null

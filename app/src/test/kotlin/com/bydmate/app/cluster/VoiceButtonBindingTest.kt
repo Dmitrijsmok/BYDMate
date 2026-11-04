@@ -68,8 +68,8 @@ class VoiceButtonBindingTest {
 
     @Test fun `single button routing and exact double press boundary remain unchanged`() {
         val previous = VoicePressMemory(304, 1_000)
-        assertEquals(VoicePressRoute.ALICE, voicePressRoute(0, false, 304, previous, 1_250))
-        assertEquals(VoicePressRoute.LOCAL, voicePressRoute(0, false, 304, previous, 1_251))
+        assertEquals(VoicePressRoute.ALICE, voicePressRoute(0, false, 304, previous, 1_400))
+        assertEquals(VoicePressRoute.LOCAL, voicePressRoute(0, false, 304, previous, 1_401))
         assertEquals(VoicePressRoute.NONE, voicePressRoute(1, true, 304, previous, 1_100))
     }
 }

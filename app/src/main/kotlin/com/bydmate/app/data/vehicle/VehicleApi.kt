@@ -51,6 +51,14 @@ interface VehicleApi {
     suspend fun writeSunroof(mode: SunroofMode): Result<Unit>
     suspend fun writeSunshade(open: Boolean): Result<Unit>
 
+    /**
+     * Drives a side window to [percent] by the closed loop (CTRL open/close, position polled,
+     * CTRL stop at the target; see WindowStepper), whatever the percent family does. Not speed
+     * gated: callers gate an opening move first.
+     */
+    suspend fun driveWindow(pane: WindowPane, percent: Int): Result<Unit> =
+        Result.failure(VehicleWriteError.Unsupported("window_step"))
+
     /** Rear seats whose heat this car has (#327). */
     suspend fun rearSeatHeatSides(): Set<RearSeat> = emptySet()
 }

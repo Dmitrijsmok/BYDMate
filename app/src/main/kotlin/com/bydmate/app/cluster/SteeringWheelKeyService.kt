@@ -381,7 +381,10 @@ class SteeringWheelKeyService : AccessibilityService() {
         event: KeyEvent,
     ): Boolean? = when (decision) {
         VoiceKeyDecision.TRIGGER -> {
-            val now = SystemClock.elapsedRealtime()
+            // The press's own time, not the time it is handled: ownsMicButton below walks every
+            // window, which can hold the main thread long enough that a quick double press is
+            // handled as two singles (field 1.1.1: four presses, nothing opened).
+            val now = event.downTime
             when (
                 voicePressRoute(
                     repeatCount = event.repeatCount,
@@ -395,7 +398,7 @@ class SteeringWheelKeyService : AccessibilityService() {
                     cancelPendingLocalVoice()
                     lastLocalVoiceDownMs = 0L
                     lastLocalVoiceKeyCode = -1
-                    // Local has not started yet inside the 250 ms arbitration window.
+                    // Local has not started yet inside the double-press arbitration window.
                     aliceLauncher.trigger()
                 }
                 VoicePressRoute.LOCAL -> {
@@ -413,8 +416,13 @@ class SteeringWheelKeyService : AccessibilityService() {
         VoiceKeyDecision.IGNORE -> null
     }
 
+    /**
+     * Starts Local once the double-press window of the press at [downMs] (uptime) has passed. A
+     * newer single press replaces a start still pending: keeping the old one would drop the new
+     * press, and the old one no longer matches the last press, so neither would start Local.
+     */
     private fun scheduleLocalVoice(keyCode: Int, downMs: Long) {
-        if (pendingLocalVoice != null) return
+        cancelPendingLocalVoice()
         val task = Runnable {
             pendingLocalVoice = null
             if (lastLocalVoiceKeyCode == keyCode && lastLocalVoiceDownMs == downMs) {
@@ -424,7 +432,7 @@ class SteeringWheelKeyService : AccessibilityService() {
             }
         }
         pendingLocalVoice = task
-        voiceHandler.postDelayed(task, VOICE_DOUBLE_PRESS_WINDOW_MS)
+        voiceHandler.postDelayed(task, localVoiceStartDelayMs(downMs, SystemClock.uptimeMillis()))
     }
 
     private fun cancelPendingLocalVoice() {

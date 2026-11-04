@@ -21,6 +21,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -44,6 +46,9 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
     private val seatJournal: SeatCommandJournal? = null,
     // This car's fid catalog for the rear seat heat gate (#327); none in unit tests = no rear heat.
     private val rearCatalog: () -> FidCatalog? = { null },
+    // Android 10 head unit (DiLink 3.0/4.0, LegacyHeadUnit): only there may a percent window
+    // write fall back to the closed loop (see [percentWindow]). False in unit tests = upstream.
+    private val legacyHeadUnit: Boolean = false,
 ) : VehicleApi {
 
     private val seatChannel = AdaptiveSeatChannel(
@@ -54,6 +59,24 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
     )
 
     private val windowChannel = WindowChannelRouter(helper, windowStore)
+
+    // The closed loop of a percent window the percent family cannot place: CTRL open/close, the
+    // pane's position polled, CTRL stop at the target (fork 3.17, ATTO 3 / DiLink 3.0).
+    private val windowStepper = WindowStepper(object : WindowStepper.Io {
+        override suspend fun command(pane: WindowPane, move: WindowStepper.Move): Boolean {
+            val action = WINDOW_CTRL_ACTIONS[pane] ?: return false
+            return doWrite(action, ctrlValue(move)).isSuccess
+        }
+
+        override suspend fun position(pane: WindowPane): Int? =
+            WINDOW_PANE_FIELDS[pane]?.let { windowPercent(resolveWindowReadFid(it).second) }
+
+        override suspend fun pause(ms: Long) = delay(ms)
+    })
+
+    // BODYWORK_WINDOW_PERCENTAGE_CONTROL_CONFIG as read once: true = the firmware reports no data
+    // (-10011), the percent family is absent; null = not read (yet) or the read failed.
+    @Volatile private var percentConfigDead: Boolean? = null
 
     private val steeringHeatChannel = SteeringHeatChannel(
         SeatWriter { name, value -> doWriteOutcome(name, value, journaled = false) },
@@ -154,7 +177,7 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
             val r = resolved[0]
             channelWrite(r.actionName)?.let { return it }
             // doWrite protects its own window verdict from cancellation, so no wrapper here.
-            return doWrite(r.actionName, r.value)
+            return percentWindow(r.actionName, r.value)
         }
         // Composite command (e.g. window aggregates, fridge presets) → fan out to several
         // per-door writes. Attempt every sub-write (no short-circuit: a partial open beats
@@ -165,7 +188,18 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
         var firstError: Throwable? = null
         val windowChecks = mutableListOf<WindowVerify>()
         withContext(NonCancellable) {
-            for ((i, r) in resolved.withIndex()) {
+            // A legacy unit without the percent family: every pane goes straight to the closed
+            // loop; only the panes it could not move at all get the percent write below.
+            var pending = resolved
+            val stepped = mutableSetOf<WindowPane>()
+            if (resolved.all { steppable(it.actionName, it.value) } && stepsFirst()) {
+                val outcomes = stepPanes(resolved, "percent family absent")
+                stepped += outcomes.keys.map { WindowPane.of(it.actionName) }
+                pending = resolved.filter { outcomes[it]?.nothingMoved() == true }
+                outcomes.entries.firstOrNull { (_, o) -> !o.success && !o.nothingMoved() }
+                    ?.let { (r, o) -> firstError = stepFailure(r.actionName, r.value, o) }
+            }
+            for ((i, r) in pending.withIndex()) {
                 // Song L (#97): a burst of window writes ~5 ms apart all return status=1,
                 // but only the later panes actuate — the first write is silently dropped.
                 // Spacing the sub-writes out keeps every write effective on that platform.
@@ -176,7 +210,9 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
             // All panes were commanded, so they can be judged together: one verification
             // window for the burst instead of one per pane (~400 ms instead of ~1.6 s).
             verifyWindowBurst(windowChecks)?.let { stuck ->
-                if (firstError == null) firstError = windowsStuck(commandString, stuck)
+                val left = stepStuckPanes(pending, stuck - stepped)
+                    .let { it + stuck.filter { pane -> pane in stepped } }
+                if (left.isNotEmpty() && firstError == null) firstError = windowsStuck(commandString, left)
             }
         }
         return firstError?.let { Result.failure(it) } ?: Result.success(Unit)
@@ -190,13 +226,23 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
 
     // Windows
     override suspend fun writeWindowDriver(percent: Int): Result<Unit> =
-        doWrite("window_driver_pos", percent)
+        percentWindow("window_driver_pos", percent)
     override suspend fun writeWindowPassenger(percent: Int): Result<Unit> =
-        doWrite("window_passenger_pos", percent)
+        percentWindow("window_passenger_pos", percent)
     override suspend fun writeWindowRearLeft(percent: Int): Result<Unit> =
-        doWrite("window_rear_left_pos", percent)
+        percentWindow("window_rear_left_pos", percent)
     override suspend fun writeWindowRearRight(percent: Int): Result<Unit> =
-        doWrite("window_rear_right_pos", percent)
+        percentWindow("window_rear_right_pos", percent)
+
+    override suspend fun driveWindow(pane: WindowPane, percent: Int): Result<Unit> {
+        val action = WINDOW_CTRL_ACTIONS[pane]?.replace("_ctrl", "_pos")
+            ?: return Result.failure(VehicleWriteError.AllowlistMiss("window_step", "no such window"))
+        if (percent !in 0..100) {
+            return Result.failure(VehicleWriteError.OutOfRange(action, "value=$percent range=[0..100]"))
+        }
+        val outcome = stepWindow(action, percent, "requested")
+        return if (outcome.success) Result.success(Unit) else Result.failure(stepFailure(action, percent, outcome))
+    }
 
     // Locks
     override suspend fun writeLockDoors(): Result<Unit> = doWrite("doors_lock", 2)
@@ -540,6 +586,138 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
         }
         Log.w(TAG, "window target reset FAILED: window=$window fid=${reset.writeFid} " +
             "percent=$percent may stay held on the bus")
+    }
+
+    // ─── Closed-loop window fallback (legacy head units) ───────────────────────
+
+    /**
+     * One write of a side window percent ([action] = window_*_pos), or any other write unchanged.
+     *
+     * ATTO 3 / Yuan Plus on DiLink 3.0 (field log 1.1.1, #64): the percent target fids
+     * (1276219408…) answer status=1 to every write, nudged and anchored ones included, and the
+     * glass never moves; BODYWORK_WINDOW_PERCENTAGE_CONTROL_CONFIG reads -10011 there. Its position
+     * fids read a real 0, so the #79 probe (all four position fids answering 65535) never routes
+     * it to CTRL. On a legacy head unit a target between the end stops therefore goes to the
+     * closed loop ([windowStepper]): straight away when that config reads -10011 (unless the
+     * channel is fixed on CTRL), else when the percent write ends in "did not move". A pane the
+     * closed loop could not move at all (a unit whose CTRL family is the dead one, #197) keeps
+     * the percent write as its second chance. Every other car and value: [doWrite] as before.
+     */
+    private suspend fun percentWindow(action: String, value: Int): Result<Unit> {
+        if (!steppable(action, value)) return doWrite(action, value)
+        if (stepsFirst()) {
+            val outcome = stepWindow(action, value, "percent family absent")
+            if (outcome.success) return Result.success(Unit)
+            if (!outcome.nothingMoved()) return Result.failure(stepFailure(action, value, outcome))
+            Log.i(TAG, "window step: $action did not move on CTRL, trying the percent write")
+            return doWrite(action, value)
+        }
+        val first = doWrite(action, value)
+        if (!first.windowNoop()) return first
+        val outcome = stepWindow(action, value, "percent write did not move")
+        return when {
+            outcome.success -> Result.success(Unit)
+            outcome.nothingMoved() -> first
+            else -> Result.failure(stepFailure(action, value, outcome))
+        }
+    }
+
+    /** A legacy unit, a side window percent action, a target between the end stops. */
+    private fun steppable(action: String, value: Int): Boolean {
+        val a = action.lowercase()
+        return legacyHeadUnit && value in 1..99 && a.endsWith("_pos") && WindowPane.of(a) != WindowPane.OTHER
+    }
+
+    /** The closed loop goes first: the percent family is absent and the channel is not CTRL. */
+    private suspend fun stepsFirst(): Boolean =
+        windowChannel.decidedChannel() != WindowChannel.CTRL && percentConfigDead()
+
+    /** The percent control config fid read once per process; a failed read is asked again later. */
+    private suspend fun percentConfigDead(): Boolean {
+        percentConfigDead?.let { return it }
+        val raw = try {
+            helper.read(WINDOW_DEV, PERCENT_CONTROL_CONFIG_FID)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.w(TAG, "window percent config read failed: ${e.message}")
+            null
+        } ?: return false
+        val dead = raw == NO_DATA_SENTINEL
+        percentConfigDead = dead
+        Log.i(TAG, "window percent config fid=$PERCENT_CONTROL_CONFIG_FID value=$raw percent_family=${!dead}")
+        return dead
+    }
+
+    /** [action]'s pane driven to [value] by the closed loop, as one unit (a stop always follows a start). */
+    private suspend fun stepWindow(action: String, value: Int, reason: String): WindowStepper.Outcome {
+        val pane = WindowPane.of(action.lowercase())
+        val outcome = withContext(NonCancellable) { windowStepper.moveTo(pane, value) }
+        val verdict = outcome::class.java.simpleName
+        Log.i(TAG, "window step: action=$action target=$value reason=$reason outcome=$outcome")
+        Trace.event(TraceArea.CAR, "window-step", "window" to pane.name.lowercase(), "target" to value,
+            "reason" to reason, "outcome" to verdict)
+        val ctrl = WINDOW_CTRL_ACTIONS[pane]?.let { allowlist.find(it) }
+        logWrite("${action}_step", ctrl?.dev ?: -1, ctrl?.writeFid ?: -1, value, outcome.position(),
+            outcome.success, if (outcome.success) null else "step_$verdict", validated = false)
+        return outcome
+    }
+
+    /** The closed loop for several panes at once, started [COMPOSITE_WRITE_STAGGER_MS] apart. */
+    private suspend fun stepPanes(
+        writes: List<CommandTranslator.Resolved>,
+        reason: String,
+    ): Map<CommandTranslator.Resolved, WindowStepper.Outcome> = coroutineScope {
+        writes.mapIndexed { i, r ->
+            async {
+                delay(i * COMPOSITE_WRITE_STAGGER_MS)
+                r to stepWindow(r.actionName, r.value, reason)
+            }
+        }.awaitAll().toMap()
+    }
+
+    /** The closed loop for the [stuck] panes of a percent burst on a legacy unit; returns the
+     *  panes still to report as stuck (every one when the unit or the value is not eligible). */
+    private suspend fun stepStuckPanes(writes: List<CommandTranslator.Resolved>, stuck: List<WindowPane>): List<WindowPane> {
+        val eligible = stuck.mapNotNull { pane ->
+            writes.firstOrNull { WindowPane.of(it.actionName.lowercase()) == pane && steppable(it.actionName, it.value) }
+        }
+        if (eligible.isEmpty()) return stuck
+        val moved = stepPanes(eligible, "percent write did not move")
+            .filterValues { it.success }.keys.map { WindowPane.of(it.actionName.lowercase()) }
+        return stuck - moved.toSet()
+    }
+
+    /** The error of a closed loop that did not end at the target. */
+    private fun stepFailure(action: String, value: Int, outcome: WindowStepper.Outcome): VehicleWriteError {
+        val pane = WindowPane.of(action.lowercase())
+        return when (outcome) {
+            is WindowStepper.Outcome.Missed -> VehicleWriteError.ReadbackMismatch(action,
+                "${paneLabel(pane)} остановилось на ${outcome.position ?: "?"}% вместо $value%")
+            WindowStepper.Outcome.StopFailed -> VehicleWriteError.HelperUnreachable(action, "window stop not accepted")
+            else -> windowsStuck(action, listOf(pane))
+        }
+    }
+
+    private fun WindowStepper.Outcome.nothingMoved(): Boolean =
+        this is WindowStepper.Outcome.Unreadable || this is WindowStepper.Outcome.NotStarted ||
+            this is WindowStepper.Outcome.NoMove
+
+    private fun WindowStepper.Outcome.position(): Int? = when (this) {
+        is WindowStepper.Outcome.AlreadyThere -> position
+        is WindowStepper.Outcome.Reached -> position
+        is WindowStepper.Outcome.NoMove -> position
+        is WindowStepper.Outcome.Missed -> position
+        else -> null
+    }
+
+    /** A failure that names panes that never moved (the "window_noop" verdict). */
+    private fun Result<Unit>.windowNoop(): Boolean =
+        (exceptionOrNull() as? VehicleWriteError.ReadbackMismatch)?.stuckPanes?.isNotEmpty() == true
+
+    private fun ctrlValue(move: WindowStepper.Move): Int = when (move) {
+        WindowStepper.Move.OPEN -> CTRL_OPEN
+        WindowStepper.Move.CLOSE -> CTRL_CLOSE
+        WindowStepper.Move.STOP -> CTRL_STOP
     }
 
     // ─── Window readback ───────────────────────────────────────────────────────
@@ -1057,6 +1235,28 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
          *  channel costs at most this much. */
         private const val WINDOW_BEFORE_READ_BUDGET_MS = 300L
         private const val WINDOW_RR_FIELD = "windowRR"
+        // ── Closed-loop fallback ──────────────────────────────────────────────
+        private const val WINDOW_DEV = 1001
+        /** BODYWORK_WINDOW_PERCENTAGE_CONTROL_CONFIG (read, tx=5): 1 on a Leopard 3, -10011 on the
+         *  ATTO 3 DiLink 3.0 whose percent family moves nothing. */
+        private const val PERCENT_CONTROL_CONFIG_FID = 1222639652
+        private const val NO_DATA_SENTINEL = -10011L
+        // Values of the per-door CTRL fid (1=open, 2=close, 3=stop; WriteAllowlist *_ctrl).
+        private const val CTRL_OPEN = 1
+        private const val CTRL_CLOSE = 2
+        private const val CTRL_STOP = 3
+        private val WINDOW_CTRL_ACTIONS: Map<WindowPane, String> = mapOf(
+            WindowPane.DRIVER to "window_driver_ctrl",
+            WindowPane.PASSENGER to "window_passenger_ctrl",
+            WindowPane.REAR_LEFT to "window_rear_left_ctrl",
+            WindowPane.REAR_RIGHT to "window_rear_right_ctrl",
+        )
+        private val WINDOW_PANE_FIELDS: Map<WindowPane, String> = mapOf(
+            WindowPane.DRIVER to "windowFL",
+            WindowPane.PASSENGER to "windowFR",
+            WindowPane.REAR_LEFT to "windowRL",
+            WindowPane.REAR_RIGHT to WINDOW_RR_FIELD,
+        )
         private const val WINDOW_RR_GEN3_FIELD = "windowRRGen3"
         /** Write action → the FidMap READ entry of the same pane (percent). The address
          *  itself is looked up per read, so it follows the firmware catalog. */

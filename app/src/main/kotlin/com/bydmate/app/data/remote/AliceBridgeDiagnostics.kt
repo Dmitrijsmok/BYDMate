@@ -10,8 +10,17 @@ data class AliceStateReportSnapshot(
     val error: String? = null,
 )
 
-/** The last command the bridge answered: its action (or raw command) and the error, null = done. */
-data class AliceLastCommand(val atMs: Long, val action: String, val error: String?)
+/**
+ * The last command the bridge answered: its action (or raw command), the error (null = done), and
+ * where its age came from (AliceCommandTtl.AgeSource label) with the age itself.
+ */
+data class AliceLastCommand(
+    val atMs: Long,
+    val action: String,
+    val error: String?,
+    val ageSource: String? = null,
+    val ageMs: Long? = null,
+)
 
 /**
  * Field diagnostics of the Alice bridge for Settings and the diagnostic dump: what Alice was last
@@ -34,6 +43,10 @@ object AliceBridgeDiagnostics {
     @Volatile var expiredCount: Int = 0
         private set
 
+    /** This unit's clock minus the worker's, from the last poll answer's `Date` header (±1 s). */
+    @Volatile var clockSkewMs: Long? = null
+        private set
+
     fun stateAttempt(data: DiParsData, nowMs: Long = System.currentTimeMillis()) {
         stateReport = AliceStateReportSnapshot(
             attemptedAtMs = nowMs,
@@ -52,8 +65,18 @@ object AliceBridgeDiagnostics {
         lastPollError = error
     }
 
-    fun command(action: String, error: String?, nowMs: Long = System.currentTimeMillis()) {
-        lastCommand = AliceLastCommand(nowMs, action, error)
+    fun clockSkew(skewMs: Long) {
+        clockSkewMs = skewMs
+    }
+
+    fun command(
+        action: String,
+        error: String?,
+        ageSource: String? = null,
+        ageMs: Long? = null,
+        nowMs: Long = System.currentTimeMillis(),
+    ) {
+        lastCommand = AliceLastCommand(nowMs, action, error, ageSource, ageMs)
         if (error == AliceCommandTtl.EXPIRED) expiredCount++
     }
 
@@ -66,6 +89,7 @@ object AliceBridgeDiagnostics {
             "state_age=${age(report.attemptedAtMs)} insideTemp=${report.insideTemp} acTemp=${report.acTemp} " +
             "exteriorTemp=${report.exteriorTemp} state_http=${report.httpCode ?: "-"} state_error=${report.error ?: "-"} " +
             "last_command=${last?.let { "${it.action}:${it.error ?: "ok"}@${age(it.atMs)}" } ?: "-"} " +
-            "expired=$expiredCount"
+            "age_source=${last?.ageSource ?: "-"} command_age=${last?.ageMs?.let { "${it}ms" } ?: "-"} " +
+            "clock_skew=${clockSkewMs?.let { "${it / 1000L}s" } ?: "-"} expired=$expiredCount"
     }
 }

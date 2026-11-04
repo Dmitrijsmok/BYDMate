@@ -3,7 +3,9 @@ package com.bydmate.app.data.automation
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.pm.ResolveInfo
 import androidx.test.core.app.ApplicationProvider
 import com.bydmate.app.cluster.ClusterVoiceControl
 import com.bydmate.app.data.local.LocalePreferences
@@ -68,10 +70,24 @@ class ActionDispatcherAppCloseTest {
 
     @Test fun `a package without a launcher entry is refused`() = runBlocking {
         every { packageManager.getLaunchIntentForPackage("com.android.systemui") } returns null
+        every { packageManager.queryIntentActivities(any(), 0) } returns emptyList()
         val r = dispatcher.dispatch(close("com.android.systemui"), null)
         assertFalse(r.success)
         assertEquals("Приложение не установлено: com.android.systemui", r.reason)
         coVerify(exactly = 0) { helper.forceStop(any()) }
+    }
+
+    // A ReVanced / vendor build without a launch intent opens through its launcher activity
+    // (openIntentFor), so it closes too, as it launches.
+    @Test fun `a build without a launch intent but with a launcher activity is closed`() = runBlocking {
+        val pkg = "app.rvx.android.youtube"
+        every { packageManager.getLaunchIntentForPackage(pkg) } returns null
+        every { packageManager.queryIntentActivities(any(), 0) } returns listOf(ResolveInfo().apply {
+            activityInfo = ActivityInfo().apply { packageName = pkg; name = "$pkg.HomeActivity" }
+        })
+        val r = dispatcher.dispatch(close(pkg), null)
+        assertTrue(r.reason, r.success)
+        coVerify(exactly = 1) { helper.forceStop(pkg) }
     }
 
     @Test fun `a daemon that is down refuses with the daemon wording`() = runBlocking {

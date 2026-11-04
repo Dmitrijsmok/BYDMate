@@ -99,11 +99,25 @@ class SteeringWheelKeyDecisionVoiceTest {
         assertEquals(VoiceKeyDecision.IGNORE, diLink3VoiceDecision(327, isDown = true, voiceEnabled = false))
     }
     @Test fun local_voice_second_press_within_window_is_double_press() {
-        assertTrue(isVoiceDoublePress(previousDownMs = 1_000L, nowMs = 1_250L))
+        assertTrue(isVoiceDoublePress(previousDownMs = 1_000L, nowMs = 1_400L))
     }
 
     @Test fun local_voice_press_after_window_is_normal_press() {
-        assertFalse(isVoiceDoublePress(previousDownMs = 1_000L, nowMs = 1_251L))
+        assertFalse(isVoiceDoublePress(previousDownMs = 1_000L, nowMs = 1_401L))
+    }
+
+    /** Field 1.1.1: a relaxed double press is 300-400 ms apart; 250 ms took it for two singles. */
+    @Test fun a_relaxed_double_press_still_reaches_alice() {
+        assertEquals(400L, VOICE_DOUBLE_PRESS_WINDOW_MS)
+        assertTrue(isVoiceDoublePress(previousDownMs = 1_000L, nowMs = 1_350L))
+    }
+
+    @Test fun local_starts_at_the_end_of_the_press_window_however_late_the_press_is_handled() {
+        assertEquals(400L, localVoiceStartDelayMs(downMs = 1_000L, nowMs = 1_000L))
+        assertEquals(100L, localVoiceStartDelayMs(downMs = 1_000L, nowMs = 1_300L))
+        assertEquals(0L, localVoiceStartDelayMs(downMs = 1_000L, nowMs = 2_000L))
+        // A clock that disagrees (a press time after "now") never waits more than the window.
+        assertEquals(400L, localVoiceStartDelayMs(downMs = 2_000L, nowMs = 1_000L))
     }
 
     @Test fun first_local_voice_press_is_never_double_press() {
