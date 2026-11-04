@@ -151,3 +151,15 @@ fingerprint, package, versions, release variant, and source commit.
 Tool references: [GitHub Actions secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets),
 [Java KeyStore API](https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/security/KeyStore.html),
 [Android APK signature verification](https://developer.android.com/tools/apksigner).
+
+## Telegram delivery of the signed APK
+
+After the `release` job verifies the signed APK, the separate `telegram` job sends that exact
+artifact (`BYDMate-dilink3-vX.Y.Z.apk`, caption with commit and SHA-256) to a Telegram chat. It
+runs only on `main` pushes in `Dmitrijsmok/BYDMate` and only when both repository secrets exist:
+
+- `TELEGRAM_BOT_TOKEN`: token of a bot (from @BotFather) that is a member of the target chat;
+- `TELEGRAM_CHAT_ID`: numeric id of that chat (for a group or channel it starts with `-100`).
+
+Without them the job logs that it skipped. The bot token never reaches the job that holds the
+signing key. Delivery to Telegram is not a publication: the release procedure above still applies.
