@@ -17,7 +17,6 @@ import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.diagnostics.Trace
 import com.bydmate.app.diagnostics.TraceArea
 import com.bydmate.app.media.KnobPlayPause
-import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.navdata.NavA11yFeed
 import com.bydmate.app.service.TrackingService
 import com.bydmate.app.ui.widget.toggleSplitByUser
