@@ -115,6 +115,9 @@ solo {win} <little> => {win}通风
 <set> {wins} на проветривание => {wins}通风
 solo {wins} <little> => {wins}通风
 <air> салон => 车窗通风
+# Driver wording heard on-car: airing the car means cracking the windows, not the HVAC airflow.
+<air> машину => 车窗通风
+<on> проветривание => 车窗通风
 solo [<on>] режим проветривания => 车窗通风 + 天窗通风
 solo <off> режим проветривания => 车窗关闭 + 天窗打开0
 

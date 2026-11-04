@@ -436,6 +436,9 @@ utterance	expected	category	danger
 поставь окно на пятьдесят процентов	主驾半开	windows	danger
 установи окна на двадцать процентов	车窗通风	windows	danger
 проветри салон	车窗通风	windows	danger
+проветри машину	车窗通风	windows	danger
+проветрить машину	车窗通风	windows	danger
+включи проветривание	车窗通风	windows	danger
 открой люк на тридцать процентов	天窗通风	sunroof	danger
 нет закрой люк	UNRECOGNIZED	sunroof	
 нет открой люк	UNRECOGNIZED	sunroof	danger
