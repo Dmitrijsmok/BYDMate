@@ -275,15 +275,23 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(12.dp))
 
         var selected by rememberSaveable { mutableStateOf(SettingsSection.VOICE) }
+        val hiddenSelected = selected == SettingsSection.SMART_HOME
+        val safeSelected = if (hiddenSelected && !state.devModeUnlocked) {
+            SettingsSection.VOICE
+        } else {
+            selected
+        }
 
         Row(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             SettingsRail(
-                selected = selected,
+                selected = safeSelected,
+                smartHomeUnlocked = state.devModeUnlocked,
                 appVersion = state.appVersion,
                 onSelect = { selected = it },
+                onVersionTap = { viewModel.onVersionTap() },
                 modifier = Modifier.width(260.dp).fillMaxSize(),
             )
 
@@ -298,7 +306,7 @@ fun SettingsScreen(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    when (selected) {
+                    when (safeSelected) {
                         SettingsSection.BATTERY -> BatterySection(state, viewModel, onNavigateToTariffPeriods)
                         SettingsSection.INTEGRATIONS -> IntegrationsSection(state, viewModel)
                         SettingsSection.VOICE -> VoiceSettingsContent(
@@ -320,8 +328,10 @@ fun SettingsScreen(
 @Composable
 private fun SettingsRail(
     selected: SettingsSection,
+    smartHomeUnlocked: Boolean,
     appVersion: String,
     onSelect: (SettingsSection) -> Unit,
+    onVersionTap: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Card(
@@ -342,9 +352,12 @@ private fun SettingsRail(
                 )
 
                 SettingsSection.entries.forEach { section ->
+                    val isHidden = section == SettingsSection.SMART_HOME
+                    if (isHidden && !smartHomeUnlocked) return@forEach
                     RailItem(
                         section = section,
                         isActive = section == selected,
+                        isHidden = isHidden,
                         onClick = { onSelect(section) },
                     )
                 }
@@ -354,7 +367,8 @@ private fun SettingsRail(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .clickable { onVersionTap() },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -371,10 +385,16 @@ private fun SettingsRail(
 private fun RailItem(
     section: SettingsSection,
     isActive: Boolean,
+    isHidden: Boolean,
     onClick: () -> Unit,
 ) {
-    val bg = if (isActive) AccentGreen.copy(alpha = 0.12f) else Color.Transparent
-    val fg = if (isActive) AccentGreen else TextSecondary
+    val activeColor = if (isHidden) AccentOrange else AccentGreen
+    val bg = if (isActive) activeColor.copy(alpha = 0.12f) else Color.Transparent
+    val fg = when {
+        isActive -> activeColor
+        isHidden -> AccentOrange
+        else -> TextSecondary
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()

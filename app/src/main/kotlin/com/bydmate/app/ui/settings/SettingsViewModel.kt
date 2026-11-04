@@ -194,6 +194,7 @@ data class SettingsUiState(
     val tariffPeriodError: String? = null,
     /** Losses derived from the meter readings the driver typed in; null until one exists. */
     val measuredLosses: MeasuredLosses? = null,
+    val devModeUnlocked: Boolean = false,
     // Smart Home (Yandex Alice bridge)
     val aliceEndpoint: String = "",
     val aliceApiKey: String = "",
@@ -1208,6 +1209,20 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
         viewModelScope.launch {
             val models = insightsManager.getModels(apiKey)
             _uiState.update { it.copy(availableModels = models, modelsLoading = false) }
+        }
+    }
+
+    private var versionTapCount = 0
+    private var lastVersionTapTime = 0L
+
+    fun onVersionTap() {
+        val now = System.currentTimeMillis()
+        if (now - lastVersionTapTime > 2000) versionTapCount = 0
+        lastVersionTapTime = now
+        versionTapCount++
+        if (versionTapCount >= 7) {
+            _uiState.update { it.copy(devModeUnlocked = true) }
+            versionTapCount = 0
         }
     }
 
