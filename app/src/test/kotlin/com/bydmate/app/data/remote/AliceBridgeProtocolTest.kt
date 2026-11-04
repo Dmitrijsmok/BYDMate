@@ -75,4 +75,40 @@ class AliceBridgeProtocolTest {
         assertFalse(results.getJSONObject(1).getBoolean("success"))
         assertEquals("expired", results.getJSONObject(1).getString("error"))
     }
+
+    /** The exact shapes of the fork's deployed worker 5.10 (reference/alice-worker @ 656c137e). */
+    @Test fun `bridge 5_10 poll answer carries no timestamp`() {
+        val command = AliceBridgeProtocol.parsePoll(
+            """{"commands":[{"id":"0b6f2d5e-7c1a-4f0e-9a51-3d2c1b0a9f88","action":"light.interior_on"},""" +
+                """{"id":"5e1f","action":"window.driver.position","value":40},""" +
+                """{"id":"77aa","action":"app.launch","text":"тикток"}]}""",
+        )!!
+        assertNull(command.serverTimeMs)
+        assertEquals(listOf("light.interior_on", "window.driver.position", "app.launch"), command.commands.map { it.action })
+        assertEquals(40, command.commands[1].value)
+        assertEquals("тикток", command.commands[2].text)
+        assertTrue(command.commands.all { it.ageMs == null && it.createdAtMs == null })
+    }
+
+    @Test fun `bridge 5_10 debug answer gives created_at by id`() {
+        val created = AliceBridgeProtocol.parseDebugCreatedAt(
+            """{"bridge":"5.10","allowed_actions":["climate.on"],"state":{"updated_at":1700000000000,"data":{"soc":80}},""" +
+                """"commands":[{"id":"a","action":"light.interior_on","value":null,"created_at":1699999997000,""" +
+                """"acked":0,"success":null,"error":null},{"id":"b","action":"climate.on","value":null,""" +
+                """"created_at":1699999000000,"acked":1,"success":0,"error":"expired"},{"action":"x"}]}""",
+        )
+        assertEquals(mapOf("a" to 1_699_999_997_000L, "b" to 1_699_999_000_000L), created)
+        assertNull(AliceBridgeProtocol.parseDebugCreatedAt("""{"error":"not_found"}"""))
+    }
+
+    @Test fun `state report carries the fields the 5_10 cards read`() {
+        val body = AliceBridgeProtocol.stateBody(
+            diParsData(hood = 0, drl = 1, turnSignal = 6).copy(acCtrlMode = 0, acDefrostFront = 1),
+        )
+        assertEquals(0, body.getInt("acCtrlMode"))
+        assertEquals(1, body.getInt("acDefrostFront"))
+        assertEquals(0, body.getInt("hood"))
+        assertEquals(1, body.getInt("drl"))
+        assertEquals(6, body.getInt("turnSignal"))
+    }
 }

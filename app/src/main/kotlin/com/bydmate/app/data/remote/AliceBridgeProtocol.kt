@@ -41,6 +41,23 @@ internal object AliceBridgeProtocol {
         return AlicePollBatch(commands, json.longOrNull("server_time"))
     }
 
+    /**
+     * `created_at` by command id from the worker's `/api/debug` answer (fork worker 5.10–5.13:
+     * `{"bridge":"5.10",…,"commands":[{"id","action","value","created_at","acked",…}]}`, server
+     * milliseconds), or null when [body] is no such answer.
+     */
+    fun parseDebugCreatedAt(body: String): Map<String, Long>? {
+        val json = runCatching { JSONObject(body) }.getOrNull() ?: return null
+        val array = json.optJSONArray("commands") ?: return null
+        return (0 until array.length()).mapNotNull { i ->
+            val entry = array.optJSONObject(i) ?: return@mapNotNull null
+            val id = (entry.opt("id") as? String)?.trim()?.takeIf(String::isNotEmpty)
+                ?: (entry.opt("id") as? Number)?.toString()
+                ?: return@mapNotNull null
+            entry.longOrNull("created_at")?.let { id to it }
+        }.toMap()
+    }
+
     fun parseCommand(json: JSONObject): AliceBridgeCommand? {
         val id = when (val v = json.opt("id")) {
             is String -> v.trim()
@@ -88,6 +105,13 @@ internal object AliceBridgeProtocol {
             "acWindMode" to data.acWindMode,
             "insideTemp" to data.insideTemp,
             "exteriorTemp" to data.exteriorTemp,
+            // The fork worker (5.10+) answers its auto climate, front defrost, hood, DRL and
+            // hazard cards from these.
+            "acCtrlMode" to data.acCtrlMode,
+            "acDefrostFront" to data.acDefrostFront,
+            "hood" to data.hood,
+            "drl" to data.drl,
+            "turnSignal" to data.turnSignal,
         ).forEach { (key, value) -> value?.let { put(key, it) } }
     }
 

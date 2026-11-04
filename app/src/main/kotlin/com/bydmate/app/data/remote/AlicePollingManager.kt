@@ -28,7 +28,9 @@ import javax.inject.Singleton
  * Protocol: `GET /api/poll?wait_ms=…` long-polls the reference worker; upstream's worker answers
  * at once and gets polled at its old cadence instead. A command older than [AliceCommandTtl] is
  * acked "expired" without running, and a command answered before (its ack got lost) is acked
- * again with the same result instead of running twice.
+ * again with the same result instead of running twice. The age never comes from this unit's
+ * clock: see [AliceCommandTtl] for the server clocks it is read against (the `Date` header of
+ * the poll answer, and for the fork's 5.10 worker, which stamps nothing, its `/api/debug`).
  */
 @Singleton
 class AlicePollingManager @Inject constructor(
@@ -121,12 +123,14 @@ class AlicePollingManager @Inject constructor(
             .header("X-Api-Key", apiKey)
             .build()
         val t0 = SystemClock.elapsedRealtime()
+        var dateMs: Long? = null
         val body = client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 Log.w(TAG, "Poll HTTP ${response.code}")
                 AliceBridgeDiagnostics.poll("http_${response.code}")
                 return ERROR_DELAY_MS
             }
+            dateMs = response.dateMs()
             response.body?.string()
         }
         val elapsed = SystemClock.elapsedRealtime() - t0
@@ -136,10 +140,14 @@ class AlicePollingManager @Inject constructor(
         }
         AliceBridgeDiagnostics.poll(null)
         // Every answer, empty ones included: it bounds the age of the next unstamped command.
-        val window = ttl.onResponse(batch.serverTimeMs)
+        val window = ttl.onResponse(batch.serverTimeMs, dateMs)
+        window.clockSkewMs?.let(AliceBridgeDiagnostics::clockSkew)
 
         if (batch.commands.isNotEmpty()) {
             Log.i(TAG, "Received ${batch.commands.size} command(s) (${elapsed}ms)")
+            if (batch.commands.any { it.id !in answered && window.needsLookup(it) }) {
+                window.lookup = lookup(endpoint, apiKey)
+            }
             val results = answer(batch.commands, window)
             ack(endpoint, apiKey, results)
         }
@@ -159,19 +167,50 @@ class AlicePollingManager @Inject constructor(
         return commands.map { command ->
             answered[command.id] ?: run {
                 val label = command.action.ifEmpty { command.rawCommand }
+                val age = window.age(command)
                 val result = if (window.isExpired(command)) {
-                    Log.w(TAG, "Expired: '$label' (id=${command.id}, age=${window.ageMs(command) ?: "unknown"}ms)")
+                    Log.w(TAG, "Expired: '$label' (id=${command.id}, age=${age.ms ?: "unknown"}ms " +
+                        "source=${age.source.label})")
                     AliceAckResult(command.id, false, AliceCommandTtl.EXPIRED)
                 } else {
                     execute(command, permissions)
                 }
-                Log.i(TAG, "Result: '$label' -> ${result.error ?: "OK"}")
-                AliceBridgeDiagnostics.command(label, result.error)
+                Log.i(TAG, "Result: '$label' -> ${result.error ?: "OK"} (age=${age.ms ?: "unknown"}ms " +
+                    "source=${age.source.label})")
+                AliceBridgeDiagnostics.command(label, result.error, age.source.label, age.ms)
                 answered[command.id] = result
                 result
             }
         }
     }
+
+    /**
+     * The worker's own record of when its commands were queued, for commands whose age nothing in
+     * the poll answer bounds: the fork worker (5.10–5.12) sends no timestamp with a command but
+     * lists `created_at` in `/api/debug`, read here against that answer's `Date` header (or its
+     * `server_time` when it has one). Null when the worker has no such endpoint (upstream's) or
+     * gives no server clock: the commands then stay of unknown age and expire.
+     */
+    private fun lookup(endpoint: String, apiKey: String): AliceCommandTtl.Lookup? = runCatching {
+        val request = Request.Builder().url("$endpoint/api/debug").header("X-Api-Key", apiKey).build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return@use null
+            val date = response.dateMs()
+            val body = response.body?.string() ?: return@use null
+            val created = AliceBridgeProtocol.parseDebugCreatedAt(body) ?: return@use null
+            val serverNow = runCatching { JSONObject(body).optLong("server_time", 0L) }.getOrDefault(0L)
+                .takeIf { it > 0L }
+            when {
+                serverNow != null -> AliceCommandTtl.Lookup(created, serverNow, SystemClock.elapsedRealtime())
+                date != null -> ttl.lookupOf(created, date)
+                else -> null
+            }
+        }
+    }.onFailure { Log.w(TAG, "Command age lookup failed: ${it.javaClass.simpleName}") }.getOrNull()
+        .also { Log.i(TAG, "Command age lookup: ${if (it == null) "unavailable" else "${it.createdAtMs.size} entries"}") }
+
+    /** The response's HTTP `Date` in ms, or null when it has none. */
+    private fun okhttp3.Response.dateMs(): Long? = headers.getDate("Date")?.time
 
     private suspend fun execute(command: AliceBridgeCommand, permissions: AliceBridgePermissions): AliceAckResult {
         // A throw is this command's failure, not the poll loop's: the rest of the batch still runs.
