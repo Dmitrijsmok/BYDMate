@@ -135,10 +135,12 @@ class AlicePollingManager @Inject constructor(
             return ERROR_DELAY_MS
         }
         AliceBridgeDiagnostics.poll(null)
+        // Every answer, empty ones included: it bounds the age of the next unstamped command.
+        val window = ttl.onResponse(batch.serverTimeMs)
 
         if (batch.commands.isNotEmpty()) {
             Log.i(TAG, "Received ${batch.commands.size} command(s) (${elapsed}ms)")
-            val results = answer(batch)
+            val results = answer(batch.commands, window)
             ack(endpoint, apiKey, results)
         }
         maybeReportState(endpoint, apiKey)
@@ -149,13 +151,12 @@ class AlicePollingManager @Inject constructor(
         else IDLE_DELAY_MS
     }
 
-    private suspend fun answer(batch: AlicePollBatch): List<AliceAckResult> {
-        val window = ttl.onResponse(batch.serverTimeMs)
+    private suspend fun answer(commands: List<AliceBridgeCommand>, window: AliceCommandTtl.Batch): List<AliceAckResult> {
         val permissions = AliceBridgePermissions(
             vehicleControl = settingsRepository.getString(SettingsRepository.KEY_ALICE_VEHICLE_CONTROL, "false") == "true",
             navigation = settingsRepository.getString(SettingsRepository.KEY_ALICE_NAVIGATION, "false") == "true",
         )
-        return batch.commands.map { command ->
+        return commands.map { command ->
             answered[command.id] ?: run {
                 val label = command.action.ifEmpty { command.rawCommand }
                 val result = if (window.isExpired(command)) {

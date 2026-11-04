@@ -25,7 +25,7 @@ import org.junit.Before
 import org.junit.Test
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.ConcurrentLinkedQueue
 
 /**
  * End to end through the real poll loop, router and executor against a fake worker: with the two
@@ -35,7 +35,7 @@ class AlicePollingPermissionTest {
 
     private val server = MockWebServer()
     private val acks = LinkedBlockingQueue<JSONObject>()
-    private val served = AtomicBoolean(false)
+    private val pollBodies = ConcurrentLinkedQueue<String>()
     private val settings = mockk<SettingsRepository>()
     private val actionDispatcher = mockk<ActionDispatcher>(relaxed = true)
     private val aperture = mockk<AliceApertureController>(relaxed = true)
@@ -58,7 +58,7 @@ class AlicePollingPermissionTest {
     @Before fun setUp() {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl?.encodedPath) {
-                "/api/poll" -> MockResponse().setBody(if (served.compareAndSet(false, true)) pollBody else """{"commands":[]}""")
+                "/api/poll" -> MockResponse().setBody(pollBodies.poll() ?: """{"commands":[]}""")
                 "/api/ack" -> {
                     acks.put(JSONObject(request.body.readUtf8()))
                     MockResponse().setBody("""{"ok":true}""")
@@ -86,7 +86,8 @@ class AlicePollingPermissionTest {
         coEvery { settings.getString(SettingsRepository.KEY_ALICE_NAVIGATION, any()) } returns navigation.toString()
     }
 
-    private fun runOnce(): Map<String, JSONObject> {
+    private fun runOnce(vararg bodies: String = arrayOf(pollBody)): Map<String, JSONObject> {
+        pollBodies.addAll(bodies)
         manager = AlicePollingManager(OkHttpClient(), settings, loop, AliceBridgeExecutor(actionDispatcher, aperture, apps, dagger.Lazy { agentTools }))
         manager.start()
         val ack = acks.poll(10, TimeUnit.SECONDS)
@@ -133,6 +134,22 @@ class AlicePollingPermissionTest {
         assertEquals("не получилось открыть Навигатор", results.getValue("n2").getString("error"))
         assertEquals(AliceBridgeRouter.VEHICLE_CONTROL_DISABLED, results.getValue("v1").getString("error"))
         coVerify { agentTools.navigateDirect("Рига", false, "") }
+        coVerify(exactly = 0) { actionDispatcher.dispatch(any(), any()) }
+    }
+
+    @Test fun `upstream raw command without timestamps runs after an empty poll and is acked by id`() {
+        permissions(vehicle = true, navigation = false)
+        val results = runOnce("""{"commands":[]}""", """{"commands":[{"id":"r1","command":"自动空调"}]}""")
+
+        assertEquals(true, results.getValue("r1").getBoolean("success"))
+        coVerify { actionDispatcher.dispatch(ActionDef("自动空调", "Alice", "param"), any()) }
+    }
+
+    @Test fun `an unstamped command on the very first poll is of unknown age and expires`() {
+        permissions(vehicle = true, navigation = true)
+        val results = runOnce("""{"commands":[{"id":"r1","command":"车窗全开"}]}""")
+
+        assertEquals(AliceCommandTtl.EXPIRED, results.getValue("r1").getString("error"))
         coVerify(exactly = 0) { actionDispatcher.dispatch(any(), any()) }
     }
 }
