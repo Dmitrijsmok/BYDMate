@@ -90,14 +90,14 @@ class VoiceButtonServiceTest {
         context.getSharedPreferences("voice", Context.MODE_PRIVATE).edit().putInt("alice_keycode", 0).apply()
         dispatch(event(304))
         verify(exactly = 0) { voice.onPttPressed() }
-        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(250))
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(VOICE_DOUBLE_PRESS_WINDOW_MS + 10))
         verify(exactly = 1) { voice.onPttPressed() }
         dispatch(event(304, false))
         dispatch(event(304, time = 2_000))
         dispatch(event(304, false, time = 2_001))
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100))
         dispatch(event(304, time = 2_100))
-        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(300))
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(VOICE_DOUBLE_PRESS_WINDOW_MS + 50))
         verify(exactly = 1) { alice.trigger() }
         verify(exactly = 1) { voice.onPttPressed() }
     }
@@ -176,7 +176,7 @@ class VoiceButtonServiceTest {
             .putBoolean("voice_enabled", true).putBoolean("alice_native_takeover", true)
             .putInt("voice_keycode", 327).apply()
         dispatch(event(327))
-        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(300))
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(VOICE_DOUBLE_PRESS_WINDOW_MS + 50))
         verify(exactly = if (android.os.Build.VERSION.SDK_INT == 29) 0 else 1) { voice.onPttPressed() }
         verify(exactly = 0) { alice.trigger() }
     }
