@@ -80,7 +80,14 @@ open class SettingsRepository @Inject constructor(
         const val KEY_AGENT_FALLBACK_CONN = "agent_fallback_conn"
         const val KEY_ALICE_ENDPOINT = "alice_endpoint"
         const val KEY_ALICE_API_KEY = "alice_api_key"
+        /** "true" = poll the Alice worker (Smart Home bridge). Not the voice provider: the
+         *  steering button choice is KEY_ALICE_KEYCODE. */
         const val KEY_ALICE_ENABLED = "alice_enabled"
+        /** "true" = Alice bridge commands may control the car (climate, seats, lights, windows,
+         *  sunroof, trunk, free-text vehicle commands). Off by default (owner decision). */
+        const val KEY_ALICE_VEHICLE_CONTROL = "alice_vehicle_control"
+        /** "true" = Alice bridge commands may build routes, search the map and show points. Off by default. */
+        const val KEY_ALICE_NAVIGATION = "alice_navigation"
         /** Передавать живые данные DiPars в A Better Route Planner (Iternio Telemetry API). GPS передаётся только если включён KEY_ABRP_SEND_LOCATION. */
         const val KEY_ABRP_ENABLED = "abrp_telemetry_enabled"
         /** API-ключ приложения Iternio ([abetterrouteplanner.com/resources/api](https://abetterrouteplanner.com/resources/api)). */

@@ -71,6 +71,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
@@ -899,12 +901,13 @@ class TrackingService : Service(), LocationListener {
         adbVerdictMonitor.onServiceStarted()
         ChainLog.append(this, "TrackingService fully started")
 
-        // Start Smart Home polling if configured
+        // Smart Home (Alice bridge) polling follows its setting while the service runs, so
+        // switching it in Settings takes effect without a restart.
         serviceScope.launch {
-            val enabled = settingsRepository.getString(
-                com.bydmate.app.data.repository.SettingsRepository.KEY_ALICE_ENABLED, "false"
-            ) == "true"
-            if (enabled) alicePollingManager.start()
+            settingsRepository.observeString(com.bydmate.app.data.repository.SettingsRepository.KEY_ALICE_ENABLED)
+                .map { it == "true" }
+                .distinctUntilChanged()
+                .collect { enabled -> if (enabled) alicePollingManager.start() else alicePollingManager.stop() }
         }
 
         // v2.0: event-based sync on service start
