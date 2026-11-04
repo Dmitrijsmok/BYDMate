@@ -23,6 +23,11 @@ data class FidEntry(
      * ever be used as-is.
      */
     val symbol: String? = null,
+    /**
+     * False for a deliberate fixed-address fallback: [FidResolver] never moves it, its
+     * [symbol] is diagnostic only (it names the primary the entry stands in for).
+     */
+    val resolveFromCatalog: Boolean = true,
 )
 
 /**
@@ -63,6 +68,14 @@ object FidMap {
         FidEntry("fanLevel",             1000, 1077936156,   5, Decoder.INT_RAW, symbol = "Ac.AC_WIND_LEVEL"),
         FidEntry("acCirc",               1000, 1077936148,   5, Decoder.INT_ENUM, symbol = "Ac.AC_CYCLE_MODE"),
         FidEntry("insideTemp",           1000, 1031798832,   5, Decoder.INT_TEMP_C, symbol = "Ac.AC_TEMP_INSIDE"),
+        // The older BYD SDK / Song Plus catalog carries the same AC_TEMP_INSIDE symbol at
+        // 1320181776. Read at that fixed address and used only when the primary read above
+        // answers link-error (65535) or wrong-direction (-10011), see NativeParsReader.
+        // Shares insideTemp's symbol so the collision guard treats both as one field.
+        FidEntry(
+            "insideTempAlt", 1000, 1320181776, 5, Decoder.INT_TEMP_C,
+            symbol = "Ac.AC_TEMP_INSIDE", resolveFromCatalog = false,
+        ),
         FidEntry("exteriorTemp",         1000, 1077936184,   5, Decoder.INT_TEMP_C, symbol = "Ac.AC_TEMP_OUT"),
         // Body
         FidEntry("hood",                 1001, 692060188,    5, Decoder.INT_ENUM, symbol = "Bodywork.BODYWORK_HOOD"),

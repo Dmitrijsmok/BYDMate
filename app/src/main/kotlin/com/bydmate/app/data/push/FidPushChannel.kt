@@ -5,6 +5,7 @@ import android.os.Parcel
 import android.util.Log
 import com.bydmate.app.data.nativestack.FidAddresses
 import com.bydmate.app.data.nativestack.FidCatalog
+import com.bydmate.app.data.nativestack.FidMap
 import com.bydmate.app.data.vehicle.HelperClient
 import com.bydmate.app.diagnostics.Trace
 import com.bydmate.app.diagnostics.TraceArea
@@ -118,7 +119,7 @@ class FidPushChannel @Inject constructor(
             return null
         }
         results = table
-        fieldByFid = fields.indices.associate { subs[it].fid to fields[it] }
+        fieldByFid = ownersByFid(fields, subs)
         subscribedAtElapsed = android.os.SystemClock.elapsedRealtime()
         resubscribes++
         val ok = table.count { it.outcome == FID_PUSH_OK }
@@ -193,6 +194,22 @@ class FidPushChannel @Inject constructor(
             sinceSubscribeMs = if (subscribedAtElapsed == 0L) 0L else nowElapsed - subscribedAtElapsed,
         )
         return lines
+    }
+
+    /**
+     * fid → field for the wave just installed. A fixed fallback (FidEntry.resolveFromCatalog
+     * false: insideTempAlt) never takes over a fid another field already holds: on Song Plus
+     * the catalog moves insideTemp onto the insideTempAlt constant, and those pushes must keep
+     * patching insideTemp. Any other shared fid goes to the last field, as before.
+     */
+    private fun ownersByFid(fields: List<String>, subs: List<FidPushSub>): Map<Int, String> {
+        val owners = HashMap<Int, String>()
+        fields.forEachIndexed { i, field ->
+            val fid = subs[i].fid
+            val fixedFallback = FidMap.byField[field]?.resolveFromCatalog == false
+            if (!fixedFallback || fid !in owners) owners[fid] = field
+        }
+        return owners
     }
 
     /** Dump name of a subscribed fid: its FidMap field, or the trace name of a confirmed ADAS state. */

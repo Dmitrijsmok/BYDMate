@@ -127,7 +127,7 @@ class PushStateTraceTest {
 
         val wave = FidPushApplier.PUSH_FIELDS.map { FidPushSub(FidAddresses.fid(it), FidAddresses.device(it)) }
         assertEquals(wave, subs.captured)
-        assertEquals(122, subs.captured.size)
+        assertEquals(123, subs.captured.size)
 
         push(*ADAS.keys.map { it to 1 }.toTypedArray())
 
@@ -240,6 +240,29 @@ class PushStateTraceTest {
         assertEquals(1, subs.captured.count { it.fid == lane })
         assertEquals("bsdLeft", channel.fieldFor(lane))
         assertEquals(listOf("car adas-subscribe confirmed=6 skipped=1"), events())
+    }
+
+    @Test fun `the cabin temperature fallback rides in the wave at its fixed address`() = runTest {
+        channel.resubscribe("binder accepted") { null }
+
+        assertTrue(FidPushSub(1320181776, 1000) in subs.captured)
+        assertEquals("insideTempAlt", channel.fieldFor(1320181776))
+    }
+
+    @Test fun `a fid shared with the fixed cabin temperature fallback stays with insideTemp`() = runTest {
+        // Song Plus: the catalog moves insideTemp onto the very address insideTempAlt reads.
+        val alt = FidMap.byField.getValue("insideTempAlt")
+        FidAddresses.install(ResolvedFidTable(
+            FidMap.all.associate {
+                it.field to if (it.field == "insideTemp") FidAddress(alt.device, alt.fid) else FidAddress(it.device, it.fid)
+            },
+            emptyList(), "test",
+        ))
+
+        channel.resubscribe("fid catalog resolved") { null }
+
+        assertEquals(2, subs.captured.count { it.fid == alt.fid })
+        assertEquals("insideTemp", channel.fieldFor(alt.fid))
     }
 
     @Test fun `ADAS fids are not FidMap fields, so nothing patches the snapshot with them`() = runTest {

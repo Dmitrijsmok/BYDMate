@@ -78,7 +78,10 @@ class NativeParsReader @Inject constructor(
                         // Shadow snapshot: compared, never returned — so it must not update
                         // any state a returned snapshot depends on (see stickyDriveMode).
                         assembleSnapshot(
-                            decodeBatch(batchRaw, table, hybrid),
+                            withInsideTempFallback(
+                                decodeBatch(batchRaw, table, hybrid),
+                                okBatchWord(batchRaw, insideTempIndex),
+                            ),
                             windowRrRawFromBatch(batchRaw),
                             rememberSticky = false,
                         ),
@@ -91,7 +94,10 @@ class NativeParsReader @Inject constructor(
 
     private suspend fun fetchViaBatch(table: ResolvedFidTable, hybrid: Boolean): DiParsData? {
         val pairs = helperClient.readBatch(batchItems(table, hybrid)) ?: return null
-        return assembleSnapshot(decodeBatch(pairs, table, hybrid), windowRrRawFromBatch(pairs))
+        return assembleSnapshot(
+            withInsideTempFallback(decodeBatch(pairs, table, hybrid), okBatchWord(pairs, insideTempIndex)),
+            windowRrRawFromBatch(pairs),
+        )
     }
 
     /** Raw pre-decode windowRR value when the read itself succeeded, else null. */
@@ -185,6 +191,8 @@ class NativeParsReader @Inject constructor(
         // sample the value came from, or a window that moved between two reads would
         // decide the generation.
         var windowRrRaw: Int? = null
+        // Same for the primary cabin temperature, which decides the insideTempAlt fallback.
+        var insideTempRaw: Int? = null
 
         for (entry in FidMap.entries) {
             val address = table.address(entry.field)
@@ -192,6 +200,10 @@ class NativeParsReader @Inject constructor(
                 entry === windowRrEntry -> {
                     windowRrRaw = autoservice.getIntRaw(address.device, address.fid)
                     decodeTx5(entry, windowRrRaw?.let { SentinelDecoder.decodeInt(it) }, table)
+                }
+                entry === insideTempEntry -> {
+                    insideTempRaw = autoservice.getIntRaw(address.device, address.fid)
+                    decodeTx5(entry, insideTempRaw?.let { SentinelDecoder.decodeInt(it) }, table)
                 }
                 entry.transact == 5 -> decodeTx5(entry, autoservice.getInt(address.device, address.fid), table)
                 entry.transact == 7 -> {
@@ -208,7 +220,7 @@ class NativeParsReader @Inject constructor(
         }
         if (hybrid) decoded.putAll(readHybridViaAdb(autoservice))
 
-        return assembleSnapshot(decoded, windowRrRaw)
+        return assembleSnapshot(withInsideTempFallback(decoded, insideTempRaw), windowRrRaw)
     }
 
     // Range rejects (INT_TEMP_C / INT_PERCENT) used to vanish silently: a car answering a
@@ -469,7 +481,27 @@ class NativeParsReader @Inject constructor(
 
         val windowRrEntry: FidEntry = FidMap.entries.first { it.field == "windowRR" }
         val windowRrIndex: Int = FidMap.entries.indexOf(windowRrEntry)
+        val insideTempEntry: FidEntry = FidMap.entries.first { it.field == "insideTemp" }
+        val insideTempIndex: Int = FidMap.entries.indexOf(insideTempEntry)
     }
+}
+
+/** Raw pre-decode word of batch item [index] when the read itself succeeded, else null. */
+private fun okBatchWord(pairs: List<Pair<Int, Int>>, index: Int): Int? =
+    pairs.getOrNull(index)?.let { (status, word) -> if (status == 0) word else null }
+
+/**
+ * Cabin temperature from the older AC_TEMP_INSIDE address (insideTempAlt) when the primary
+ * fid gave nothing AND its raw answer says the address is not readable on this head unit:
+ * link-error (65535) or wrong-direction (-10011). A transient sentinel (-10013) or a failed
+ * read keeps insideTemp null rather than mixing in a reading from a different fid.
+ */
+private fun withInsideTempFallback(decoded: Map<String, Any?>, primaryRaw: Int?): Map<String, Any?> {
+    if (decoded["insideTemp"] != null) return decoded
+    val mayFallback = primaryRaw == SentinelDecoder.FEATURE_LINK_ERROR ||
+        primaryRaw == SentinelDecoder.WRONG_DIRECTION
+    val alt = decoded["insideTempAlt"]
+    return if (mayFallback && alt != null) decoded + ("insideTemp" to alt) else decoded
 }
 
 /**
