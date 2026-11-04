@@ -1,10 +1,10 @@
-package com.bydmate.app.data.remote
+package com.bydmate.app.data.vehicle
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class AliceApertureControllerOutcomeTest {
+class WindowMoveOutcomeTest {
 
     @Test
     fun `reached target plus accepted stop is success even when late readback drifts`() {

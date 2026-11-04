@@ -667,6 +667,7 @@ object AppModule {
         com.bydmate.app.data.vehicle.VehicleApiImpl(
             parsReader, autoservice, helper, allowlist, writeLogDao, seatChannelStore, windowChannelStore,
             seatCommandJournal, rearCatalog = { fidCatalogManager.catalog },
+            legacyHeadUnit = com.bydmate.app.platform.LegacyHeadUnit.isAndroid10,
         )
 
     @Provides
