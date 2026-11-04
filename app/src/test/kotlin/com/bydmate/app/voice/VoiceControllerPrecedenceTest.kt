@@ -360,14 +360,14 @@ class VoiceControllerPrecedenceTest {
     }
 
     @Test fun `the close step never shadows a dictionary command`() {
-        val resolver = withTiktok()
-        val r = rig(null, VoiceUserPhrases(), resolver)
-
         for (phrase in listOf("закрой окна", "закрой люк", "закрой багажник")) {
+            val resolver = withTiktok()
+            val r = rig(null, VoiceUserPhrases(), resolver)
+
             assertEquals(parserLabel(phrase), r.say(phrase).command)
+            verify(exactly = 0) { resolver.packageFor(any()) }
+            assertTrue(r.actions.none { it.kind == "app_close" })
         }
-        verify(exactly = 0) { resolver.packageFor(any()) }
-        assertTrue(r.actions.none { it.kind == "app_close" })
     }
 
     @Test fun `an unknown app goes to the agent`() {
