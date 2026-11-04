@@ -51,6 +51,16 @@ class AgentCommandCatalogTest {
         assertEquals("关闭方向盘加热", AgentCommandCatalog.resolve("steering_heat_off", null))
     }
 
+    @Test fun `resolve returns chinese string for hud commands`() {
+        assertEquals("打开抬头显示", AgentCommandCatalog.resolve("hud_on", null))
+        assertEquals("关闭抬头显示", AgentCommandCatalog.resolve("hud_off", null))
+    }
+
+    @Test fun `resolve returns chinese string for battery preheat commands`() {
+        assertEquals("打开电池预热", AgentCommandCatalog.resolve("battery_preheat_on", null))
+        assertEquals("关闭电池预热", AgentCommandCatalog.resolve("battery_preheat_off", null))
+    }
+
     @Test fun `resolve applies value for ranged command`() {
         assertEquals("设置温度22", AgentCommandCatalog.resolve("ac_set_temp", 22))
     }

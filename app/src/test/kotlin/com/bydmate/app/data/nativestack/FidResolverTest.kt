@@ -88,6 +88,22 @@ class FidResolverTest {
     }
 
     @Test
+    fun `the fixed cabin temperature fallback never moves, and does not block insideTemp`() = runTest {
+        // Song Plus numbers AC_TEMP_INSIDE 1320181776: insideTemp moves there (the shared symbol
+        // keeps the collision guard quiet), while insideTempAlt stays on its own constant
+        // everywhere, also on Leopard 3 where the symbol sits at insideTemp's address.
+        val songPlus = FidResolver.resolve(FidMap.all, catalog("songplus"), alwaysPlausible, "test")
+        assertEquals(1320181776, songPlus.table.fid("insideTemp"))
+        assertEquals(FidResolution.CATALOG, songPlus.table.notes.first { it.field == "insideTemp" }.outcome)
+        assertEquals(1320181776, songPlus.table.fid("insideTempAlt"))
+        assertEquals(FidResolution.CONST, songPlus.table.notes.first { it.field == "insideTempAlt" }.outcome)
+
+        val leopard = FidResolver.resolve(FidMap.all, catalog("leopard3"), alwaysPlausible, "test")
+        assertEquals(1031798832, leopard.table.fid("insideTemp"))
+        assertEquals(1320181776, leopard.table.fid("insideTempAlt"))
+    }
+
+    @Test
     fun `song plus turn signal takes the value of our own symbol`() = runTest {
         val outcome = FidResolver.resolve(FidMap.all, catalog("songplus"), alwaysPlausible, "test")
         // 1564 is a CAN-FD branch id — small, but a legitimate catalog value.

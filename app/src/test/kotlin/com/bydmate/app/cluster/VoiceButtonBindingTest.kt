@@ -42,7 +42,7 @@ class VoiceButtonBindingTest {
         assertEquals("304,327", voiceCompanionsToCsv(setOf(327, 304)))
         assertEquals(setOf(304, 327), voiceCompanionsFromCsv("304,327"))
         listOf(null, "", "327,x", "327,-1", "327,24").forEach {
-            assertEquals(emptySet<Int>(), voiceCompanionsFromCsv(it))
+            assertEquals(emptySet<Int>(), voiceBindingCompanionsFromCsv(it))
         }
     }
 

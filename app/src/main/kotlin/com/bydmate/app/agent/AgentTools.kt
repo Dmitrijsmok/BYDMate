@@ -14,12 +14,17 @@ import com.bydmate.app.data.automation.AutomationEngine
 import com.bydmate.app.data.automation.ConfirmOverlayManager
 import com.bydmate.app.data.automation.DispatchResult
 import com.bydmate.app.data.automation.PlaceGeometry
+import com.bydmate.app.data.automation.PowerStateRuleMigration
+import com.bydmate.app.data.automation.RouteNavigatorDiscovery
+import com.bydmate.app.data.automation.RouteNavigatorResolver
+import com.bydmate.app.data.automation.RouteNavigatorUris
 import com.bydmate.app.data.automation.RuleDraftValidator
 import com.bydmate.app.data.automation.RuleInserts
 import com.bydmate.app.data.automation.TriggerValidationError
 import com.bydmate.app.data.automation.ScheduleSpec
 import com.bydmate.app.data.automation.VoiceFireResult
 import com.bydmate.app.data.automation.hhmmToMinute
+import com.bydmate.app.data.charging.ChargeConnector
 import com.bydmate.app.data.local.dao.ChargeDao
 import com.bydmate.app.data.local.dao.RuleDao
 import com.bydmate.app.data.local.dao.TripDao
@@ -29,8 +34,12 @@ import com.bydmate.app.data.local.entity.PlaceEntity
 import com.bydmate.app.data.local.entity.RuleEntity
 import com.bydmate.app.data.local.entity.TriggerDef
 import com.bydmate.app.data.autoservice.SentinelDecoder
+import com.bydmate.app.data.remote.AliceAppCatalog
+import com.bydmate.app.data.remote.AliceAppTarget
 import com.bydmate.app.data.remote.InsightStatsAggregator
 import com.bydmate.app.data.nativestack.MotorSplit
+import com.bydmate.app.data.nativestack.VehicleKind
+import com.bydmate.app.data.nativestack.VehicleKindMonitor
 import com.bydmate.app.data.nativestack.motorSplitPercent
 import com.bydmate.app.data.remote.InsightsManager
 import com.bydmate.app.data.remote.OpenRouterClient
@@ -44,6 +53,10 @@ import com.bydmate.app.domain.battery.BatteryStateRepository
 import com.bydmate.app.domain.calculator.RangeCalculator
 import com.bydmate.app.domain.calculator.RangeEstimate
 import com.bydmate.app.domain.cost.CostCalculator
+import com.bydmate.app.domain.tracker.TrackPoint
+import com.bydmate.app.domain.tracker.TravelCourse
+import com.bydmate.app.diagnostics.Trace
+import com.bydmate.app.diagnostics.TraceArea
 import com.bydmate.app.cluster.SteeringWheelKeyService
 import com.bydmate.app.data.camera.CameraStateMonitor
 import com.bydmate.app.media.NaviRouteHolder
@@ -174,6 +187,16 @@ class AgentTools @Inject constructor(
         settlementSearchClient = client
     }
 
+    // Same method-injection reason as splitPrefs above. Null until Hilt injects it; the car then
+    // counts as not a hybrid and get_vehicle_state answers as on an EV.
+    private var vehicleKindMonitor: VehicleKindMonitor? = null
+
+    /** Called by Hilt after construction; call manually in unit tests of the hybrid fields. */
+    @Inject
+    internal fun injectVehicleKind(monitor: VehicleKindMonitor) {
+        vehicleKindMonitor = monitor
+    }
+
     /** Sorted names of the enabled automations, kept in step with the rules table by
      *  [startRuleWatcher]; null until the first emission. */
     @Volatile private var cachedRuleNames: List<String>? = null
@@ -266,6 +289,11 @@ class AgentTools @Inject constructor(
         foregroundPackagesSince(sinceMs).any { it in NavPackages.YANDEX_MAPS }
     }
 
+    /** The same question for a route pinned to 2GIS or Waze (#305): that package, not the Navigator. */
+    internal var pinnedForegroundCheck: (Long, String) -> Boolean = { since, pkg ->
+        pkg in foregroundPackagesSince(since)
+    }
+
     /** Test seam - poll interval for the navigate foreground verification. */
     internal var naviVerifyIntervalMs = 500L
 
@@ -280,9 +308,25 @@ class AgentTools @Inject constructor(
         // The route went to whichever app the payload named or the settings default resolved
         // to (#200), so that is the app whose arrival proves it: waiting for the Navigator on
         // a Maps route (explicit app="maps" or Maps chosen in settings) fails a working route.
+        // The same goes for a route pinned to 2GIS or Waze (#305).
+        // A pinned package (a manual one from settings or a vendor variant included) is the one
+        // to wait for whichever app it is.
         val maps = actionDispatcher.willOpenMaps(payload)
-        val surfaced = if (maps) mapsForegroundCheck else naviForegroundCheck
-        val appName = if (maps) "Яндекс Карты" else "Навигатор"
+        val pinned = actionDispatcher.willOpenPinned(payload)
+        val surfaced: (Long) -> Boolean = when {
+            pinned != null -> { since -> pinnedForegroundCheck(since, pinned) }
+            maps -> mapsForegroundCheck
+            else -> naviForegroundCheck
+        }
+        val appName = when {
+            maps -> "Яндекс Карты"
+            else -> when (pinned?.let(RouteNavigatorDiscovery::navigatorOf)) {
+                RouteNavigatorUris.DGIS -> "2ГИС"
+                RouteNavigatorUris.WAZE -> "Waze"
+                RouteNavigatorUris.GOOGLE_MAPS -> "Google Maps"
+                else -> "Навигатор"
+            }
+        }
         val result = actionDispatcher.dispatch(
             ActionDef(command = "", displayName = displayName, kind = "navigate",
                 payload = payload.toString()), data = null)
@@ -392,9 +436,10 @@ class AgentTools @Inject constructor(
         ))
         put(tool(
             "vehicle_control",
-            "Выполнить команду управления машиной. У окон ровно три положения: полностью открыть, " +
-                "наполовину и проветривание; произвольный процент машина не умеет — если водитель " +
-                "назвал процент, выбери ближайшее из трёх и скажи в ответе, какое. " +
+            "Выполнить команду управления машиной. Боковое окно открывается полностью, наполовину, " +
+                "на проветривание или на точный процент: если водитель назвал процент, вызови " +
+                "window_*_position с value = этот процент (1..99) для каждого названного окна; " +
+                "0 и 100 - команды закрыть и открыть. У люка процента нет, только его положения. " +
                 "command — идентификатор из списка:\n" +
                 AgentCommandCatalog.idsDoc(),
             JSONObject()
@@ -527,10 +572,11 @@ class AgentTools @Inject constructor(
         put(tool(
             "navigate_to",
             "Построить маршрут от текущей позиции: по умолчанию в приложении, выбранном в " +
-                "настройках (Навигатор/2ГИС/Карты), app=\"maps\" - явно в Яндекс Картах, если " +
-                "пользователь просит именно их. Команды поехали домой, до дома, " +
+                "настройках, app - в приложении, которое пользователь явно назвал (в Waze, в Google " +
+                "Maps, в Яндекс Картах, в 2ГИС, в Яндекс Навигаторе). Команды поехали домой, до дома, " +
                 "на работу - ЭТОТ инструмент: передай destination \"Дом\" или \"Работа\", маршрут " +
-                "построится по Месту BYDMate или по адресу, сохранённому в самом Навигаторе. " +
+                "построится по Месту BYDMate или по адресу, сохранённому в самом навигаторе " +
+                "(Яндекс Навигатор, Waze; в Google Maps и 2ГИС так нельзя). " +
                 "destination: имя сохранённого Места, город или населённый пункт (маршрут строится " +
                 "сразу) либо точный адрес (откроется поиск на карте, пользователь выберет точку). " +
                 "Ответ может содержать проверку запаса хода: если enough=false или есть charge_note, " +
@@ -547,31 +593,25 @@ class AgentTools @Inject constructor(
                         "начать движение по маршруту, кнопку Поехали нажмёт приложение. " +
                         "false (по умолчанию) для построй/покажи/проложи маршрут - только " +
                         "построить, водитель нажмёт Поехали сам"))
-                .put("app", JSONObject().put("type", "string")
-                    .put("enum", JSONArray().put("navigator").put("maps"))
-                    .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты, по умолчанию), " +
-                        "maps = явно Яндекс Карты; maps передавай только когда пользователь явно просит Яндекс Карты")),
+                .put("app", navAppParam()),
             emptyList(),
         ))
         put(tool(
             "search_on_map",
-            "Открыть поиск места в приложении, выбранном в настройках (app=\"maps\" - явно в " +
-                "Яндекс Картах, если пользователь просит именно их): на карте появится выдача, " +
+            "Открыть поиск места в приложении, выбранном в настройках (app - в явно названном " +
+                "пользователем приложении): на карте появится выдача, " +
                 "пользователь сам выберет точку. Использовать для команд вроде: поищи кафе, найди заправку, " +
                 "где ближайшая аптека. Если пользователь просит ПОЕХАТЬ куда-то, в том числе " +
                 "домой или на работу, используй navigate_to.",
             JSONObject().put("query", JSONObject().put("type", "string")
                 .put("description", "Что искать: название места или категория"))
-                .put("app", JSONObject().put("type", "string")
-                    .put("enum", JSONArray().put("navigator").put("maps"))
-                    .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты, по умолчанию), " +
-                        "maps = явно Яндекс Карты; maps передавай только когда пользователь явно просит Яндекс Карты")),
+                .put("app", navAppParam()),
             listOf("query"),
         ))
         put(tool(
             "show_point_on_map",
             "Показать точку на карте БЕЗ построения маршрута (по умолчанию приложение из " +
-                "настроек, app=\"maps\" - явно Яндекс Карты): команды вроде " +
+                "настроек, app - явно названное приложение): команды вроде " +
                 "покажи на карте, где находится. destination: имя Места, город или адрес; " +
                 "либо lat/lon, если координаты известны (например из find_chargers). " +
                 "Для маршрута используй navigate_to, для поиска по категории search_on_map.",
@@ -579,22 +619,36 @@ class AgentTools @Inject constructor(
                 .put("description", "Что показать: имя Места, адрес или название"))
                 .put("lat", JSONObject().put("type", "number").put("description", "Широта, если известна"))
                 .put("lon", JSONObject().put("type", "number").put("description", "Долгота"))
-                .put("app", JSONObject().put("type", "string")
-                    .put("enum", JSONArray().put("navigator").put("maps"))
-                    .put("description", "navigator = приложение из настроек (Навигатор/2ГИС/Карты, по умолчанию), " +
-                        "maps = явно Яндекс Карты; maps передавай только когда пользователь явно просит Яндекс Карты")),
+                .put("app", navAppParam()),
             emptyList(),
         ))
         put(tool(
             "find_chargers",
-            "Найти электрозарядные станции рядом (данные OpenStreetMap). Без city ищет вокруг " +
-                "текущей позиции машины. Верни пользователю ближайшие варианты с расстоянием; " +
-                "когда он выберет, вызови navigate_to с lat и lon выбранной станции.",
+            "Найти электрозарядные станции. В Беларуси с живой занятостью разъёмов, мощностью и " +
+                "ценой (карта ассоциации BETA), иначе только станции (OpenStreetMap). Без city ищет " +
+                "от текущей позиции машины. where: «по пути», «впереди», «по дороге» - ahead (станции " +
+                "по ходу движения, а после маршрута navigate_to - с небольшим крюком к его точке); " +
+                "«рядом», «вокруг», «ближайшая» - around; без where в движении ищет ahead, на месте around. " +
+                "Поля станции: distance_km по прямой; direction_from_car - сторона света; position " +
+                "ahead/behind/aside - впереди, позади, в стороне по ходу; detour_km - лишний крюк; status " +
+                "free/busy/unavailable и connectors_free из connectors_total - разъёмы типа машины, " +
+                "connectors_unknown - по стольким из них нет данных о занятости; status_scope=station - " +
+                "занятость всей станции, не разъёма машины; " +
+                "max_power_kw; price_per_kwh и currency; status_age_min - сколько минут назад обновлена " +
+                "занятость, status_stale=true - устарела; beyond_range=true - дальше запаса хода. " +
+                "connector_known=false - разъёмы, мощность и цена неизвестны; status_known=false - занятость " +
+                "неизвестна. Когда водитель выберет станцию, вызови navigate_to с lat и lon выбранной станции.",
             JSONObject()
                 .put("city", JSONObject().put("type", "string")
                     .put("description", "Город/точка поиска, если не вокруг машины"))
                 .put("radius_km", JSONObject().put("type", "integer")
-                    .put("description", "Радиус поиска в км, по умолчанию 30, максимум 100")),
+                    .put("description", "Радиус поиска в км, по умолчанию 30 (ahead: 30-100 по скорости), максимум 100"))
+                .put("connector", JSONObject().put("type", "string")
+                    .put("enum", JSONArray(ChargeConnector.entries.map { it.label }))
+                    .put("description", "Тип разъёма, только если водитель назвал другой; по умолчанию из настроек"))
+                .put("where", JSONObject().put("type", "string")
+                    .put("enum", JSONArray(ChargerWhere.entries.map { it.code }))
+                    .put("description", "ahead - по ходу движения, around - вокруг машины")),
             emptyList(),
         ))
         put(tool(
@@ -621,6 +675,14 @@ class AgentTools @Inject constructor(
             "go_home",
             "Свернуть все окна и показать домашний экран (рабочий стол) машины. Использовать для " +
                 "команд вроде: домой на экран, на рабочий стол, сверни всё.",
+            JSONObject(), emptyList(),
+        ))
+        put(tool(
+            "end_conversation",
+            "Закрыть голосового помощника (тебя самого). Вызывать ТОЛЬКО когда водитель прямо просит " +
+                "закрыть, выключить или остановить помощника или говорит, что разговор окончен: " +
+                "\"закрой агента\", \"выключись\", \"отключись\", \"всё, спасибо, хватит\". Никогда не " +
+                "вызывать просто после выполненной команды. После вызова ответь очень коротким прощанием.",
             JSONObject(), emptyList(),
         ))
         put(tool(
@@ -651,12 +713,24 @@ class AgentTools @Inject constructor(
         put(tool(
             "launch_app",
             "Запустить установленное приложение по названию. Понимает русские названия штатных " +
-                "приложений машины: навигатор, яндекс карты, музыка, камера, видеорегистратор, " +
-                "браузер, ютуб, настройки машины, файлы, режимы вождения, часовой, АБРП, " +
-                "медиацентр, телефон.",
+                "приложений машины: навигатор (приложение, выбранное в настройках), яндекс навигатор, " +
+                "яндекс карты, 2гис, waze, google maps, музыка, камера, видеорегистратор, " +
+                "браузер, ютуб, тикток, файлы, режимы вождения, часовой, АБРП, " +
+                "медиацентр, телефон. Названное приложение открывается именно оно, а не навигатор из настроек. " +
+                "Для системных настроек используй open_settings.",
             JSONObject().put("name", JSONObject().put("type", "string")
                 .put("description", "Название приложения, как на домашнем экране")),
             listOf("name"),
+        ))
+        put(tool(
+            "open_settings",
+            "Открыть раздел настроек головного устройства: car = штатные настройки машины BYD, " +
+                "display = экран, android = общие настройки Android, wifi, bluetooth, sound = звук, " +
+                "apps = приложения.",
+            JSONObject().put("section", JSONObject().put("type", "string")
+                .put("enum", JSONArray(AliceAppCatalog.SETTINGS_SECTIONS.toList()))
+                .put("description", "Какой раздел настроек открыть")),
+            listOf("section"),
         ))
         put(tool(
             "set_cluster_projection",
@@ -684,6 +758,15 @@ class AgentTools @Inject constructor(
                 "\"выключи раздачу\" = off.",
             JSONObject().put("on", JSONObject().put("type", "boolean")
                 .put("description", "true = включить точку доступа, false = выключить")),
+            listOf("on"),
+        ))
+        put(tool(
+            "set_screen",
+            "Погасить или зажечь центральный экран магнитолы (приборку и HUD не трогает). Гаснет только " +
+                "подсветка: музыка и приложения продолжают работать, касание экрана зажигает его снова. " +
+                "\"выключи экран\", \"погаси экран\" = off; \"включи экран\" = on.",
+            JSONObject().put("on", JSONObject().put("type", "boolean")
+                .put("description", "true = включить экран, false = выключить")),
             listOf("on"),
         ))
         put(tool(
@@ -777,7 +860,7 @@ class AgentTools @Inject constructor(
                                     .put("enum", JSONArray(listOf(
                                         "param", "delay", "media_volume", "notification",
                                         "call", "navigate", "url",
-                                        "yandex_music", "sentry", "hotspot", "app_launch",
+                                        "yandex_music", "sentry", "hotspot", "screen", "app_launch", "app_close", "media_key",
                                         "cluster_projection", "speak", "agent_query",
                                         "split_screen", "split_screen_close",
                                         "split_screen_toggle", "youtube", "go_home")))
@@ -817,9 +900,14 @@ class AgentTools @Inject constructor(
                                 .put("query", JSONObject().put("type", "string")
                                     .put("description", "Только для kind=youtube: что искать на YouTube"))
                                 .put("on", JSONObject().put("type", "boolean")
-                                    .put("description", "Для kind=sentry: включить/выключить охрану. Для kind=cluster_projection: true = вывести проекцию на приборку, false = убрать. Для kind=hotspot: включить/выключить точку доступа Wi-Fi"))
+                                    .put("description", "Для kind=sentry: включить/выключить охрану. Для kind=cluster_projection: true = вывести проекцию на приборку, false = убрать. Для kind=hotspot: включить/выключить точку доступа Wi-Fi. Для kind=screen: включить/выключить центральный экран"))
                                 .put("app", JSONObject().put("type", "string")
-                                    .put("description", "Только для kind=app_launch: название приложения, как на домашнем экране"))
+                                    .put("description", "Для kind=app_launch и kind=app_close: название приложения, как на домашнем экране. " +
+                                        "app_close закрывает приложение полностью"))
+                                .put("key", JSONObject().put("type", "string")
+                                    .put("enum", JSONArray(listOf("play", "pause")))
+                                    .put("description", "Только для kind=media_key: play - играть, pause - пауза. " +
+                                        "Плеер должен быть уже запущен"))
                                 .put("narrow_app", JSONObject().put("type", "string")
                                     .put("description", "Только для kind=split_screen: приложение в узкой панели (1/3), название как на домашнем экране"))
                                 .put("wide_app", JSONObject().put("type", "string")
@@ -857,6 +945,15 @@ class AgentTools @Inject constructor(
             Result.failure(e)
         }
 
+    /** [schemas] minus [deniedTools]: what a restricted detached turn offers the model. */
+    suspend fun schemas(includeAutomationTools: Boolean, deniedTools: Set<String>): JSONArray =
+        withoutTools(schemas(includeAutomationTools), deniedTools)
+
+    /** [execute] that also refuses [deniedTools], even when the model calls one it was never
+     *  offered (a name from an older turn, or invented): the schemas are not the only fence. */
+    suspend fun execute(call: AgentToolCall, allowAutomationTools: Boolean, deniedTools: Set<String>): String =
+        if (call.name in deniedTools) deniedToolError(call.name) else execute(call, allowAutomationTools)
+
     suspend fun execute(call: AgentToolCall, allowAutomationTools: Boolean = true): String {
         val args = runCatchingCancellable { JSONObject(call.arguments.ifBlank { "{}" }) }
             .getOrElse { return BAD_ARGS_ERROR }
@@ -893,12 +990,16 @@ class AgentTools @Inject constructor(
                 "range_to_destination" -> rangeToDestination(args)
                 "get_route_info" -> routeInfo()
                 "go_home" -> goHomeScreen()
+                // The voice session closes itself on this outcome (VoiceController); nothing to do here.
+                "end_conversation" -> """{"ok":true}"""
                 "play_music" -> playMusic(args)
                 "youtube" -> youtubeTool(args)
                 "launch_app" -> launchAppTool(args)
+                "open_settings" -> openSettings(args.optString("section"))
                 "set_cluster_projection" -> setClusterProjection(args)
                 "set_sentry" -> setSentry(args)
                 "set_hotspot" -> setHotspot(args)
+                "set_screen" -> setScreen(args)
                 "split_screen" -> splitScreen(args)
                 "set_automation_enabled" -> setAutomationEnabled(args)
                 "create_automation" -> createAutomation(args)
@@ -1004,7 +1105,6 @@ class AgentTools @Inject constructor(
         // The old dev=1006 fid (d.driveMode) stays 3/NORMAL for sand/mud/mountain/smart (live L3
         // 2026-09-27); driveModeName reads the real target mode and falls back to it on failure.
         putIf("drive_mode", driveModeName(d.driveMode))
-        putIf("power_state", when (d.powerState) { 0 -> "OFF"; 1 -> "ON"; 2 -> "DRIVE"; else -> null })
         putIf("work_mode", when (d.workMode) { 0 -> "STOP"; 1 -> "EV"; 2 -> "FORCED_EV"; 3 -> "HEV"; else -> null })
         putIf("light_low_beam_on", d.lightLow?.let { it == 1 })
         putIf("light_high_beam_on", d.lightHigh?.let { it == 1 })
@@ -1053,7 +1153,19 @@ class AgentTools @Inject constructor(
             putIf("lifetime_km", b.lifetimeKm?.toDouble())
             putIf("lifetime_kwh", b.lifetimeKwh?.toDouble())
         }
-        runCatchingCancellable { rangeCalculator.estimateDetailed(d.soc, d.totalElecConsumption, d.avgBatTemp) }
+        // A DM-i reports its own ranges; SOC x capacity would be an invented range there.
+        val hybrid = vehicleKindMonitor?.kind?.value == VehicleKind.HYBRID
+        if (hybrid) {
+            putIf("range_km", d.evRangeKm)
+            putIf("ev_range_km", d.evRangeKm)
+            putIf("fuel_percent", d.fuelPercent)
+            putIf("fuel_range_km", d.fuelRangeKm)
+            putIf("engine_rpm", d.engineRpm)
+            putIf("mileage_hev_km", d.mileageHevKm)
+            putIf("mileage_ev_km", d.mileageEvKm)
+        }
+        // Every figure below is SOC x capacity, so a DM-i gets none of them.
+        if (!hybrid) runCatchingCancellable { rangeCalculator.estimateDetailed(d.soc, d.totalElecConsumption, d.avgBatTemp) }
             .getOrNull()?.let { est ->
                 o.put("range_km", est.rangeKm.roundToInt())
                 o.put("battery_capacity_kwh", est.capacityKwh)
@@ -1097,7 +1209,7 @@ class AgentTools @Inject constructor(
         // saved Place on the GPS path (Open-Meteo has no reverse geocoding), null if neither.
         val location: String?
         if (city != null) {
-            val geo = weatherClient.geocode(city).getOrElse { return weatherErrorJson(it) }
+            val geo = weatherCall("geocode") { weatherClient.geocode(city) }.getOrElse { return weatherErrorJson(it) }
             lat = geo.lat
             lon = geo.lon
             location = geo.name.ifBlank { null }
@@ -1107,7 +1219,7 @@ class AgentTools @Inject constructor(
             lon = gps.second
             location = placeNameAt(lat, lon)
         }
-        val forecast = weatherClient.forecast(lat, lon).getOrElse { return weatherErrorJson(it) }
+        val forecast = weatherCall("forecast") { weatherClient.forecast(lat, lon) }.getOrElse { return weatherErrorJson(it) }
         if (location == null) return forecast
         // location is a String, so no put(String, float) hazard here.
         return JSONObject(forecast).put("location", location).toString()
@@ -1119,6 +1231,16 @@ class AgentTools @Inject constructor(
         runCatchingCancellable { placeRepository.getAllSnapshot() }.getOrNull()
             ?.firstOrNull { PlaceGeometry.isInside(lat, lon, it.lat, it.lon, it.radiusM) }
             ?.name
+
+    // One line per failed weather request: exception class, HTTP code and time only. The message
+    // and the URL are never logged, the forecast query carries the car's coordinates.
+    private suspend fun <T> weatherCall(step: String, call: suspend () -> Result<T>): Result<T> {
+        val startMs = nowMs()
+        return call().onFailure { e ->
+            Log.w(TAG, "get_weather: $step failed: ${e.javaClass.simpleName} " +
+                "http=${(e as? WeatherClient.HttpError)?.code ?: "-"} took=${nowMs() - startMs}ms")
+        }
+    }
 
     // Raw Throwable messages are English ("timeout", "No value for current") and must not leak
     // into the error JSON the LLM reads back to the driver; only WeatherClient.UserError carries
@@ -1136,7 +1258,7 @@ class AgentTools @Inject constructor(
         val name = args.optString("name").trim()
         if (name.isEmpty()) return """{"error":"не указано имя"}"""
         val hasPermission = runCatchingCancellable { contactLookup.hasPermission() }.getOrDefault(false)
-        if (!hasPermission) return """{"error":"нет доступа к контактам, включите в Настройках"}"""
+        if (!hasPermission) return """{"error":"звонок по имени пока недоступен: нет доступа к контактам"}"""
         val matches = runCatchingCancellable { contactLookup.findByName(name) }
             .getOrElse { return """{"error":"не удалось прочитать контакты"}""" }
         return when {
@@ -1556,15 +1678,39 @@ class AgentTools @Inject constructor(
 
     // --- navigation ---
 
-    // app rides the navigate payload only when the driver named Maps explicitly: without it
-    // the dispatcher's default (Navigator) path stays byte-identical. #200.
+    // app rides the navigate payload only when the driver named an app explicitly (Maps #200,
+    // Waze, Google Maps, 2GIS, Yandex Navigator): without it the dispatcher's default path stays
+    // byte-identical.
     private fun JSONObject.putApp(app: String): JSONObject = if (app.isEmpty()) this else put("app", app)
 
     private fun navApp(args: JSONObject): String =
-        if (args.optString("app").trim().equals("maps", ignoreCase = true)) "maps" else ""
+        args.optString("app").trim().lowercase(Locale.ROOT).takeIf { it in RouteNavigatorUris.ALL }.orEmpty()
+
+    /** The `app` parameter of the three navigation tools: the settings default or one named app. */
+    private fun navAppParam(): JSONObject = JSONObject().put("type", "string")
+        .put("enum", JSONArray().put("navigator").apply { RouteNavigatorUris.ALL.forEach { put(it) } })
+        .put("description", "navigator = приложение из настроек (по умолчанию). Явно названное " +
+            "пользователем приложение: yandex = Яндекс Навигатор, dgis = 2ГИС, maps = Яндекс Карты, " +
+            "waze = Waze, google_maps = Google Maps; передавай его, только когда пользователь сам назвал " +
+            "приложение, даже если в настройках выбрано другое")
 
     /** Per-command options of a route: «поехали» vs «построй маршрут», and which map app. */
     private data class NavOptions(val go: Boolean = false, val app: String = "")
+
+    /**
+     * Entry points of the Alice bridge: the same navigation engine as navigate_to / search_on_map /
+     * show_on_map (places, Home/Work, geocoding, the navigator choice and its fallback), with no LLM
+     * involved. [app] is a RouteNavigatorUris id or blank for the app chosen in settings. Each
+     * returns the tool's JSON result.
+     */
+    internal suspend fun navigateDirect(destination: String, go: Boolean, app: String): String =
+        navigateTo(JSONObject().put("destination", destination).put("go", go).putApp(app))
+
+    internal suspend fun searchMapDirect(query: String, app: String): String =
+        searchOnMap(JSONObject().put("query", query).putApp(app))
+
+    internal suspend fun showPointDirect(destination: String, app: String): String =
+        showPointOnMap(JSONObject().put("destination", destination).putApp(app))
 
     private suspend fun navigateTo(args: JSONObject): String {
         val destination = args.optString("destination").trim()
@@ -1588,6 +1734,7 @@ class AgentTools @Inject constructor(
         val result = dispatchNavigate("Навигация", JSONObject().put("query", destination).putApp(opts.app))
         if (!result.success) return JSONObject()
             .put("error", result.reason ?: "не получилось открыть Навигатор").toString()
+        routeDestination = null
         return JSONObject().put("ok", true).put("mode", "search")
             .put("note", "точку не удалось найти автоматически, открыт поиск на карте").toString()
     }
@@ -1647,6 +1794,8 @@ class AgentTools @Inject constructor(
         if (!result.success) return JSONObject().put("error",
             result.reason ?: ("адрес не найден: добавь Место \"${target.placeName}\" в BYDMate " +
                 "или сохрани точку \"${target.placeName}\" в Навигаторе")).toString()
+        // A new route to a point we do not know: the previous destination is no longer the route.
+        routeDestination = null
         return JSONObject().put("ok", true).put("mode", "route").put("target", target.placeName)
             .put("note", "если адрес \"${target.placeName}\" сохранён в Навигаторе, " +
                 "маршрут построится по нему; запас хода не оценивался, координаты неизвестны").toString()
@@ -1659,6 +1808,7 @@ class AgentTools @Inject constructor(
             JSONObject().put("lat", lat).put("lon", lon).put("go", opts.go).putApp(opts.app))
         if (!result.success) return JSONObject()
             .put("error", result.reason ?: "не получилось открыть Навигатор").toString()
+        rememberRoute(lat, lon)
         val json = JSONObject().put("ok", true).put("mode", "route").put(labelKey, label)
         rangeAssessment(lat, lon)?.let { ra ->
             ra.keys().forEach { k -> json.put(k, ra.get(k)) }
@@ -1692,33 +1842,180 @@ class AgentTools @Inject constructor(
         return json
     }
 
+    // --- find_chargers ---
+
+    /** Where the agent's own navigate_to last built a route, for find_chargers ahead. In memory
+     *  only: [session] ties it to the trip it was built in, [startKm] = straight km to it then. */
+    private data class RouteDestination(val lat: Double, val lon: Double, val session: Long?, val startKm: Double?)
+
+    @Volatile private var routeDestination: RouteDestination? = null
+
+    /** Test seam - the GPS fixes of the last minutes, for the direction of travel. */
+    internal var recentTrackProvider: () -> List<TrackPoint> =
+        { TrackingService.recentTrack.snapshot(SystemClock.elapsedRealtime()) }
+
+    /** Test seam - the ignition-on stamp of the current trip, null while the car is idle. */
+    internal var sessionProvider: () -> Long? = { TrackingService.sessionStartedAt.value }
+
+    private fun rememberRoute(lat: Double, lon: Double) {
+        val startKm = locationProvider()?.let { PlaceGeometry.distanceMeters(it.first, it.second, lat, lon) / 1000.0 }
+        routeDestination = RouteDestination(lat, lon, sessionProvider(), startKm)
+    }
+
+    /** What the car is doing, for find_chargers: course over the last kilometre, speed, the
+     *  destination of the route built in this trip while still heading to it, range. */
+    private data class TripContext(
+        val course: Double? = null,
+        val speedKmh: Int? = null,
+        val destination: LatLon? = null,
+        val rangeKm: Double? = null,
+    )
+
+    private suspend fun tripContext(car: LatLon): TripContext {
+        val track = runCatchingCancellable { recentTrackProvider() }.getOrDefault(emptyList())
+        val course = TravelCourse.of(track)
+        val d = gate.vehicleSnapshot()
+        val rangeKm = d?.let { runCatchingCancellable { rangeCalculator.estimate(it.soc, it.totalElecConsumption, it.avgBatTemp) }.getOrNull() }
+        val session = sessionProvider()
+        val destination = routeDestination
+            ?.takeIf { session != null && it.session == session }
+            ?.let { LatLon(it.lat, it.lon) to it.startKm }
+            ?.takeIf { (point, startKm) -> ChargerSelection.stillApproaching(car, point, startKm, course) }
+            ?.first
+        return TripContext(course, d?.speed ?: track.lastOrNull()?.speedKmh?.roundToInt(), destination, rangeKm)
+    }
+
     private suspend fun findChargers(args: JSONObject): String {
         val city = args.optString("city").trim()
-        val (lat, lon) = if (city.isNotEmpty()) {
+        val origin = if (city.isNotEmpty()) {
             runCatchingCancellable { weatherClient.geocode(city) }.getOrNull()?.getOrNull()
-                ?.let { it.lat to it.lon }
+                ?.let { LatLon(it.lat, it.lon) }
                 ?: return """{"error":"не нашёл такую точку, уточни название"}"""
-        } else locationProvider() ?: return """{"error":"нет GPS и не указан город"}"""
-        val radiusKm = args.optInt("radius_km", 30).coerceIn(1, 100)
-        val chargers = runCatchingCancellable {
-            chargerSearchClient.search(lat, lon, radiusKm * 1000)
+        } else locationProvider()?.let { LatLon(it.first, it.second) } ?: return """{"error":"нет GPS и не указан город"}"""
+        val connector = ChargeConnector.parse(args.optString("connector"))
+            ?: runCatchingCancellable { settingsRepository.getChargeConnector() }.getOrDefault(ChargeConnector.GBT)
+        // The direction of travel belongs to the car, not to a city asked by name.
+        val trip = if (city.isEmpty()) tripContext(origin) else TripContext()
+        val (where, radiusKm) = chargerScope(args, city.isNotEmpty(), trip)
+        val found = runCatchingCancellable {
+            chargerSearchClient.find(origin.lat, origin.lon, radiusKm * 1000, connector)
         }.getOrNull()?.getOrNull()
             ?: return """{"error":"сервис поиска зарядок недоступен, попробуй позже"}"""
-        if (chargers.isEmpty()) return JSONObject()
-            .put("chargers", JSONArray())
-            .put("note", "в радиусе $radiusKm км зарядок в OpenStreetMap не найдено").toString()
-        val nearest = chargers
-            .sortedBy { PlaceGeometry.distanceMeters(lat, lon, it.lat, it.lon) }
-            .take(5)
-        return JSONObject().put("chargers", JSONArray().apply {
-            nearest.forEach { c ->
-                put(JSONObject()
-                    .put("name", c.name)
-                    .put("distance_km", (PlaceGeometry.distanceMeters(lat, lon, c.lat, c.lon) / 1000.0 * 10).roundToInt() / 10.0)
-                    .put("lat", c.lat)
-                    .put("lon", c.lon))
-            }
-        }).put("note", "данные OpenStreetMap, наличие и мощность не гарантированы").toString()
+        val choice = ChargerSelection.choose(origin, found.stations, connector, where, trip.course, trip.destination)
+        // Counts and modes only: no place, name or coordinate.
+        Log.i(TAG, "find_chargers: source=${found.source.code} found=${found.stations.size} picks=${choice.picks.size} " +
+            "where=${where.code} ahead=${choice.ahead} course=${trip.course != null} dest=${trip.destination != null} " +
+            "radius=${radiusKm}km connector=${connector.key} missing=${choice.connectorMissing} range=${trip.rangeKm != null}")
+        Trace.event(TraceArea.AGENT, "chargers", "source" to found.source.code, "found" to found.stations.size,
+            "picks" to choice.picks.size, "where" to where.code, "ahead" to choice.ahead.name.lowercase(),
+            "radius_km" to radiusKm, "connector" to connector.key, by = Trace.cause())
+        return chargersJson(found, choice, connector, radiusKm, trip)
+    }
+
+    /** Direction and radius of the search: a city is searched around it; `ahead` looks 30-100 km
+     *  out by speed when the course or the route's end is known; otherwise 30 km around. */
+    private fun chargerScope(args: JSONObject, city: Boolean, trip: TripContext): Pair<ChargerWhere, Int> {
+        val asked = ChargerWhere.entries.firstOrNull { it.code.equals(args.optString("where").trim(), ignoreCase = true) }
+        val where = if (city) ChargerWhere.AROUND else asked ?: ChargerSelection.defaultWhere(trip.course, trip.speedKmh)
+        val canLookAhead = where == ChargerWhere.AHEAD && (trip.course != null || trip.destination != null)
+        val radiusKm = when {
+            args.has("radius_km") -> args.optInt("radius_km", CHARGER_RADIUS_KM).coerceIn(1, MAX_CHARGER_RADIUS_KM)
+            canLookAhead -> ChargerSelection.aheadRadiusKm(trip.speedKmh)
+            else -> CHARGER_RADIUS_KM
+        }
+        return where to radiusKm
+    }
+
+    private fun chargersJson(
+        found: ChargerSearchClient.Found,
+        choice: ChargerChoice,
+        connector: ChargeConnector,
+        radiusKm: Int,
+        trip: TripContext,
+    ): String {
+        val connectorKnown = found.source == ChargerSource.BETA
+        // Gateway: a whole-station status for some networks only, so known when any pick has one,
+        // and it is the station's as a whole, not the car's connector's.
+        val stationScope = !connectorKnown && choice.picks.any { it.station.status != null }
+        val where = if (choice.ahead == AheadOutcome.NO_COURSE || choice.ahead == AheadOutcome.NOT_ASKED) {
+            ChargerWhere.AROUND
+        } else ChargerWhere.AHEAD
+        return JSONObject()
+            .put("status_source", found.source.code)
+            .put("connector", connector.label)
+            .put("connector_known", connectorKnown)
+            .put("status_known", connectorKnown || stationScope)
+            .putOpt("status_scope", if (connectorKnown) "connector" else "station".takeIf { stationScope })
+            .put("where", where.code)
+            .putOpt("course", trip.course?.let(::compassOf))
+            .put("radius_km", radiusKm)
+            .put("chargers", JSONArray().apply { choice.picks.forEach { put(chargerJson(it, trip.rangeKm)) } })
+            .put("note", chargersNote(choice, connector, radiusKm, stationScope))
+            .toString()
+    }
+
+    private fun chargerJson(pick: ChargerPick, rangeKm: Double?): JSONObject {
+        val s = pick.station
+        val json = JSONObject()
+            .put("name", s.name)
+            .putOpt("address", s.address)
+            .putOpt("operator", s.operator)
+            .put("distance_km", round1(pick.distanceKm))
+            .put("direction_from_car", compassOf(pick.bearingDeg))
+            .putOpt("position", pick.position?.code)
+            .putOpt("detour_km", pick.detourKm?.let { round1(it.coerceAtLeast(0.0)) })
+            .put("lat", s.lat)
+            .put("lon", s.lon)
+            // With the car's connectors known, a null status means unknown: no station-wide fallback.
+            .putOpt("status", (if (pick.summary != null) pick.summary.status else s.status)?.code)
+        pick.summary?.let { c ->
+            json.put("connectors_total", c.total)
+                .put("connectors_free", c.free)
+                .putOpt("connectors_unknown", c.unknown.takeIf { it > 0 })
+                .putOpt("max_power_kw", c.maxPowerKw)
+                .putOpt("price_per_kwh", c.minPricePerKwh)
+                .putOpt("price_max_per_kwh", c.maxPricePerKwh?.takeIf { it != c.minPricePerKwh })
+                .putOpt("currency", c.currency)
+        }
+        // The car's type is missing here (listed only because no station has it): say what it has.
+        if (pick.summary == null && s.connectors != null) {
+            json.put("connector_types", JSONArray(s.connectors.map { c ->
+                ChargeConnector.entries.firstOrNull { it.matches(c.standard) }?.label ?: c.standard
+            }.distinct()))
+        }
+        s.statusAtMs?.let { at ->
+            val ageMin = ((nowMs() - at) / 60_000L).coerceAtLeast(0L)
+            json.put("status_age_min", ageMin)
+            if (ageMin > STALE_STATUS_MIN) json.put("status_stale", true)
+        }
+        // Road distance is longer than the straight line: the same fudge as range_to_destination.
+        if (rangeKm != null && pick.distanceKm * ROAD_FACTOR > rangeKm) json.put("beyond_range", true)
+        return json
+    }
+
+    private fun chargersNote(choice: ChargerChoice, connector: ChargeConnector, radiusKm: Int, stationScope: Boolean): String {
+        if (choice.picks.isEmpty()) return "в радиусе $radiusKm км зарядок не найдено"
+        val parts = mutableListOf<String>()
+        when (choice.ahead) {
+            AheadOutcome.NOTHING_AHEAD ->
+                parts += "впереди по ходу движения станций не найдено, показаны ближайшие вокруг: скажи об этом"
+            AheadOutcome.NO_COURSE ->
+                parts += "показаны станции вокруг: направление движения неизвестно, машина стоит или проехала мало"
+            AheadOutcome.DESTINATION ->
+                parts += "станции по пути к точке маршрута, detour_km - лишний крюк по прямой"
+            AheadOutcome.CORRIDOR, AheadOutcome.NOT_ASKED -> Unit
+        }
+        if (choice.connectorMissing) {
+            parts += "станций с разъёмом ${connector.label} в радиусе нет, показаны станции с другими " +
+                "разъёмами (connector_types): скажи об этом"
+        }
+        if (stationScope) parts += "занятость по станции целиком, про разъём машины неизвестно"
+        if (choice.picks.any { (it.summary?.unknown ?: 0) > 0 }) {
+            parts += "по части разъёмов (connectors_unknown) нет данных о занятости: так и скажи, не называй их занятыми"
+        }
+        parts += "distance_km по прямой, по дороге дальше: говори «по прямой»"
+        parts += "когда водитель выберет станцию, вызови navigate_to с её lat и lon"
+        return parts.joinToString("; ")
     }
 
     // --- where_am_i ---
@@ -1732,13 +2029,28 @@ class AgentTools @Inject constructor(
             ?: return """{"error":"поиск населённых пунктов недоступен"}"""
         Log.i(TAG, "where_am_i: request, fix age=${fix.ageMs / 1000}s live=${fix.live}")
         val searchStartMs = nowMs()
-        val found = runCatchingCancellable {
+        val answer = runCatchingCancellable {
             client.search(lat, lon, SETTLEMENT_RADIUS_M, TOWN_RADIUS_M)
         }.getOrNull()?.getOrElse {
             Log.w(TAG, "where_am_i: search failed: ${it.message}")
             null
         } ?: return """{"error":"сервис карт недоступен, не могу определить, где мы"}"""
         val latencyMs = nowMs() - searchStartMs
+        return when (answer) {
+            is SettlementSearchClient.Surroundings.Nearby -> nearbyJson(fix, answer.settlements, latencyMs, client.lastEndpoint)
+            is SettlementSearchClient.Surroundings.Address -> addressJson(fix, answer, latencyMs, client.lastEndpoint)
+        }
+    }
+
+    /** where_am_i from Overpass: settlement centres around the car, nearest first. */
+    private fun nearbyJson(
+        fix: GpsFix,
+        found: List<SettlementSearchClient.Settlement>,
+        latencyMs: Long,
+        endpoint: String?,
+    ): String {
+        val lat = fix.lat
+        val lon = fix.lon
         fun km(s: SettlementSearchClient.Settlement) = PlaceGeometry.distanceMeters(lat, lon, s.lat, s.lon) / 1000.0
         // A lone farmstead is a poor answer to "где я" while any real settlement is around.
         val regular = found.filter { it.place != "isolated_dwelling" }
@@ -1749,7 +2061,7 @@ class AgentTools @Inject constructor(
         // latency and the answering endpoint are enough to diagnose a "wrong answer" report.
         val nearestKm = nearest.firstOrNull()?.let { round1(km(it)) }?.toString() ?: "-"
         Log.i(TAG, "where_am_i: found=${found.size} nearest_km=$nearestKm town=${town != null} " +
-            "fix_age=${fix.ageMs / 1000}s live=${fix.live} latency=${latencyMs}ms endpoint=${client.lastEndpoint ?: "-"}")
+            "fix_age=${fix.ageMs / 1000}s live=${fix.live} latency=${latencyMs}ms endpoint=${endpoint ?: "-"}")
         val json = JSONObject().put("fix_age_min", fix.ageMs / 60_000L)
         staleFixNote(fix)?.let { json.put("fix_note", it) }
         if (nearest.isEmpty()) {
@@ -1764,6 +2076,34 @@ class AgentTools @Inject constructor(
         return json.put("note", "distance_km - по прямой до центра населённого пункта, direction_from_car - " +
             "в какой стороне он от машины. Границ в данных нет: даже при малом расстоянии не говори, что машина " +
             "в нём, говори «примерно N км от X, X к северу от нас». Называй только эти места").toString()
+    }
+
+    /** where_am_i when only Nominatim answered: the address of the point itself, no centres, so
+     *  no distance or direction. The same no-place-names rule for the log line as above. */
+    private fun addressJson(
+        fix: GpsFix,
+        address: SettlementSearchClient.Surroundings.Address,
+        latencyMs: Long,
+        endpoint: String?,
+    ): String {
+        Log.i(TAG, "where_am_i: address settlement=${address.settlement != null} street=${address.road != null} " +
+            "fix_age=${fix.ageMs / 1000}s live=${fix.live} latency=${latencyMs}ms endpoint=${endpoint ?: "-"}")
+        val json = JSONObject().put("fix_age_min", fix.ageMs / 60_000L)
+        staleFixNote(fix)?.let { json.put("fix_note", it) }
+        address.settlement?.let { name ->
+            json.put("settlements", JSONArray().put(JSONObject().put("name", name)
+                .putOpt("type", address.place?.let { SETTLEMENT_TYPES[it] ?: it })))
+        }
+        JSONObject()
+            .putOpt("street", address.road)
+            .putOpt("district", address.district)
+            .putOpt("region", address.region)
+            .putOpt("country", address.country)
+            .takeIf { it.length() > 0 }
+            ?.let { json.put("address", it) }
+        return json.put("note", "в этом ответе нет расстояний: это адрес точки машины по OpenStreetMap. " +
+            "settlements - населённый пункт из адреса, машина в нём или рядом с ним; address - улица, район, " +
+            "область, страна. Говори «мы в X или рядом, улица Y». Называй только эти места").toString()
     }
 
     /** Null for a fresh fix. A stale fix always gets a hedge, live or seed: the 8 m GPS filter
@@ -1797,8 +2137,11 @@ class AgentTools @Inject constructor(
         val y = Math.sin(dLon) * Math.cos(phi2)
         val x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLon)
         val bearing = (Math.toDegrees(Math.atan2(y, x)) + 360.0) % 360.0
-        return COMPASS_RU[((bearing + 22.5) / 45.0).toInt() % 8]
+        return compassOf(bearing)
     }
+
+    /** Eight-point compass name of a bearing in degrees from north, in Russian. */
+    private fun compassOf(bearing: Double): String = COMPASS_RU[((bearing + 22.5) / 45.0).toInt() % 8]
 
     // Same saved-place-then-geocode lookup as navigateTo, plus a straight-line distance
     // (with a road-factor fudge) against the current range estimate.
@@ -1965,30 +2308,49 @@ class AgentTools @Inject constructor(
         else JSONObject().put("error", result.reason ?: "не получилось открыть YouTube").toString()
     }
 
-    /** Resolve a human app name to (label, packageName) via aliases + launcher labels. */
+    /**
+     * Resolve a human app name to (label, packageName) through the app table the local assistant
+     * and Alice share ([AliceAppCatalog]): a navigation app the way routes resolve it, a known app
+     * by its packages, ReVanced/RVX builds and launcher label, any other name by launcher label and
+     * package token. A known package counts only with a launcher entry, so a name never launches
+     * an app this car does not have.
+     */
     private suspend fun resolveLauncherApp(name: String): Built<Pair<String, String>> {
         val apps = runCatchingCancellable { launcherAppsProvider() }.getOrNull()
             ?: return Built.Error("список приложений недоступен")
-        val needle = name.lowercase()
-        // Alias hit: resolve to the first candidate package present in the launcher list, so an
-        // alias never launches an app this car does not have; miss falls through to label match.
-        val aliasMatch = APP_ALIASES[needle]?.firstNotNullOfOrNull { pkg ->
-            apps.firstOrNull { it.second == pkg }
+        val launcher = apps.map { (label, pkg) -> RouteNavigatorDiscovery.LauncherApp(pkg, label) }
+        val matches = when (val target = AliceAppCatalog.forName(name)) {
+            // A navigation app name that none of its candidates answers still gets the label match.
+            is AliceAppTarget.Navigator -> navigatorPackages(target.navigator, launcher)
+                .firstNotNullOfOrNull { pkg -> launcher.firstOrNull { it.packageName == pkg } }
+                ?.let { listOf(it) }
+                ?: AliceAppCatalog.pick(AliceAppCatalog.byLabel(name), launcher)
+            is AliceAppTarget.App -> AliceAppCatalog.pick(target, launcher)
+            is AliceAppTarget.Settings -> AliceAppCatalog.settingsPackage(target.section)
+                .let { pkg -> launcher.filter { it.packageName == pkg }.take(1) }
+            AliceAppTarget.Self -> listOf(launcher.firstOrNull { it.packageName == context.packageName }
+                ?: RouteNavigatorDiscovery.LauncherApp(context.packageName, "BYDMate"))
         }
-        if (aliasMatch != null) return Built.Value(aliasMatch)
-        val exact = apps.filter { it.first.lowercase() == needle }
-        val matches = exact.ifEmpty { apps.filter { it.first.lowercase().contains(needle) } }
         return when {
             matches.isEmpty() -> Built.Error("приложение не найдено: $name")
             matches.size > 1 -> Built.Error(
-                "несколько совпадений: ${matches.take(5).joinToString(", ") { it.first }}. Уточни название")
-            else -> Built.Value(matches.single())
+                "несколько совпадений: ${matches.take(5).joinToString(", ") { it.label }}. Уточни название")
+            else -> Built.Value(matches.single().let { it.label to it.packageName })
         }
     }
+
+    /** A navigation app as candidate packages, resolved the way routes are: the manual package,
+     *  the app's builds (by package or launcher label). [navigator] null is the app chosen in
+     *  «Навигатор для маршрутов» (#334), then Yandex Navigator's packages, so a chosen app that is
+     *  not installed falls back the way routes do; a named app stays that app. */
+    private fun navigatorPackages(navigator: String?, launcher: List<RouteNavigatorDiscovery.LauncherApp>): List<String> =
+        RouteNavigatorResolver.launchCandidates(RouteNavigatorResolver.choice(context), navigator, launcher)
 
     private suspend fun launchAppTool(args: JSONObject): String {
         val name = args.optString("name").trim()
         if (name.isEmpty()) return """{"error":"не указано название приложения"}"""
+        // A settings screen by name opens through open_settings, not a launcher search (fork a6918f26).
+        AliceAppCatalog.settingsSection(name)?.let { return openSettings(it) }
         val (label, pkg) = when (val r = resolveLauncherApp(name)) {
             is Built.Error -> return JSONObject().put("error", r.message).toString()
             is Built.Value -> r.value
@@ -1998,6 +2360,18 @@ class AgentTools @Inject constructor(
                 payload = JSONObject().put("packageName", pkg).toString()), data = null)
         return if (result.success) JSONObject().put("ok", true).put("app", label).toString()
         else JSONObject().put("error", result.reason ?: "не получилось запустить $label").toString()
+    }
+
+    /** open_settings: one screen of [AliceAppCatalog.SETTINGS_SECTIONS], nothing else. */
+    private suspend fun openSettings(section: String): String {
+        val s = section.trim().lowercase()
+        if (s !in AliceAppCatalog.SETTINGS_SECTIONS) {
+            return JSONObject().put("error", "неизвестный раздел настроек: $s").toString()
+        }
+        val result = actionDispatcher.dispatch(
+            ActionDef(command = "", displayName = "Настройки", kind = "system_settings",
+                payload = JSONObject().put("section", s).toString()), data = null)
+        return dispatchJson(result)
     }
 
     // --- cluster projection ---
@@ -2060,6 +2434,18 @@ class AgentTools @Inject constructor(
         if (ActionDispatcher.isDangerousAction(action)) {
             return confirmDangerous(action, action.displayName)
         }
+        val result = actionDispatcher.dispatch(action, data = null)
+        return dispatchJson(result)
+    }
+
+    // Immediate screen backlight off/on (#275): same ActionDispatcher path as a "screen"
+    // automation action, so the reported result is the real one.
+    private suspend fun setScreen(args: JSONObject): String {
+        val on = requireBoolArg(args, "on")
+            ?: return """{"error":"не указано, включить или выключить экран"}"""
+        val action = ActionDef(command = "screen",
+            displayName = if (on) "Включить экран" else "Выключить экран",
+            kind = "screen", payload = if (on) "1" else "0")
         val result = actionDispatcher.dispatch(action, data = null)
         return dispatchJson(result)
     }
@@ -2328,6 +2714,7 @@ class AgentTools @Inject constructor(
         return when (kind) {
             "param" -> {
                 val paramArg = t.optString("param").trim()
+                if (paramArg.equals(PowerStateRuleMigration.PARAM, ignoreCase = true)) return powerStateTrigger(t)
                 val option = TRIGGER_PARAMS.firstOrNull { it.param.equals(paramArg, ignoreCase = true) }
                     ?: return Built.Error("неизвестный параметр триггера: $paramArg")
                 val operator = t.optString("operator").trim()
@@ -2438,6 +2825,26 @@ class AgentTools @Inject constructor(
         }
     }
 
+    /** The removed PowerState condition, converted the way a saved rule is: ON and DRIVE are the
+     *  app start, anything else could fire only with the car off and is refused. */
+    private fun powerStateTrigger(t: JSONObject): Built<TriggerDef> {
+        val value = when (val raw = t.optString("value").trim().uppercase()) {
+            "ON" -> "1"
+            "DRIVE" -> "2"
+            "OFF" -> "0"
+            else -> raw
+        }
+        val legacy = TriggerDef(
+            param = PowerStateRuleMigration.PARAM, chineseName = "", operator = t.optString("operator").trim(),
+            value = value, displayName = "",
+        )
+        val converted = PowerStateRuleMigration.convert("AND", listOf(legacy), AGENT_POWER_LABELS, driveIsGear = false)
+            ?: return Built.Error(
+                "условия PowerState нет: на выключенной машине правило не сработает. " +
+                    "При включении машины: kind=service_start; при движении: param=Gear, value=4")
+        return Built.Value(converted.single())
+    }
+
     private suspend fun buildAction(a: JSONObject): Built<ActionDef> {
         val kind = a.optString("kind")
         return when (kind) {
@@ -2523,18 +2930,31 @@ class AgentTools @Inject constructor(
                     displayName = if (on) "Включить точку доступа" else "Выключить точку доступа",
                     kind = "hotspot", payload = if (on) "1" else "0"))
             }
-            "app_launch" -> {
+            "screen" -> {
+                val on = requireBoolArg(a, "on") ?: return Built.Error("для screen укажи on: true или false")
+                Built.Value(ActionDef(command = "screen",
+                    displayName = if (on) "Включить экран" else "Выключить экран",
+                    kind = "screen", payload = if (on) "1" else "0"))
+            }
+            "app_launch", "app_close" -> {
                 val name = a.optString("app").trim()
                 if (name.isEmpty()) return Built.Error("не указано приложение (поле app)")
                 val (label, pkg) = when (val r = resolveLauncherApp(name)) {
                     is Built.Error -> return r
                     is Built.Value -> r.value
                 }
-                Built.Value(ActionDef(
+                val payload = JSONObject().put("packageName", pkg).put("appLabel", label)
+                Built.Value(if (kind == "app_launch") ActionDef(
                     command = "", displayName = "Запуск $label", kind = "app_launch",
-                    payload = JSONObject().put("packageName", pkg).put("appLabel", label)
-                        .put("minimize", false).toString(),
-                ))
+                    payload = payload.put("minimize", false).toString(),
+                ) else ActionDef(command = "", displayName = "Закрыть $label", kind = "app_close",
+                    payload = payload.toString()))
+            }
+            "media_key" -> {
+                val key = a.optString("key").trim()
+                if (ActionDispatcher.mediaKeyCode(key) == null) return Built.Error("для media_key укажи key: play или pause")
+                Built.Value(ActionDef(command = "", displayName = if (key == "play") "Медиа: играть" else "Медиа: пауза",
+                    kind = "media_key", payload = key))
             }
             "cluster_projection" -> {
                 val on = requireBoolArg(a, "on")
@@ -2618,6 +3038,10 @@ class AgentTools @Inject constructor(
                 "некорректное состояние охранного режима (действие ${err.index})"
             is ActionValidationError.HotspotInvalid ->
                 "некорректное состояние точки доступа (действие ${err.index})"
+            is ActionValidationError.ScreenInvalid ->
+                "некорректное состояние экрана (действие ${err.index})"
+            is ActionValidationError.MediaKeyInvalid ->
+                "для media_key нужен key: play или pause (действие ${err.index})"
             is ActionValidationError.SpeakTextEmpty ->
                 "не задан текст для озвучки (действие ${err.index})"
             is ActionValidationError.AgentQueryPromptEmpty ->
@@ -2683,6 +3107,49 @@ class AgentTools @Inject constructor(
             "run_automation", "create_automation", "set_automation_enabled",
             "remember_fact", "forget_fact")
 
+        /** Tools that act on the car, or on something outside the car through it (a phone call, an
+         *  automation that runs vehicle steps): withheld from a turn whose caller may not control
+         *  the car, see [deniedTools]. create_automation is here too, though detached turns never
+         *  get it anyway (it is in [AUTOMATION_TOOLS]). */
+        internal val CAR_CONTROL_TOOLS = setOf(
+            "vehicle_control", "set_sentry", "set_hotspot", "set_screen", "split_screen",
+            "run_automation", "set_automation_enabled", "create_automation", "call_contact")
+
+        /** Tools that open a route, a map search or a point, or leave the current screen for the
+         *  home screen: withheld from a turn whose caller may not navigate. */
+        internal val NAVIGATION_TOOLS = setOf("navigate_to", "search_on_map", "show_point_on_map", "go_home")
+
+        /** Every other tool: readings, statistics, weather, search, route info, apps and media. A
+         *  new tool must be added to exactly one of the three sets (AgentToolsDeniedToolsTest). */
+        internal val ALWAYS_ALLOWED_TOOLS = setOf(
+            "get_vehicle_state", "query_trips", "query_charges", "get_stats_summary", "get_weather",
+            "where_am_i", "web_search", "get_route_info", "find_chargers", "range_to_destination",
+            "media_volume", "play_music", "youtube", "launch_app", "open_settings", "set_cluster_projection",
+            "list_automations", "list_places", "create_place", "remember_fact", "forget_fact",
+            "add_charge", "end_conversation")
+
+        /** The tools a restricted caller's turn may not use: the Alice bridge with its «may control
+         *  the car» / «may navigate» permissions. Both on = nothing denied, as for every other
+         *  caller (whose turns never pass a denied set at all). */
+        fun deniedTools(vehicleControl: Boolean, navigation: Boolean): Set<String> =
+            (if (vehicleControl) emptySet() else CAR_CONTROL_TOOLS) + (if (navigation) emptySet() else NAVIGATION_TOOLS)
+
+        /** [schemas] without the tools named in [denied]; entries without a function name stay. */
+        internal fun withoutTools(schemas: JSONArray, denied: Set<String>): JSONArray {
+            if (denied.isEmpty()) return schemas
+            return JSONArray().apply {
+                for (i in 0 until schemas.length()) {
+                    val entry = schemas.opt(i)
+                    val name = (entry as? JSONObject)?.optJSONObject("function")?.optString("name").orEmpty()
+                    if (name !in denied) put(entry)
+                }
+            }
+        }
+
+        internal fun deniedToolError(name: String): String =
+            JSONObject().put("error", "инструмент $name запрещён для этого запроса: " +
+                "разрешение на это действие выключено в настройках").toString()
+
         private const val DAY_MS = 24L * 3600_000
         private const val PERIOD_ERROR =
             """{"error":"укажи period (day/week/month) или даты from и to в формате ГГГГ-ММ-ДД"}"""
@@ -2690,6 +3157,8 @@ class AgentTools @Inject constructor(
         private const val SEARCH_ERROR = """{"error":"поиск недоступен"}"""
         private const val MAX_AUTOMATIONS = 50
         private const val MAX_DELAY_MS = 60_000
+        // The display names buildTrigger gives a service_start and a Gear == 4 trigger.
+        private val AGENT_POWER_LABELS = PowerStateRuleMigration.Labels("Запуск приложения", "Gear == D")
         private const val MAX_PLACES = 50
         private const val BAD_ARGS_ERROR = """{"error":"некорректные аргументы"}"""
         private const val CALL_CONTACT_FAILED = """{"error":"не удалось позвонить"}"""
@@ -2705,6 +3174,11 @@ class AgentTools @Inject constructor(
         private const val MAX_SETTLEMENTS = 5
         // where_am_i: a fix older than this gets fix_note so the model hedges.
         private const val FRESH_FIX_MS = 120_000L
+        // find_chargers: the default radius around the car and the cap on the asked one.
+        private const val CHARGER_RADIUS_KM = 30
+        private const val MAX_CHARGER_RADIUS_KM = 100
+        // find_chargers: occupancy imported longer ago than this is not "free now".
+        private const val STALE_STATUS_MIN = 60L
         private val SETTLEMENT_TYPES = mapOf(
             "city" to "город", "town" to "город", "village" to "деревня или посёлок",
             "hamlet" to "деревня", "suburb" to "район города", "isolated_dwelling" to "хутор",
@@ -2715,45 +3189,5 @@ class AgentTools @Inject constructor(
 
         // Any wheel below this is clearly deflated (Leopard 3 cold placard ~250 kPa).
         private const val TIRE_WARN_MIN_KPA = 210
-
-        // Yandex Maps ships under several package names; reuse the navigation list so the
-        // alias never drifts from the guidance-source set.
-        private val YANDEX_MAPS_PACKAGES = NavPackages.YANDEX_MAPS.toList()
-
-        // RU aliases for stock DiLink apps whose launcher labels are Chinese/English and thus
-        // unreachable by label match. Values are candidate packages in priority order; an alias
-        // fires only when one of them is actually installed on this car (fleet cars differ).
-        // App store and fridge app are excluded deliberately (user decision, 2026-07-05).
-        internal val APP_ALIASES: Map<String, List<String>> = mapOf(
-            "навигатор" to listOf("ru.yandex.yandexnavi"),
-            "яндекс навигатор" to listOf("ru.yandex.yandexnavi"),
-            "яндекс карты" to YANDEX_MAPS_PACKAGES,
-            "карты" to YANDEX_MAPS_PACKAGES,
-            "музыка" to listOf("ru.yandex.music"),
-            "яндекс музыка" to listOf("ru.yandex.music"),
-            "камера" to listOf("com.byd.avc"),
-            "камеры" to listOf("com.byd.avc"),
-            "видеорегистратор" to listOf("com.byd.cdr"),
-            "регистратор" to listOf("com.byd.cdr"),
-            "браузер" to listOf("com.android.chrome"),
-            "хром" to listOf("com.android.chrome"),
-            "ютуб" to listOf("anddea.youtube", "com.google.android.youtube"),
-            "настройки машины" to listOf("com.byd.carsettings"),
-            "настройки автомобиля" to listOf("com.byd.carsettings"),
-            "файлы" to listOf("com.byd.filemanager"),
-            "файловый менеджер" to listOf("com.byd.filemanager"),
-            "режимы вождения" to listOf("com.byd.drivemode"),
-            "режим вождения" to listOf("com.byd.drivemode"),
-            "часовой" to listOf("com.byd.sentrymode"),
-            "охрана" to listOf("com.byd.sentrymode"),
-            "охранный режим" to listOf("com.byd.sentrymode"),
-            "абрп" to listOf("com.iternio.abrpapp"),
-            "маршрутный планировщик" to listOf("com.iternio.abrpapp"),
-            "медиацентр" to listOf("com.byd.mediacenter"),
-            "медиа центр" to listOf("com.byd.mediacenter"),
-            "плеер" to listOf("com.byd.mediacenter"),
-            "телефон" to listOf("com.byd.bluetoothcall"),
-            "звонки" to listOf("com.byd.bluetoothcall"),
-        )
     }
 }

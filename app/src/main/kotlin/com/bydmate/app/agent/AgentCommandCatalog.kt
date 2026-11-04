@@ -50,11 +50,16 @@ object AgentCommandCatalog {
         Cmd("window_passenger_half", "окно переднего пассажира наполовину", { "副驾半开" }),
         Cmd("window_rear_left_half", "заднее левое окно наполовину", { "后左半开" }),
         Cmd("window_rear_right_half", "заднее правое окно наполовину", { "后右半开" }),
+        // Windows — individual exact share, N percent (0 / 100 are the close / open ids above)
+        Cmd("window_driver_position", "окно водителя на N процентов", { n -> "主驾打开$n" }, 1..99),
+        Cmd("window_passenger_position", "окно переднего пассажира на N процентов", { n -> "副驾打开$n" }, 1..99),
+        Cmd("window_rear_left_position", "заднее левое окно на N процентов", { n -> "后左打开$n" }, 1..99),
+        Cmd("window_rear_right_position", "заднее правое окно на N процентов", { n -> "后右打开$n" }, 1..99),
         // Climate
         Cmd("ac_on", "включить климат-контроль (авто)", { "自动空调" }),
         Cmd("ac_off", "выключить климат-контроль", { "关闭空调" }),
         Cmd("ac_flow_on", "включить вентиляцию климата (обдув без охлаждения)", { "打开空调通风" }),
-        Cmd("ac_set_temp", "температура климата N°C", { n -> "设置温度$n" }, 16..30),
+        Cmd("ac_set_temp", "температура климата N°C", { n -> "设置温度$n" }, 16..33),
         Cmd("ac_fan_level", "скорость вентилятора N (1..7)", { n -> "风量$n" }, 1..7),
         Cmd("ac_wind_face", "обдув в лицо", { "吹面" }),
         Cmd("ac_wind_face_feet", "обдув в лицо и ноги", { "吹面吹脚" }),
@@ -108,6 +113,12 @@ object AgentCommandCatalog {
         Cmd("hazard_off", "выключить аварийку", { "双闪关闭" }),
         Cmd("light_interior_on", "включить плафон света в салоне", { "打开车内灯" }),
         Cmd("light_interior_off", "выключить плафон света в салоне", { "关闭车内灯" }),
+        // HUD (projection on the windshield; the cluster projection is set_cluster_projection)
+        Cmd("hud_on", "включить HUD (проекцию на лобовом стекле)", { "打开抬头显示" }),
+        Cmd("hud_off", "выключить HUD (проекцию на лобовом стекле)", { "关闭抬头显示" }),
+        // Battery warm-up (the car itself refuses it on a warm battery or with a charge gun connected)
+        Cmd("battery_preheat_on", "включить подогрев тяговой батареи (перед быстрой зарядкой в холод)", { "打开电池预热" }),
+        Cmd("battery_preheat_off", "выключить подогрев тяговой батареи", { "关闭电池预热" }),
         // Locks
         Cmd("doors_lock", "запереть двери", { "车门上锁" }),
         Cmd("doors_unlock", "отпереть двери", { "车门解锁" }),
@@ -120,6 +131,8 @@ object AgentCommandCatalog {
         Cmd("sunroof_comfort", "открыть люк в комфортное положение (без сквозняка)", { "天窗舒适打开" }),
         Cmd("sunshade_open", "открыть шторку люка", { "遮阳帘打开" }),
         Cmd("sunshade_close", "закрыть шторку люка", { "遮阳帘关闭" }),
+        Cmd("sunshade_half", "открыть шторку люка наполовину", { "遮阳帘打开50" }),
+        Cmd("sunshade_stop", "остановить движение шторки люка", { "遮阳帘停止" }),
         // Trunk (rear tailgate)
         Cmd("trunk_open", "открыть задний багажник", { "开后备箱" }),
         Cmd("trunk_close", "закрыть задний багажник", { "关后备箱" }),

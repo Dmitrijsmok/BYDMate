@@ -31,23 +31,14 @@ fun useLegacyVoiceFallback(
 ): Boolean = sdk <= 29 && nativeTakeover &&
     !local.codes.containsAll(setOf(304, 327)) && !alice.codes.containsAll(setOf(304, 327))
 
-// Adapted from upstream companion learning: anchor on either primary edge, not just DOWN.
-const val LEARN_COMPANION_WINDOW_MS = 300L
+// The companion window and CSV format are upstream's (SteeringWheelKeyDecision.kt); the voice
+// buttons only add the stricter isVoiceAssignable gate on top.
+fun isVoiceLearnCompanion(keyCode: Int, isDown: Boolean, primaryKeyCode: Int, primaryAtMs: Long, nowMs: Long): Boolean =
+    isLearnCompanion(keyCode, isDown, primaryKeyCode, primaryAtMs, nowMs) && isVoiceAssignable(keyCode)
 
-fun isLearnCompanion(keyCode: Int, isDown: Boolean, primaryKeyCode: Int, primaryAtMs: Long, nowMs: Long): Boolean =
-    isDown && keyCode != primaryKeyCode && isVoiceAssignable(keyCode) &&
-        nowMs - primaryAtMs in 0..LEARN_COMPANION_WINDOW_MS
-
-fun learnWindowAnchor(keyCode: Int, primaryKeyCode: Int, anchorMs: Long, eventMs: Long): Long =
-    if (keyCode == primaryKeyCode) eventMs else anchorMs
-
-fun voiceCompanionsToCsv(companions: Set<Int>): String = companions.sorted().joinToString(",")
-
-fun voiceCompanionsFromCsv(csv: String?): Set<Int> {
-    if (csv.isNullOrEmpty()) return emptySet()
-    val codes = csv.split(',').map { it.toIntOrNull()?.takeIf(::isVoiceAssignable) }
-    return if (codes.any { it == null }) emptySet() else codes.filterNotNull().toSet()
-}
+/** A stored companion list is used only when every code is still voice-assignable. */
+fun voiceBindingCompanionsFromCsv(csv: String?): Set<Int> =
+    voiceCompanionsFromCsv(csv).takeIf { codes -> codes.all(::isVoiceAssignable) } ?: emptySet()
 
 /** DOWN/UP identity is device-specific; repeats cannot become a second gesture. */
 internal class VoiceButtonPresses {

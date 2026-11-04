@@ -26,16 +26,22 @@ class NativeParsReader @Inject constructor(
     private val settings: SettingsRepository,
     private val helperClient: HelperClient,
     private val gate: BatchReadGate,
+    private val vehicleKind: VehicleKindMonitor,
 ) : ParsReader {
 
     /**
      * Batch request for one poll tick, built against [table] — the snapshot of
      * [FidAddresses] this fetch works from. Same entries in the same order, so the reply
-     * still lines up with [FidMap.entries] index by index.
+     * still lines up with [FidMap.entries] index by index. A HYBRID car gets [FidMap.hybrid]
+     * appended at its compiled addresses; the EV part is untouched either way.
      */
-    private fun batchItems(table: ResolvedFidTable): List<BatchReadItem> = FidMap.entries.map {
-        val address = table.address(it.field)
-        BatchReadItem(it.transact, address.device, address.fid)
+    private fun batchItems(table: ResolvedFidTable, hybrid: Boolean): List<BatchReadItem> {
+        val items = FidMap.entries.map {
+            val address = table.address(it.field)
+            BatchReadItem(it.transact, address.device, address.fid)
+        }
+        if (!hybrid) return items
+        return items + FidMap.hybrid.map { BatchReadItem(it.transact, it.device, it.fid) }
     }
 
     /**
@@ -45,8 +51,8 @@ class NativeParsReader @Inject constructor(
      */
     @Volatile private var lastDriveMode: Int? = null
 
-    /** Keeps the raw tech-panel line to one per 5 s on the 1 s DRIVE cadence. */
-    private val techLogThrottle = com.bydmate.app.data.autoservice.LogThrottle(5_000L)
+    /** Keeps the raw tech-panel line to one a minute on the 1 s DRIVE cadence (~700 an hour at 5 s). */
+    private val techLogThrottle = com.bydmate.app.data.autoservice.LogThrottle(60_000L)
 
     /**
      * One snapshot of [FidAddresses] per fetch. The global table is @Volatile and the
@@ -56,12 +62,14 @@ class NativeParsReader @Inject constructor(
      */
     override suspend fun fetch(): DiParsData? {
         val table = FidAddresses.table
+        // One read of the kind per fetch, so the request and its decoding agree.
+        val hybrid = vehicleKind.kind.value == VehicleKind.HYBRID
         return when (gate.mode()) {
-            BatchMode.ACTIVE -> fetchViaBatch(table) ?: fetchViaAdb(table)
-            BatchMode.OFF -> fetchViaAdb(table)
+            BatchMode.ACTIVE -> fetchViaBatch(table, hybrid) ?: fetchViaAdb(table, hybrid)
+            BatchMode.OFF -> fetchViaAdb(table, hybrid)
             BatchMode.VALIDATING -> {
-                val adb = fetchViaAdb(table)
-                val batchRaw = helperClient.readBatch(batchItems(table))
+                val adb = fetchViaAdb(table, hybrid)
+                val batchRaw = helperClient.readBatch(batchItems(table, hybrid))
                 if (batchRaw == null) {
                     gate.recordBatchUnavailable()
                 } else {
@@ -70,7 +78,10 @@ class NativeParsReader @Inject constructor(
                         // Shadow snapshot: compared, never returned — so it must not update
                         // any state a returned snapshot depends on (see stickyDriveMode).
                         assembleSnapshot(
-                            decodeBatch(batchRaw, table),
+                            withInsideTempFallback(
+                                decodeBatch(batchRaw, table, hybrid),
+                                okBatchWord(batchRaw, insideTempIndex),
+                            ),
                             windowRrRawFromBatch(batchRaw),
                             rememberSticky = false,
                         ),
@@ -81,9 +92,12 @@ class NativeParsReader @Inject constructor(
         }
     }
 
-    private suspend fun fetchViaBatch(table: ResolvedFidTable): DiParsData? {
-        val pairs = helperClient.readBatch(batchItems(table)) ?: return null
-        return assembleSnapshot(decodeBatch(pairs, table), windowRrRawFromBatch(pairs))
+    private suspend fun fetchViaBatch(table: ResolvedFidTable, hybrid: Boolean): DiParsData? {
+        val pairs = helperClient.readBatch(batchItems(table, hybrid)) ?: return null
+        return assembleSnapshot(
+            withInsideTempFallback(decodeBatch(pairs, table, hybrid), okBatchWord(pairs, insideTempIndex)),
+            windowRrRawFromBatch(pairs),
+        )
     }
 
     /** Raw pre-decode windowRR value when the read itself succeeded, else null. */
@@ -96,9 +110,14 @@ class NativeParsReader @Inject constructor(
      * tx=5 → SentinelDecoder.decodeInt then ParamDecoder scaled/int;
      * tx=7 → SentinelDecoder.parseFloatFromShellInt then ParamDecoder.decodeFloat
      * on the raw IEEE-754 bits — mirroring AutoserviceClient.getInt/getFloat +
-     * the per-entry decode in fetchViaAdb.
+     * the per-entry decode in fetchViaAdb. With [hybrid] the reply carries [FidMap.hybrid]
+     * after the [FidMap.entries] part; a missing tail word decodes to null.
      */
-    private fun decodeBatch(pairs: List<Pair<Int, Int>>, table: ResolvedFidTable): Map<String, Any?> {
+    private fun decodeBatch(
+        pairs: List<Pair<Int, Int>>,
+        table: ResolvedFidTable,
+        hybrid: Boolean,
+    ): Map<String, Any?> {
         val decoded = mutableMapOf<String, Any?>()
         FidMap.entries.forEachIndexed { i, entry ->
             val (status, word) = pairs[i]
@@ -111,7 +130,13 @@ class NativeParsReader @Inject constructor(
             }
             decoded[entry.field] = value
         }
-        logTechRaw(pairs, decoded)
+        if (hybrid) {
+            FidMap.hybrid.forEachIndexed { j, entry ->
+                val (status, word) = pairs.getOrNull(FidMap.entries.size + j) ?: (-1 to 0)
+                decoded[entry.field] = if (status != 0) null else decodeHybrid(entry, word)
+            }
+        }
+        logTechRaw(pairs, decoded, hybrid)
         return decoded
     }
 
@@ -121,7 +146,7 @@ class NativeParsReader @Inject constructor(
      * without another build. Values the batch failed to read print as "?". The motor split is
      * the only decoded value here: it must read exactly as the «Техника» card renders it.
      */
-    private fun logTechRaw(pairs: List<Pair<Int, Int>>, decoded: Map<String, Any?>) {
+    private fun logTechRaw(pairs: List<Pair<Int, Int>>, decoded: Map<String, Any?>, hybrid: Boolean) {
         if (!techLogThrottle.shouldLog("tech")) return
         fun raw(field: String): String {
             val i = FidMap.entries.indexOfFirst { it.field == field }
@@ -149,11 +174,14 @@ class NativeParsReader @Inject constructor(
                 "cF=${raw("motorCurrentFront")} cR=${raw("motorCurrentRear")} " +
                 "gun=${raw("chargeGunState")} bms=${raw("bmsState")} " +
                 "chgConn=${raw("chargerConnectState")} chgInd=${raw("chargeConnectIndicator")} " +
-                "split=${splitText(decoded)}"
+                "split=${splitText(decoded)}" +
+                if (hybrid) " fuel=${hybridRaw(pairs, "fuelPercent")} hev=${hybridRaw(pairs, "mileageHevKm")} " +
+                    "rpm=${hybridRaw(pairs, "engineRpm")}" else ""
         )
     }
 
-    private suspend fun fetchViaAdb(table: ResolvedFidTable): DiParsData? {
+
+    private suspend fun fetchViaAdb(table: ResolvedFidTable, hybrid: Boolean): DiParsData? {
         if (!autoservice.isAvailable()) return null
 
         // Decoded values keyed by FidEntry.field.
@@ -163,6 +191,8 @@ class NativeParsReader @Inject constructor(
         // sample the value came from, or a window that moved between two reads would
         // decide the generation.
         var windowRrRaw: Int? = null
+        // Same for the primary cabin temperature, which decides the insideTempAlt fallback.
+        var insideTempRaw: Int? = null
 
         for (entry in FidMap.entries) {
             val address = table.address(entry.field)
@@ -170,6 +200,10 @@ class NativeParsReader @Inject constructor(
                 entry === windowRrEntry -> {
                     windowRrRaw = autoservice.getIntRaw(address.device, address.fid)
                     decodeTx5(entry, windowRrRaw?.let { SentinelDecoder.decodeInt(it) }, table)
+                }
+                entry === insideTempEntry -> {
+                    insideTempRaw = autoservice.getIntRaw(address.device, address.fid)
+                    decodeTx5(entry, insideTempRaw?.let { SentinelDecoder.decodeInt(it) }, table)
                 }
                 entry.transact == 5 -> decodeTx5(entry, autoservice.getInt(address.device, address.fid), table)
                 entry.transact == 7 -> {
@@ -184,8 +218,9 @@ class NativeParsReader @Inject constructor(
             }
             decoded[entry.field] = value
         }
+        if (hybrid) decoded.putAll(readHybridViaAdb(autoservice))
 
-        return assembleSnapshot(decoded, windowRrRaw)
+        return assembleSnapshot(withInsideTempFallback(decoded, insideTempRaw), windowRrRaw)
     }
 
     // Range rejects (INT_TEMP_C / INT_PERCENT) used to vanish silently: a car answering a
@@ -411,6 +446,14 @@ class NativeParsReader @Inject constructor(
             rearBeltSettingRL   = field<Int>("rearBeltSettingRL"),
             rearBeltSettingRM   = field<Int>("rearBeltSettingRM"),
             rearBeltSettingRR   = field<Int>("rearBeltSettingRR"),
+            // Present in [decoded] only when the fetch read FidMap.hybrid (HYBRID car).
+            fuelPercent         = field<Int>("fuelPercent"),
+            fuelRangeKm         = field<Int>("fuelRangeKm"),
+            fuelTotalL          = field<Double>("fuelTotalL"),
+            mileageHevKm        = field<Int>("mileageHevKm"),
+            mileageEvKm         = field<Int>("mileageEvKm"),
+            engineRpm           = field<Int>("engineRpm"),
+            evRangeKm           = field<Int>("evRangeKm"),
         )
     }
 
@@ -438,7 +481,27 @@ class NativeParsReader @Inject constructor(
 
         val windowRrEntry: FidEntry = FidMap.entries.first { it.field == "windowRR" }
         val windowRrIndex: Int = FidMap.entries.indexOf(windowRrEntry)
+        val insideTempEntry: FidEntry = FidMap.entries.first { it.field == "insideTemp" }
+        val insideTempIndex: Int = FidMap.entries.indexOf(insideTempEntry)
     }
+}
+
+/** Raw pre-decode word of batch item [index] when the read itself succeeded, else null. */
+private fun okBatchWord(pairs: List<Pair<Int, Int>>, index: Int): Int? =
+    pairs.getOrNull(index)?.let { (status, word) -> if (status == 0) word else null }
+
+/**
+ * Cabin temperature from the older AC_TEMP_INSIDE address (insideTempAlt) when the primary
+ * fid gave nothing AND its raw answer says the address is not readable on this head unit:
+ * link-error (65535) or wrong-direction (-10011). A transient sentinel (-10013) or a failed
+ * read keeps insideTemp null rather than mixing in a reading from a different fid.
+ */
+private fun withInsideTempFallback(decoded: Map<String, Any?>, primaryRaw: Int?): Map<String, Any?> {
+    if (decoded["insideTemp"] != null) return decoded
+    val mayFallback = primaryRaw == SentinelDecoder.FEATURE_LINK_ERROR ||
+        primaryRaw == SentinelDecoder.WRONG_DIRECTION
+    val alt = decoded["insideTempAlt"]
+    return if (mayFallback && alt != null) decoded + ("insideTemp" to alt) else decoded
 }
 
 /**
@@ -460,3 +523,31 @@ private fun splitText(decoded: Map<String, Any?>): String =
         null, MotorSplit.Idle -> "-"
         is MotorSplit.Share -> "${split.frontPercent}%/${split.rearPercent}%"
     }
+
+/**
+ * Decode of one [FidMap.hybrid] word: the raw int for tx=5, the IEEE-754 bits for tx=7.
+ * Sentinels (255, 2046, 1048575, 8191, 65535, float -1/NaN, zero litres) come out null.
+ */
+private fun decodeHybrid(entry: FidEntry, word: Int): Any? = when (entry.transact) {
+    5 -> ParamDecoder.decodeInt(word, entry.decoder)
+    7 -> ParamDecoder.decodeFloat(word, entry.decoder)
+    else -> null
+}
+
+/** The [FidMap.hybrid] fields read one by one over the plain path, at their compiled addresses. */
+private suspend fun readHybridViaAdb(autoservice: AutoserviceClient): Map<String, Any?> =
+    FidMap.hybrid.associate { entry ->
+        entry.field to when (entry.transact) {
+            5 -> autoservice.getInt(entry.device, entry.fid)?.let { decodeHybrid(entry, it) }
+            7 -> autoservice.getFloat(entry.device, entry.fid)
+                ?.let { decodeHybrid(entry, java.lang.Float.floatToRawIntBits(it)) }
+            else -> null
+        }
+    }
+
+/** Raw tail word of one [FidMap.hybrid] field, "?" when the batch did not read it. */
+private fun hybridRaw(pairs: List<Pair<Int, Int>>, field: String): String {
+    val j = FidMap.hybrid.indexOfFirst { it.field == field }
+    val (status, word) = pairs.getOrNull(FidMap.entries.size + j) ?: return "?"
+    return if (status != 0) "?" else word.toString()
+}

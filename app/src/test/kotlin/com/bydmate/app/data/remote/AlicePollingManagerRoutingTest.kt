@@ -1,0 +1,104 @@
+package com.bydmate.app.data.remote
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class AlicePollingManagerRoutingTest {
+
+    @Test
+    fun `agent fallback is automotive only`() {
+        assertTrue(AliceLocalCommandRouter.isAutomotiveAgentQuery("Почему зимой у BYD выше расход?"))
+        assertTrue(AliceLocalCommandRouter.isAutomotiveAgentQuery("Какой сейчас заряд батареи машины?"))
+        assertTrue(AliceLocalCommandRouter.isAutomotiveAgentQuery("Как работает холодильник в BYD?"))
+        assertTrue(AliceLocalCommandRouter.isAutomotiveAgentQuery("Почему не включаются ДХО?"))
+        assertTrue(AliceLocalCommandRouter.isAutomotiveAgentQuery("Что такое frunk?"))
+        assertFalse(AliceLocalCommandRouter.isAutomotiveAgentQuery("Расскажи, почему зимой день короче"))
+        assertFalse(AliceLocalCommandRouter.isAutomotiveAgentQuery("Какая сегодня погода в Риге?"))
+    }
+
+    @Test
+    fun `delegated vehicle commands stay deterministic`() {
+        assertEquals("前备箱打开", AliceLocalCommandRouter.directVehicleCommand("открой передний багажник"))
+        assertEquals("前备箱关闭", AliceLocalCommandRouter.directVehicleCommand("закрой frunk"))
+        assertEquals("双闪打开", AliceLocalCommandRouter.directVehicleCommand("включи аварийку"))
+        assertEquals("双闪关闭", AliceLocalCommandRouter.directVehicleCommand("выключи аварийные огни"))
+        assertEquals("车门解锁", AliceLocalCommandRouter.directVehicleCommand("открой двери"))
+        assertEquals("车门上锁", AliceLocalCommandRouter.directVehicleCommand("запри двери"))
+    }
+
+    @Test
+    fun `fridge and rear defrost do not need agent`() {
+        assertEquals("冰箱制冷-3度", AliceLocalCommandRouter.directVehicleCommand("охлади холодильник до -3 градусов"))
+        assertEquals("冰箱制热40度", AliceLocalCommandRouter.directVehicleCommand("подогрей холодильник до 40 градусов"))
+        assertEquals("冰箱关闭", AliceLocalCommandRouter.directVehicleCommand("выключи холодильник"))
+        assertEquals("后视镜加热", AliceLocalCommandRouter.directVehicleCommand("включи обогрев заднего стекла"))
+        assertNull(AliceLocalCommandRouter.directVehicleCommand("расскажи про батарею"))
+    }
+
+    @Test
+    fun `free text vehicle commands use the offline dictionary`() {
+        assertEquals(
+            AliceTextPlan.Commands(listOf("自动空调")),
+            AliceLocalCommandRouter.planVehicleText("включи климат", acTemp = null),
+        )
+        assertEquals(
+            AliceTextPlan.Failed("unsupported_vehicle_command"),
+            AliceLocalCommandRouter.planVehicleText("расскажи анекдот", acTemp = 22),
+        )
+        assertEquals(
+            AliceTextPlan.Failed("missing_vehicle_command"),
+            AliceLocalCommandRouter.planVehicleText("  ", acTemp = 22),
+        )
+    }
+
+    @Test
+    fun `relative temperature needs the current setpoint and stays within 16 to 33`() {
+        assertEquals(
+            AliceTextPlan.Commands(listOf("设置温度23")),
+            AliceLocalCommandRouter.planVehicleText("сделай теплее", acTemp = 22),
+        )
+        assertEquals(
+            AliceTextPlan.Commands(listOf("设置温度33")),
+            AliceLocalCommandRouter.planVehicleText("сделай теплее", acTemp = 33),
+        )
+        assertEquals(
+            AliceTextPlan.Failed("ac_temperature_unknown"),
+            AliceLocalCommandRouter.planVehicleText("сделай теплее", acTemp = null),
+        )
+    }
+
+    @Test
+    fun `navigation payloads of the worker`() {
+        assertEquals(
+            AliceNavigationRequest(AliceNavigationRequest.Mode.ROUTE, "Дом", go = true, app = "waze"),
+            AliceLocalCommandRouter.navigationRequest(
+                "navigation.route", """{"destination":"Дом","go":true,"app":"waze"}""",
+            ),
+        )
+        assertEquals(
+            AliceNavigationRequest(AliceNavigationRequest.Mode.SEARCH, "заправка"),
+            AliceLocalCommandRouter.navigationRequest("navigation.search", """{"query":"заправка","app":""}"""),
+        )
+        assertEquals(
+            AliceNavigationRequest(AliceNavigationRequest.Mode.SHOW, "Минск", app = "google_maps"),
+            AliceLocalCommandRouter.navigationRequest(
+                "navigation.show", """{"destination":"Минск","go":true,"app":"Google_Maps"}""",
+            ),
+        )
+        // Plain text is the destination itself; an unknown app falls back to the chosen one.
+        assertEquals(
+            AliceNavigationRequest(AliceNavigationRequest.Mode.ROUTE, "аэропорт"),
+            AliceLocalCommandRouter.navigationRequest("navigation.route", "аэропорт"),
+        )
+        assertEquals(
+            AliceNavigationRequest(AliceNavigationRequest.Mode.ROUTE, "Рига"),
+            AliceLocalCommandRouter.navigationRequest("navigation.route", """{"destination":"Рига","app":"here"}"""),
+        )
+        assertNull(AliceLocalCommandRouter.navigationRequest("navigation.search", """{"destination":"Рига"}"""))
+        assertNull(AliceLocalCommandRouter.navigationRequest("navigation.route", " "))
+        assertNull(AliceLocalCommandRouter.navigationRequest("navigation.cluster_on", "x"))
+    }
+}

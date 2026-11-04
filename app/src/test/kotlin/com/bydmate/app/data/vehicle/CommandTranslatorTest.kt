@@ -1,6 +1,9 @@
 package com.bydmate.app.data.vehicle
 
+import com.bydmate.app.data.automation.ActionDispatcher
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -69,6 +72,16 @@ class CommandTranslatorTest {
     @Test fun `steering heat commands map to the dev 1023 pair`() {
         assertEquals(CommandTranslator.Resolved("steering_heat_on", 2), one("方向盘加热"))
         assertEquals(CommandTranslator.Resolved("steering_heat_off", 1), one("关闭方向盘加热"))
+    }
+
+    @Test fun `hud commands map to the switch values`() {
+        assertEquals(CommandTranslator.Resolved("hud_on", 1), one("打开抬头显示"))
+        assertEquals(CommandTranslator.Resolved("hud_off", 2), one("关闭抬头显示"))
+    }
+
+    @Test fun `battery preheat commands map to the stock toggle values`() {
+        assertEquals(CommandTranslator.Resolved("battery_preheat_on", 1), one("打开电池预热"))
+        assertEquals(CommandTranslator.Resolved("battery_preheat_off", 2), one("关闭电池预热"))
     }
 
     @Test fun `drive mode commands map to their dev 1023 values`() {
@@ -353,7 +366,7 @@ class CommandTranslatorTest {
         assertTrue(onEntry.validated)
     }
 
-    // ── Temperature: dynamic parse over full 16..30 range ────────────────────
+    // ── Temperature: dynamic parse over full 16..33 range ────────────────────
     @Test fun `set temperature 24 maps to ac_temp_main val 24`() {
         val r = one("设置温度24")
         assertEquals("ac_temp_main", r?.actionName)
@@ -366,11 +379,54 @@ class CommandTranslatorTest {
         assertEquals(16, r?.value)
     }
 
-    // Out-of-range request clamps into the validated 16..30 window.
-    @Test fun `set temperature 35 clamps to ac_temp_main val 30`() {
+    @Test fun `set temperature 33 maps to ac_temp_main val 33`() {
+        val r = one("设置温度33")
+        assertEquals("ac_temp_main", r?.actionName)
+        assertEquals(33, r?.value)
+    }
+
+    // Out-of-range request clamps into the validated 16..33 window.
+    @Test fun `set temperature 35 clamps to ac_temp_main val 33`() {
         val r = one("设置温度35")
         assertEquals("ac_temp_main", r?.actionName)
-        assertEquals(30, r?.value)
+        assertEquals(33, r?.value)
+    }
+
+    // ── Window position: any per-door percentage (level row, step 10) ─────────
+    @Test fun `driver open 30 maps to window_driver_pos 30`() {
+        assertEquals(setOf("window_driver_pos" to 30), pairs("主驾打开30"))
+    }
+
+    @Test fun `rear-right open 70 maps to window_rear_right_pos 70`() {
+        assertEquals(setOf("window_rear_right_pos" to 70), pairs("后右打开70"))
+    }
+
+    @Test fun `passenger and rear-left percentages map to their pos fids`() {
+        assertEquals(setOf("window_passenger_pos" to 10), pairs("副驾打开10"))
+        assertEquals(setOf("window_rear_left_pos" to 90), pairs("后左打开90"))
+    }
+
+    @Test fun `driver open 0 and 100 stay on the dedicated close and open fids`() {
+        assertEquals(setOf("window_driver_close" to 2), pairs("主驾打开0"))
+        assertEquals(setOf("window_driver_open" to 1), pairs("主驾打开100"))
+    }
+
+    // Only the canonical 1..99 forms resolve dynamically: anything else is an unknown command,
+    // never a clamped full open the speed gate does not recognise as an open.
+    @Test fun `a non-canonical window percentage resolves to nothing`() {
+        for (cmd in listOf("主驾打开150", "主驾打开0100", "主驾打开00", "主驾打开05", "后右打开101")) {
+            assertTrue(cmd, CommandTranslator.resolve(cmd).isEmpty())
+        }
+    }
+
+    @Test fun `the speed gate and the translator agree on which window forms exist`() {
+        assertFalse(ActionDispatcher.isWindowOpenCommand("主驾打开150"))
+        assertTrue(CommandTranslator.resolve("主驾打开150").isEmpty())
+        for (pct in 1..99) {
+            val cmd = "主驾打开$pct"
+            assertTrue(cmd, ActionDispatcher.isWindowOpenCommand(cmd))
+            assertEquals(setOf("window_driver_pos" to pct), pairs(cmd))
+        }
     }
 
     @Test fun `set temperature 5 clamps to ac_temp_main val 16`() {
@@ -406,6 +462,18 @@ class CommandTranslatorTest {
             assertEquals("action for $command", "ac_wind_mode", r?.actionName)
             assertEquals("value for $command", value, r?.value)
         }
+    }
+
+    @Test fun `extended blow directions use their own allowlist action`() {
+        assertEquals(CommandTranslator.Resolved("ac_wind_mode_ext", 6), one("吹面吹脚除霜"))
+        assertEquals(CommandTranslator.Resolved("ac_wind_mode_ext", 7), one("吹面除霜"))
+    }
+
+    @Test fun `window stop commands are value 3 of the per-door ctrl family`() {
+        assertEquals(CommandTranslator.Resolved("window_driver_ctrl", 3), one("主驾停止"))
+        assertEquals(CommandTranslator.Resolved("window_passenger_ctrl", 3), one("副驾停止"))
+        assertEquals(CommandTranslator.Resolved("window_rear_left_ctrl", 3), one("后左停止"))
+        assertEquals(CommandTranslator.Resolved("window_rear_right_ctrl", 3), one("后右停止"))
     }
 
     // 吹前挡 drives defrost_front_on on a different fid — the new 除霜 entry must not
@@ -488,5 +556,24 @@ class CommandTranslatorTest {
     }
     @Test fun `seat commands no longer in composite fan-out`() {
         assertEquals(emptyList<CommandTranslator.Resolved>(), CommandTranslator.resolve("主驾座椅通风1档"))
+    }
+
+    // ── Rear seat heat (#327) ─────────────────────────────────────────────────
+    @Test fun `rear seat heat commands parse to seat and level`() {
+        assertEquals(RearSeatCommand(RearSeat.LEFT, 1), CommandTranslator.resolveRearSeatHeat("后左座椅加热1档"))
+        assertEquals(RearSeatCommand(RearSeat.RIGHT, 2), CommandTranslator.resolveRearSeatHeat("后右座椅加热2档"))
+        assertEquals(RearSeatCommand(RearSeat.LEFT, 0), CommandTranslator.resolveRearSeatHeat("后左座椅加热关闭"))
+        assertEquals(RearSeatCommand(RearSeat.RIGHT, 0), CommandTranslator.resolveRearSeatHeat("迪加后右座椅加热关闭"))
+    }
+
+    @Test fun `rear seat heat rejects what is not a rear stage`() {
+        for (cmd in listOf("后左座椅加热3档", "后左座椅加热0档", "后左座椅加热", "后左打开30", "主驾座椅加热1档")) {
+            assertNull(cmd, CommandTranslator.resolveRearSeatHeat(cmd))
+        }
+    }
+
+    @Test fun `rear seat heat is no front seat and no table command`() {
+        assertNull(CommandTranslator.resolveSeat("后左座椅加热1档"))
+        assertTrue(CommandTranslator.resolve("后左座椅加热1档").isEmpty())
     }
 }

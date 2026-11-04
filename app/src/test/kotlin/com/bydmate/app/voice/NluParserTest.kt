@@ -24,7 +24,38 @@ class NluParserTest {
     }
 
     @Test fun polite_words_are_dropped_anywhere() {
-        assertEquals(listOf("主驾半开"), commands("открой окно на пятьдесят пожалуйста процентов"))
+        assertEquals(listOf("主驾打开50"), commands("открой окно на пятьдесят пожалуйста процентов"))
+    }
+
+    /** Fork 48b7bc3d/0214693b/81b32b98: a named percentage is exact on a side window, 1..99 through
+     *  the per-door position fid; the endpoints keep the dedicated open / close commands. */
+    @Test fun a_window_percentage_is_exact() {
+        assertEquals(listOf("主驾打开37"), commands("открой окно водителя на 37 процентов"))
+        assertEquals(listOf("主驾打开37"), commands("открой окно водителя на тридцать семь процентов"))
+        assertEquals(listOf("主驾打开30"), commands("открой окно на тридцать процентов"))
+        assertEquals(listOf("主驾打开99"), commands("открой окно водителя на девяносто девять процентов"))
+        assertEquals(listOf("副驾打开45"), commands("поставь окно пассажира на сорок пять процентов"))
+        assertEquals(listOf("后右打开20"), commands("заднее правое окно на двадцать процентов"))
+        assertEquals(listOf("主驾打开100"), commands("открой окно водителя на 100 процентов"))
+        assertEquals(listOf("主驾打开0"), commands("поставь окно водителя на ноль процентов"))
+        // Opening by nothing is no command at all.
+        assertEquals(ParseResult.Unrecognized, NluParser.parse("открой окно на ноль процентов"))
+    }
+
+    @Test fun several_windows_take_the_percentage_one_by_one() {
+        assertEquals(listOf("主驾打开25", "副驾打开25", "后左打开25", "后右打开25"), commands("открой окна на 25 процентов"))
+        assertEquals(listOf("主驾打开30", "副驾打开30", "后左打开30", "后右打开30"), commands("открой все окна на тридцать процентов"))
+        assertEquals(listOf("主驾打开40", "副驾打开40"), commands("открой передние окна на сорок процентов"))
+        assertEquals(listOf("后左打开60", "后右打开60"), commands("поставь задние окна на шестьдесят процентов"))
+        // The endpoints stay the whole-set commands.
+        assertEquals(listOf("车窗全开"), commands("открой окна на сто процентов"))
+        assertEquals(listOf("车窗关闭"), commands("поставь окна на ноль процентов"))
+    }
+
+    @Test fun fractions_and_the_sunroof_keep_their_detents() {
+        assertEquals(listOf("主驾通风"), commands("открой окно на треть"))
+        assertEquals(listOf("主驾半开"), commands("открой окно наполовину"))
+        assertEquals(listOf("天窗打开50"), commands("открой люк на шестьдесят процентов"))
     }
 
     @Test fun listed_forms_resolve() {
@@ -54,6 +85,29 @@ class NluParserTest {
         )
         assertEquals(listOf("方向盘加热", "主驾座椅加热1档", "副驾座椅加热1档"), commands("включи подогрев руля и сидений"))
         assertEquals(listOf("主驾座椅加热1档", "副驾座椅加热1档"), commands("подогрев сидений"))
+    }
+
+    /** Fork deb2a91d: opening the navigator is local; the generic word is the app from settings. */
+    @Test fun navigator_launch_is_local() {
+        assertEquals(ParseResult.Navigator(), NluParser.parse("открой навигатор"))
+        assertEquals(ParseResult.Navigator(), NluParser.parse("запусти навигатор"))
+        assertEquals(ParseResult.Navigator(), NluParser.parse("включи навигацию"))
+        assertEquals(ParseResult.Navigator(), NluParser.parse("навигатор"))
+    }
+
+    /** A named app is that app, not the one from settings. */
+    @Test fun a_named_navigation_app_is_that_app() {
+        assertEquals(ParseResult.Navigator("waze"), NluParser.parse("открой вейз"))
+        assertEquals(ParseResult.Navigator("google_maps"), NluParser.parse("открой гугл карты"))
+        assertEquals(ParseResult.Navigator("yandex"), NluParser.parse("запусти яндекс навигатор"))
+        assertEquals(ParseResult.Navigator("maps"), NluParser.parse("открой яндекс карты"))
+    }
+
+    /** A route or a search needs the agent (destination, places, geocoding), even in a named app. */
+    @Test fun routes_in_a_navigation_app_stay_with_the_agent() {
+        assertEquals(ParseResult.Unrecognized, NluParser.parse("построй маршрут в вейзе"))
+        assertEquals(ParseResult.Unrecognized, NluParser.parse("открой навигатор и построй маршрут домой"))
+        assertEquals(ParseResult.Unrecognized, NluParser.parse("навигатор и закрой окно"))
     }
 
     @Test fun empty_and_filler_only_are_unrecognized() {

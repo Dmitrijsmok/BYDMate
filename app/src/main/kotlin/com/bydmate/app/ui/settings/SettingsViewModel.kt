@@ -20,6 +20,7 @@ import com.bydmate.app.data.backup.AutoBackupPeriod
 import com.bydmate.app.data.backup.AutoBackupRunner
 import com.bydmate.app.data.backup.AutoBackupScheduler
 import com.bydmate.app.data.backup.BackupPart
+import com.bydmate.app.data.charging.ChargeConnector
 import com.bydmate.app.data.backup.BackupManager
 import com.bydmate.app.data.backup.TelegramBackupSink
 import com.bydmate.app.data.backup.TelegramChat
@@ -31,6 +32,8 @@ import com.bydmate.app.data.local.HistoryImporter
 import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.data.local.dao.IdleDrainDao
 import com.bydmate.app.diagnostics.LogRecorder
+import com.bydmate.app.diagnostics.Trace
+import com.bydmate.app.diagnostics.TraceArea
 import com.bydmate.app.BuildConfig
 import com.bydmate.app.data.push.fidRecorderEnabled
 import com.bydmate.app.helper.push.FID_REC_NO_ERROR
@@ -41,6 +44,7 @@ import com.bydmate.app.data.remote.OpenRouterClient
 import com.bydmate.app.data.remote.OpenRouterModel
 import com.bydmate.app.data.local.dao.TariffPeriodDao
 import com.bydmate.app.data.local.entity.PlaceEntity
+import com.bydmate.app.data.local.entity.RuleEntity
 import com.bydmate.app.data.local.entity.TariffPeriodEntity
 import com.bydmate.app.domain.cost.CostCalculator
 import com.bydmate.app.domain.cost.MeasuredLosses
@@ -80,12 +84,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import com.bydmate.app.data.vehicle.DumpFidsResult
+import com.bydmate.app.data.vehicle.NativeAssistant
 import com.bydmate.app.data.vehicle.SeatChannel
 import com.bydmate.app.data.vehicle.SeatChannelStore
 import com.bydmate.app.service.BootReceiver
 import com.bydmate.app.cluster.DEFAULT_VOICE_KEYCODE
 import com.bydmate.app.cluster.VoiceButtonBinding
 import com.bydmate.app.cluster.isVoiceAssignable
+import com.bydmate.app.cluster.voiceBindingCompanionsFromCsv
 import com.bydmate.app.cluster.reservedVoiceKeys
 import com.bydmate.app.cluster.voiceCompanionsFromCsv
 import com.bydmate.app.cluster.voiceCompanionsToCsv
@@ -144,6 +150,7 @@ data class SettingsUiState(
     val units: String = SettingsRepository.DEFAULT_UNITS,
     val currency: String = SettingsRepository.DEFAULT_CURRENCY,
     val currencySymbol: String = "BYN",
+    val chargeConnector: ChargeConnector = ChargeConnector.GBT,
     val importStatus: String? = null,
     val appVersion: String = "0.0.0",
     val updateStatus: String? = null,
@@ -152,6 +159,10 @@ data class SettingsUiState(
     val diagnosticLog: String? = null,
     val logSaveStatus: String? = null,
     val isRecordingLogs: Boolean = false,
+    /** File of the last finished log recording; null = none since the app started. */
+    val lastLogPath: String? = null,
+    /** «Отправить в Telegram» for the saved log is uploading (#324). */
+    val logSending: Boolean = false,
     /** The fid recorder row is a diagnostic tool: shown on -test and local debug builds only. */
     val fidRecorderVisible: Boolean = fidRecorderEnabled(BuildConfig.VERSION_NAME, BuildConfig.DEBUG),
     val fidRecorderRunning: Boolean = false,
@@ -183,17 +194,26 @@ data class SettingsUiState(
     val tariffPeriodError: String? = null,
     /** Losses derived from the meter readings the driver typed in; null until one exists. */
     val measuredLosses: MeasuredLosses? = null,
-    // Hidden Smart Home settings (unlocked by tapping version 7 times)
     val devModeUnlocked: Boolean = false,
+    // Smart Home (Yandex Alice bridge)
     val aliceEndpoint: String = "",
     val aliceApiKey: String = "",
     val aliceEnabled: Boolean = false,
     val aliceSaveStatus: String? = null,
+    /** «Алиса может управлять машиной» / «… прокладывать маршруты»: both off by default. */
+    val aliceVehicleControl: Boolean = false,
+    val aliceNavigation: Boolean = false,
+    /** What the bridge last told the worker and did, refreshed when the section opens. */
+    val aliceStateReport: com.bydmate.app.data.remote.AliceStateReportSnapshot =
+        com.bydmate.app.data.remote.AliceStateReportSnapshot(),
+    val aliceLastCommand: com.bydmate.app.data.remote.AliceLastCommand? = null,
+    val aliceAppMatches: List<com.bydmate.app.data.remote.VoiceAppMatch> = emptyList(),
     val autoCheckUpdates: Boolean = true,
     val abrpTelemetryEnabled: Boolean = false,
     val abrpApiKey: String = "",
     val abrpUserToken: String = "",
     val abrpCarModel: String = "",
+    val abrpSendLocation: Boolean = false,
     val abrpSaveStatus: String? = null,
     val webhookEnabled: Boolean = false,
     val webhookUrl: String = "",
@@ -234,12 +254,15 @@ data class SettingsUiState(
     /** Power-off Telegram report (3.19): the switch and its items. */
     val tgReportOffEnabled: Boolean = false,
     val tgReportOffFields: Set<ReportField> = ReportField.DEFAULT,
+    /** «Отправлять записанный лог в Telegram» (#324). */
+    val tgLogAutoSendEnabled: Boolean = false,
     /** Status of the last fid-catalog dump. Null = idle. Red if starts with error prefix. */
     val fidDumpStatus: String? = null,
     val mapTileSource: String = SettingsRepository.DEFAULT_MAP_TILE_SOURCE,
     // Voice settings
     val voiceEnabled: Boolean = false,
     val voiceKeycode: Int = 0,
+    val closeAfterCommand: Boolean = false,
     val voiceCompanions: Set<Int> = emptySet(),
     val aliceKeycode: Int = 0,
     val aliceCompanions: Set<Int> = emptySet(),
@@ -271,6 +294,8 @@ data class SettingsUiState(
     val gigaAmSpaceShortfall: SpaceShortfall? = null,
     /** When true, the native BYD voice assistant is disabled (pm disable-user). */
     val disableNativeAssistant: Boolean = false,
+    /** The warning shown before [disableNativeAssistant] is switched on. */
+    val showDisableNativeAssistantDialog: Boolean = false,
     // Voice agent (Phase 1, hidden)
     val agentEnabled: Boolean = false,
     val modelTestResult: String? = null,
@@ -281,6 +306,12 @@ data class SettingsUiState(
     val agentGender: String = "m",
     /** #190: which map app the navigate action opens — "yandex" (default) or "dgis". */
     val routeNavigator: String = com.bydmate.app.data.automation.RouteNavigatorUris.YANDEX,
+    /** The apps «Навигатор для маршрутов» offers: the installed ones (every app when none was detected). */
+    val routeNavigatorOptions: List<String> = com.bydmate.app.data.automation.RouteNavigatorUris.ALL,
+    /** Exact package of a non-standard build of the chosen app, as typed; blank = detected. */
+    val routeNavigatorPackage: String = "",
+    /** The package routes actually go to: the manual one, else the detected one; blank = none found. */
+    val routeNavigatorResolvedPackage: String = "",
     /** Long-term facts the agent remembered about the driver (DriverMemory). */
     val agentMemoryFacts: List<String> = emptyList(),
     // Wave J: multi-provider LLM connections (OpenRouter / z.ai / custom)
@@ -311,6 +342,12 @@ data class SettingsUiState(
         "custom" -> customConfigured
         else -> openRouterConfigured
     }
+    /** The saved log can go to the user's own bot: a finished recording, none running, a bot bound (#324). */
+    val canSendLogToTelegram: Boolean get() = lastLogPath != null && !isRecordingLogs && tgBackupBinding != null
+    /** No bot bound: the saved log goes through the system share sheet instead (#380). */
+    val canShareLog: Boolean get() = lastLogPath != null && !isRecordingLogs &&
+        com.bydmate.app.diagnostics.logSendRoute(botConfigured = tgBackupBinding != null) ==
+        com.bydmate.app.diagnostics.LogSendRoute.SHARE_SHEET
 }
 
 @HiltViewModel
@@ -353,6 +390,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
     private val driverMemory: com.bydmate.app.agent.DriverMemory,
     private val dayMemory: com.bydmate.app.agent.DayMemory,
     private val adbRestoreManager: com.bydmate.app.data.autoservice.AdbRestoreManager,
+    private val cloudOverWifiManager: com.bydmate.app.data.autoservice.CloudOverWifiManager,
     private val fidCatalogManager: com.bydmate.app.data.nativestack.FidCatalogManager,
     private val writeAllowlist: com.bydmate.app.data.vehicle.WriteAllowlist,
     private val ruleDao: com.bydmate.app.data.local.dao.RuleDao,
@@ -365,16 +403,34 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
     private val telegramBackupSink: TelegramBackupSink,
     private val autoBackupScheduler: AutoBackupScheduler,
     private val appStrings: AppStrings,
+    private val logTelegramSender: com.bydmate.app.diagnostics.LogTelegramSender,
     private val telegramReporter: com.bydmate.app.data.telegram.TelegramReporter,
+    private val clusterMusicBridge: com.bydmate.app.media.ClusterMusicBridge,
+    private val vehicleWriteLogDao: com.bydmate.app.data.local.dao.VehicleWriteLogDao,
+    private val vehicleKindMonitor: com.bydmate.app.data.nativestack.VehicleKindMonitor,
 ) : ViewModel() {
 
     /** ADB control-channel verdict for the line under the ADB-restore toggle. */
     val adbVerdict: StateFlow<com.bydmate.app.data.autoservice.AdbVerdict?> = adbVerdictMonitor.verdict
     val adbChecking: StateFlow<Boolean> = adbVerdictMonitor.checking
 
+    /** Car type: the price-per-litre field shows only on a confirmed hybrid. */
+    val vehicleKind: StateFlow<com.bydmate.app.data.nativestack.VehicleKind> = vehicleKindMonitor.kind
+
     fun recheckAdb() = adbVerdictMonitor.recheck("settings")
 
     fun enableAdbRestore() = adbVerdictMonitor.enableRestoreAndRecheck()
+
+    fun isTimezoneLockOn(): Boolean = com.bydmate.app.data.settings.TimezoneLockPrefs(appContext).enabled
+
+    /** Time zone lock (#379) switched in Settings; true when the helper confirmed the write. */
+    suspend fun setTimezoneLock(on: Boolean): Boolean = withContext(Dispatchers.IO) {
+        val helperUp = helperBootstrap.ensureRunning()
+        Log.i(TAG, "timezone lock: switch on=$on helper=$helperUp")
+        if (!helperUp) return@withContext false
+        val lock = com.bydmate.app.data.settings.TimezoneLock.create(appContext, helperClient)
+        if (on) lock.enable() else lock.disable()
+    }
 
     private val _appLanguage = MutableStateFlow(localePreferences.getLanguage() ?: "ru")
     val appLanguage: StateFlow<String> = _appLanguage.asStateFlow()
@@ -412,8 +468,12 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
     /** Forget the remembered seat write-channel; next seat command re-probes primary→fallback. */
     fun resetSeatChannel() = seatChannelStore.setWinner(SeatChannel.UNKNOWN)
 
-    /** Forget the dead-energydata verdict; the next drives re-detect the trip source (#63). */
-    fun resetTripSourceDetection() = energyDataDeadDetector.reset()
+    /** Forget the dead-energydata verdict; the next drives re-detect the trip source (#63).
+     *  The import watermark goes too, so the next sync re-reads energydata from the start (#348). */
+    fun resetTripSourceDetection() {
+        energyDataDeadDetector.reset()
+        viewModelScope.launch { historyImporter.resetImportWatermark() }
+    }
 
     private val _uiState = MutableStateFlow(SettingsUiState(
         appVersion = getVersion(),
@@ -430,6 +490,10 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
 
     private var automationButtonKeys: Set<Int> = emptySet()
 
+    /** Packages each map app is installed under, from the last [loadRouteNavigator]. Declared
+     *  before init: loadSettings may run there on Main.immediate and must not be overwritten. */
+    private var installedNavigators: Map<String, List<String>> = emptyMap()
+
     init {
         loadSettings()
         viewModelScope.launch {
@@ -438,6 +502,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
         observeAutoBackup()
         loadTariffPeriods()
         observeLogRecorder()
+        observeLogSender()
         refreshFidRecorder()
     }
 
@@ -501,6 +566,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 SettingsRepository.DEFAULT_UNITS
             )
             val currency = settingsRepository.getCurrency()
+            val chargeConnector = settingsRepository.getChargeConnector()
             val tripCostTariff = settingsRepository.getTripCostTariffKey()
             val consumptionGood = settingsRepository.getString(
                 SettingsRepository.KEY_CONSUMPTION_GOOD,
@@ -526,29 +592,41 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
             val aliceEndpoint = settingsRepository.getString(SettingsRepository.KEY_ALICE_ENDPOINT, "")
             val aliceApiKey = settingsRepository.getString(SettingsRepository.KEY_ALICE_API_KEY, "")
             val aliceEnabled = settingsRepository.getString(SettingsRepository.KEY_ALICE_ENABLED, "false") == "true"
+            val aliceVehicleControl =
+                settingsRepository.getString(SettingsRepository.KEY_ALICE_VEHICLE_CONTROL, "false") == "true"
+            val aliceNavigation = settingsRepository.getString(SettingsRepository.KEY_ALICE_NAVIGATION, "false") == "true"
 
             val abrpEnabled = settingsRepository.getString(SettingsRepository.KEY_ABRP_ENABLED, "false") == "true"
             val abrpApiKey = settingsRepository.getString(SettingsRepository.KEY_ABRP_API_KEY, "")
             val abrpUserToken = settingsRepository.getString(SettingsRepository.KEY_ABRP_USER_TOKEN, "")
             val abrpCarModel = settingsRepository.getString(SettingsRepository.KEY_ABRP_CAR_MODEL, "")
+            val abrpSendLocation = settingsRepository.getString(SettingsRepository.KEY_ABRP_SEND_LOCATION, "false") == "true"
 
             val webhookEnabled = settingsRepository.getString(SettingsRepository.KEY_WEBHOOK_ENABLED, "false") == "true"
             val webhookUrl = settingsRepository.getString(SettingsRepository.KEY_WEBHOOK_URL, "")
             val webhookSecret = settingsRepository.getString(SettingsRepository.KEY_WEBHOOK_SECRET, "")
             val webhookSendLocation = settingsRepository.getString(SettingsRepository.KEY_WEBHOOK_SEND_LOCATION, "false") == "true"
             val mapTileSource = settingsRepository.getMapTileSource()
+            // Never chosen here (a reinstall after an uninstall with the toggle on): show what the
+            // system has, so switching the toggle off brings the assistant back. The service's
+            // reconcile still leaves the packages alone until the driver chooses.
+            val disableNativeAssistantPref =
+                settingsRepository.getString(SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, "")
             val disableNativeAssistant =
-                settingsRepository.getString(SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, "false") == "true"
+                if (disableNativeAssistantPref.isEmpty()) NativeAssistant.disabledInSystem(appContext.packageManager)
+                else disableNativeAssistantPref == "true"
 
             // Voice settings
             val voiceEnabled = settingsRepository.isVoiceEnabled()
             val voiceKeycode = settingsRepository.getVoiceKeycode().let {
                 if (it == 0) DEFAULT_VOICE_KEYCODE else it
             }
+            val closeAfterCommand = appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                .getBoolean("close_after_command", false)
 
-            val voiceCompanions = voiceCompanionsFromCsv(settingsRepository.getString(SettingsRepository.KEY_VOICE_COMPANIONS, ""))
+            val voiceCompanions = voiceBindingCompanionsFromCsv(settingsRepository.getString(SettingsRepository.KEY_VOICE_COMPANIONS, ""))
             val aliceKeycode = settingsRepository.getString(SettingsRepository.KEY_ALICE_KEYCODE, "0").toIntOrNull() ?: 0
-            val aliceCompanions = voiceCompanionsFromCsv(settingsRepository.getString(SettingsRepository.KEY_ALICE_COMPANIONS, ""))
+            val aliceCompanions = voiceBindingCompanionsFromCsv(settingsRepository.getString(SettingsRepository.KEY_ALICE_COMPANIONS, ""))
 
             val ttsEnabled = settingsRepository.isTtsEnabled()
             // Resolve through the catalog so a legacy id (retired "denis"/"dmitri") shows its
@@ -584,10 +662,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 .getString("agent_persona", null) ?: AgentPersona.NAVIGATOR.id
             val agentGender = appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
                 .getString("agent_gender", "m") ?: "m"
-            val routeNavigator = com.bydmate.app.data.automation.RouteNavigatorUris.normalize(
-                appContext.getSharedPreferences(
-                    com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
-                ).getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null))
+            val route = loadRouteNavigator()
 
             // Wave J: multi-provider LLM connections
             val zaiApiKey = settingsRepository.getString(SettingsRepository.KEY_ZAI_API_KEY, "")
@@ -607,6 +682,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     units = units,
                     currency = currency.code,
                     currencySymbol = currency.symbol,
+                    chargeConnector = chargeConnector,
                     tripCostTariff = tripCostTariff,
                     consumptionGood = consumptionGood,
                     consumptionBad = consumptionBad,
@@ -621,10 +697,13 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     aliceEndpoint = aliceEndpoint,
                     aliceApiKey = aliceApiKey,
                     aliceEnabled = aliceEnabled,
+                    aliceVehicleControl = aliceVehicleControl,
+                    aliceNavigation = aliceNavigation,
                     abrpTelemetryEnabled = abrpEnabled,
                     abrpApiKey = abrpApiKey,
                     abrpUserToken = abrpUserToken,
                     abrpCarModel = abrpCarModel,
+                    abrpSendLocation = abrpSendLocation,
                     webhookEnabled = webhookEnabled,
                     webhookUrl = webhookUrl,
                     webhookSecret = webhookSecret,
@@ -633,6 +712,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     disableNativeAssistant = disableNativeAssistant,
                     voiceEnabled = voiceEnabled,
                     voiceKeycode = voiceKeycode,
+                    closeAfterCommand = closeAfterCommand,
                     voiceCompanions = voiceCompanions,
                     aliceKeycode = aliceKeycode,
                     aliceCompanions = aliceCompanions,
@@ -649,7 +729,10 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     agentName = agentName,
                     agentPersona = agentPersona,
                     agentGender = agentGender,
-                    routeNavigator = routeNavigator,
+                    routeNavigator = route.navigator,
+                    routeNavigatorOptions = route.options,
+                    routeNavigatorPackage = route.manualPackage,
+                    routeNavigatorResolvedPackage = route.resolvedPackage,
                     agentMemoryFacts = driverMemory.facts(),
                     zaiApiKey = zaiApiKey,
                     customName = customName,
@@ -676,14 +759,31 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
             .apply()
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT, disabled.toString())
-            helperClient.setAppHidden("com.byd.autovoice", disabled)
-            helperClient.setAppHidden("com.byd.vrassistant", disabled)
+            NativeAssistant.setDisabled(helperClient, appContext.packageManager, disabled)
             // DiLink 3 can leave the steering-wheel accessibility binding stale after package
             // state changes. Re-assert our key filter immediately when takeover is enabled.
             if (disabled && _uiState.value.voiceEnabled) {
                 ensureVoiceKeyService("native-assistant-disabled")
             }
         }
+    }
+
+    /**
+     * The settings toggle. Switching on first shows a warning: the disable outlives BYDMate, so
+     * the driver learns before it how to bring the assistant back. Switching off applies at once.
+     */
+    fun toggleDisableNativeAssistant(checked: Boolean) {
+        if (checked) _uiState.update { it.copy(showDisableNativeAssistantDialog = true) }
+        else setDisableNativeAssistant(false)
+    }
+
+    fun confirmDisableNativeAssistant() {
+        _uiState.update { it.copy(showDisableNativeAssistantDialog = false) }
+        setDisableNativeAssistant(true)
+    }
+
+    fun dismissDisableNativeAssistantDialog() {
+        _uiState.update { it.copy(showDisableNativeAssistantDialog = false) }
     }
 
     /** Save battery capacity setting. */
@@ -763,7 +863,8 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
             val wasEarliest = before.firstOrNull()?.id == period.id
             if (period.id == 0L) tariffPeriodDao.insert(period) else tariffPeriodDao.update(period)
             Log.i(CostCalculator.TAG, "period saved start=${period.startTs} home=${period.homeRate} " +
-                "dc=${period.dcRate} loss=${period.acLossPct}/${period.dcLossPct} rule=${period.tripRule}")
+                "dc=${period.dcRate} loss=${period.acLossPct}/${period.dcLossPct} rule=${period.tripRule} " +
+                "fuel=${period.fuelPricePerLiter}")
             // The earliest period also covers everything before its own date, so touching it
             // has to re-price the whole history, not just the span from its start_ts.
             val becameEarliest = tariffPeriodDao.getAllAsc().firstOrNull()?.startTs == period.startTs
@@ -822,6 +923,14 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
         _uiState.update { it.copy(currency = currency.code, currencySymbol = currency.symbol) }
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_CURRENCY, code)
+        }
+    }
+
+    /** Save the car's charging connector, the voice agent's station filter. */
+    fun saveChargeConnector(connector: ChargeConnector) {
+        _uiState.update { it.copy(chargeConnector = connector) }
+        viewModelScope.launch {
+            settingsRepository.setChargeConnector(connector)
         }
     }
 
@@ -927,7 +1036,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
     fun saveOpenRouterApiKey(value: String) {
         _uiState.update { it.copy(openRouterApiKey = value) }
         viewModelScope.launch {
-            settingsRepository.setString(SettingsRepository.KEY_OPENROUTER_API_KEY, value)
+            settingsRepository.setString(SettingsRepository.KEY_OPENROUTER_API_KEY, value.trim())
             // When a key is entered but no model has been chosen yet, fill in the default.
             // Decision is made against the CURRENT state inside the CAS loop so a concurrent
             // selectModel() call cannot be overwritten by a stale snapshot.
@@ -1103,8 +1212,6 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
         }
     }
 
-    // --- Smart Home (hidden) ---
-
     private var versionTapCount = 0
     private var lastVersionTapTime = 0L
 
@@ -1118,6 +1225,8 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
             versionTapCount = 0
         }
     }
+
+    // --- Smart Home (Yandex Alice bridge) ---
 
     fun updateAliceEndpoint(value: String) {
         _uiState.update { it.copy(aliceEndpoint = value) }
@@ -1144,6 +1253,41 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
         _uiState.update { it.copy(aliceEnabled = enabled) }
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_ALICE_ENABLED, enabled.toString())
+        }
+    }
+
+    fun toggleAliceVehicleControl(enabled: Boolean) {
+        _uiState.update { it.copy(aliceVehicleControl = enabled) }
+        viewModelScope.launch {
+            settingsRepository.setString(SettingsRepository.KEY_ALICE_VEHICLE_CONTROL, enabled.toString())
+        }
+    }
+
+    fun toggleAliceNavigation(enabled: Boolean) {
+        _uiState.update { it.copy(aliceNavigation = enabled) }
+        viewModelScope.launch {
+            settingsRepository.setString(SettingsRepository.KEY_ALICE_NAVIGATION, enabled.toString())
+        }
+    }
+
+    /** The last state report (temperatures) and command of the bridge, for the section's status lines. */
+    fun refreshAliceDiagnostics() {
+        _uiState.update {
+            it.copy(
+                aliceStateReport = com.bydmate.app.data.remote.AliceBridgeDiagnostics.stateReport,
+                aliceLastCommand = com.bydmate.app.data.remote.AliceBridgeDiagnostics.lastCommand,
+            )
+        }
+    }
+
+    /** Which installed app each Alice app action opens on this head unit. */
+    fun loadAliceAppMatches() {
+        viewModelScope.launch {
+            val matches = withContext(Dispatchers.IO) {
+                runCatching { com.bydmate.app.data.remote.AliceAppResolver(appContext).diagnosticMatches() }
+                    .getOrDefault(emptyList())
+            }
+            _uiState.update { it.copy(aliceAppMatches = matches) }
         }
     }
 
@@ -1196,6 +1340,13 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
         _uiState.update { it.copy(webhookEnabled = effective) }
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_WEBHOOK_ENABLED, effective.toString())
+        }
+    }
+
+    fun toggleAbrpSendLocation(enabled: Boolean) {
+        _uiState.update { it.copy(abrpSendLocation = enabled) }
+        viewModelScope.launch {
+            settingsRepository.setString(SettingsRepository.KEY_ABRP_SEND_LOCATION, enabled.toString())
         }
     }
 
@@ -1318,8 +1469,10 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
     /**
      * Persists the keycode learned from [LearnButtonDialog] into Room and into
      * SharedPreferences("voice") so SteeringWheelKeyService reads the new value immediately.
+     * [companions] (other codes of the same press) always replace the stored ones.
      */
-    fun saveVoiceKeycode(keycode: Int) = saveVoiceButton(VoiceButtonBinding(keycode), false)
+    fun saveVoiceKeycode(keycode: Int, companions: Set<Int> = emptySet()) =
+        saveVoiceButton(VoiceButtonBinding(keycode, companions), false)
 
     fun voiceButtonConflict(keycode: Int, alice: Boolean): String? {
         val state = _uiState.value
@@ -1332,6 +1485,38 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
             keycode in automationButtonKeys -> appContext.getString(R.string.voice_button_occupied_automation)
             else -> null
         }
+    }
+
+    /** Close-after-command toggle, read by VoiceGate.closeAfterCommand() straight from the prefs. */
+    fun setCloseAfterCommand(enabled: Boolean) {
+        _uiState.update { it.copy(closeAfterCommand = enabled) }
+        appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+            .edit().putBoolean("close_after_command", enabled).apply()
+    }
+
+    // --- Split screen: steering key ---
+
+    /** Rules for the split key's occupancy and conflict checks, read when its learn dialog opens. */
+    suspend fun automationRulesSnapshot(): List<RuleEntity> = ruleDao.getAllList()
+
+    /**
+     * Saves the split key with [companions] (other codes of the same press, always replacing the
+     * stored ones); [disableRuleIds] are the split rules on it the user chose to turn off.
+     */
+    fun saveSplitKey(keyCode: Int, companions: Set<Int>, disableRuleIds: List<Long>) {
+        splitPreferences.setSteeringKeyCode(keyCode)
+        splitPreferences.setSteeringKeyCompanions(companions)
+        Log.i(TAG, "split key=$keyCode companions=${voiceCompanionsToCsv(companions).ifEmpty { "-" }} " +
+            "rules_off=$disableRuleIds")
+        if (disableRuleIds.isNotEmpty()) {
+            viewModelScope.launch { disableRuleIds.forEach { ruleDao.setEnabled(it, false) } }
+        }
+    }
+
+    fun clearSplitKey() {
+        splitPreferences.setSteeringKeyCode(0)
+        splitPreferences.setSteeringKeyCompanions(emptySet())
+        Log.i(TAG, "split key cleared")
     }
 
     fun saveVoiceButton(binding: VoiceButtonBinding, alice: Boolean, onSaved: () -> Unit = {}) {
@@ -1607,19 +1792,91 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
             .edit().putString("agent_persona", id).apply()
     }
 
+    private data class RouteNavigatorSetting(
+        val navigator: String, val options: List<String>, val manualPackage: String, val resolvedPackage: String,
+    )
+
+    /**
+     * The «Навигатор для маршрутов» block as stored, with the installed apps detected once. A
+     * saved app that is no longer installed (and has no manual package) reads, and is saved, as
+     * the first installed one, so the setting never points at an app the car does not have.
+     */
+    private fun loadRouteNavigator(): RouteNavigatorSetting {
+        val prefs = appContext.getSharedPreferences(
+            com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
+        )
+        val saved = com.bydmate.app.data.automation.RouteNavigatorUris.normalize(
+            prefs.getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null))
+        val manual = prefs.getString(
+            com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, null).orEmpty()
+        installedNavigators = runCatching {
+            com.bydmate.app.data.automation.RouteNavigatorDiscovery.discover(appContext.packageManager)
+        }.getOrDefault(emptyMap())
+        val options = routeNavigatorOptions(installedNavigators, saved, manual)
+        val navigator = if (saved in options) saved else options.first()
+        if (navigator != saved) {
+            prefs.edit()
+                .putString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, navigator)
+                .apply()
+            Trace.event(TraceArea.APP, "navigator-corrected", "from" to saved, "to" to navigator)
+        }
+        return RouteNavigatorSetting(navigator, options, manual, resolvedNavigatorPackage(navigator, manual))
+    }
+
+    /** What routes to [navigator] are pinned to: [manual] as given, else its detected package. */
+    private fun resolvedNavigatorPackage(navigator: String, manual: String): String =
+        manual.trim().ifEmpty { installedNavigators[navigator]?.firstOrNull().orEmpty() }
+
     /**
      * Picks the map app the navigate action opens (#190, #200): "yandex" (default), "dgis" or "maps".
      * Persisted in the same SharedPreferences("voice") file as the other agent settings, which
      * is where [com.bydmate.app.data.automation.ActionDispatcher] reads it on every route.
+     * A manual package belongs to the app it was entered for, so switching apps clears it.
      */
     fun setRouteNavigator(value: String) {
         val normalized = com.bydmate.app.data.automation.RouteNavigatorUris.normalize(value)
-        _uiState.update { it.copy(routeNavigator = normalized) }
-        appContext.getSharedPreferences(
+        val changed = normalized != _uiState.value.routeNavigator
+        _uiState.update {
+            val manual = if (changed) "" else it.routeNavigatorPackage
+            it.copy(
+                routeNavigator = normalized,
+                routeNavigatorPackage = manual,
+                routeNavigatorResolvedPackage = resolvedNavigatorPackage(normalized, manual),
+            )
+        }
+        val editor = appContext.getSharedPreferences(
             com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
         ).edit()
             .putString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, normalized)
-            .apply()
+        if (changed) editor.remove(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE)
+        editor.apply()
+        // The trace shows which app the driver picked before the routes that follow it.
+        Trace.event(TraceArea.USER, "navigator-select", "value" to normalized,
+            "pkg" to _uiState.value.routeNavigatorResolvedPackage.ifEmpty { null })
+    }
+
+    /**
+     * The exact package of a non-standard build of the chosen app (vendor, ReVanced, another
+     * store). Used as given by the dispatcher, without an "installed" check that could miss a
+     * vendor APK; blank goes back to detection.
+     */
+    fun setRouteNavigatorPackage(value: String) {
+        val manual = value.trim()
+        _uiState.update {
+            it.copy(
+                routeNavigatorPackage = value,
+                routeNavigatorResolvedPackage = resolvedNavigatorPackage(it.routeNavigator, manual),
+            )
+        }
+        val editor = appContext.getSharedPreferences(
+            com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
+        ).edit()
+        if (manual.isEmpty()) {
+            editor.remove(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE)
+        } else {
+            editor.putString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, manual)
+        }
+        editor.apply()
     }
 
     /**
@@ -1706,9 +1963,10 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
         private const val BIND_CODE_SPAN = 900_000
         /** Same tag as TelegramReporter: the report's settings changes sit next to its sends. */
         private const val TAG_TG_REPORT = "TgReport"
-        /** Shared budget for the daemon-backed dump sections (liveness + seat and steering heat reads).
+        /** Shared budget for the daemon-backed dump sections (liveness + seat, steering heat and window reads).
          *  The dump must not hang on a wedged daemon. */
         private const val HELPER_DIAG_BUDGET_MS = 3_000L
+        private const val VEHICLE_WRITES_IN_DUMP = 40
 
         /**
          * A binder transact is a blocking call: wrapping it in withTimeoutOrNull here would not
@@ -1734,6 +1992,14 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 collected.set(collected.get().copy(seats = seats))
                 val steeringHeat = runCatching { helper.readBatch(SteeringHeatDiagnostics.batchItems()) }.getOrNull()
                 collected.set(collected.get().copy(steeringHeat = steeringHeat))
+                val windows = runCatching { helper.readBatch(WindowDiagnostics.batchItems()) }.getOrNull()
+                collected.set(collected.get().copy(windows = windows))
+                val hud = runCatching { helper.readBatch(HudDiagnostics.batchItems()) }.getOrNull()
+                collected.set(collected.get().copy(hud = hud))
+                val hudSwitch = runCatching { helper.readBatch(HudDiagnostics.switchBatchItems()) }.getOrNull()
+                collected.set(collected.get().copy(hudSwitch = hudSwitch))
+                val batteryPreheat = runCatching { helper.readBatch(BatteryPreheatDiagnostics.batchItems()) }.getOrNull()
+                collected.set(collected.get().copy(batteryPreheat = batteryPreheat))
             }
             withTimeoutOrNull(budgetMs) { probe.join() }
             return collected.get()
@@ -1745,9 +2011,13 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
         val alive: Boolean?,
         val seats: List<Pair<Int, Int>>?,
         val steeringHeat: List<Pair<Int, Int>>? = null,
+        val windows: List<Pair<Int, Int>>? = null,
+        val hud: List<Pair<Int, Int>>? = null,
+        val hudSwitch: List<Pair<Int, Int>>? = null,
+        val batteryPreheat: List<Pair<Int, Int>>? = null,
     )
 
-    /** Liveness, the seat fid snapshot and the steering heat snapshot under ONE shared budget. */
+    /** Liveness and the seat, steering heat and window fid snapshots under ONE shared budget. */
     private suspend fun gatherHelperDiagnostics(): HelperDiagnostics =
         collectHelperDiagnostics(viewModelScope, helperClient, HELPER_DIAG_BUDGET_MS)
 
@@ -1814,6 +2084,20 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
             } catch (e: Exception) {
                 appendLine("(failed to gather app/device metadata: ${e.message})")
             }
+            try {
+                val pm = appContext.packageManager
+                appendLine(RecordingDumpFormat.appVersionsLine { pkg ->
+                    try {
+                        val pi = pm.getPackageInfo(pkg, 0)
+                        pi.versionName to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pi.longVersionCode
+                        else @Suppress("DEPRECATION") pi.versionCode.toLong()
+                    } catch (_: PackageManager.NameNotFoundException) {
+                        null
+                    }
+                })
+            } catch (e: Exception) {
+                appendLine("(failed to gather app versions: ${e.message})")
+            }
 
             appendLine("--- settings ---")
             try {
@@ -1823,13 +2107,19 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 val abrpEnabled = settingsRepository.getString(SettingsRepository.KEY_ABRP_ENABLED, "false") == "true"
                 val abrpTokenLen = settingsRepository.getString(SettingsRepository.KEY_ABRP_USER_TOKEN, "").length
                 val abrpCarModel = settingsRepository.getString(SettingsRepository.KEY_ABRP_CAR_MODEL, "")
+                val abrpSendLocation = settingsRepository.getString(SettingsRepository.KEY_ABRP_SEND_LOCATION, "false") == "true"
                 appendLine("data_source: $dataSource")
                 appendLine("battery_capacity: raw=\"$capacityRaw\" parsed=$capacityParsed")
-                appendLine("abrp_enabled: $abrpEnabled token_len=$abrpTokenLen car_model=\"$abrpCarModel\"")
+                appendLine("abrp_enabled: $abrpEnabled token_len=$abrpTokenLen car_model=\"$abrpCarModel\" send_location=$abrpSendLocation")
                 appendLine("route_navigator=" + com.bydmate.app.data.automation.RouteNavigatorUris.normalize(
                     appContext.getSharedPreferences(
                         com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
                     ).getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null)))
+                val manualNavigatorPackage = appContext.getSharedPreferences(
+                    com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
+                ).getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, null)
+                appendLine("route_navigator_package=${manualNavigatorPackage.orEmpty()} " +
+                    "resolved=${_uiState.value.routeNavigatorResolvedPackage}")
                 val secureSettingsGranted = appContext.checkSelfPermission(
                     android.Manifest.permission.WRITE_SECURE_SETTINGS
                 ) == android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -1838,9 +2128,14 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                         "trigger=${adbRestoreManager.lastTrigger} retries=${adbRestoreManager.retryCount} " +
                         "write_secure_settings=$secureSettingsGranted"
                 )
+                appendLine(cloudOverWifiManager.dumpLine())
                 appendLine("adb_verdict: ${adbVerdictMonitor.verdict.value ?: "(none)"}")
                 appendLine("daemon_ever_alive: ${helperBootstrap.daemonEverAlive()}")
                 appendLine(com.bydmate.app.data.backup.PostRestoreCheck.dumpLine(appContext))
+                appendLine(
+                    "widget_home_only=${com.bydmate.app.ui.widget.WidgetPreferences(appContext).isHomeOnly()} " +
+                        "home_packages=${com.bydmate.app.ui.widget.WidgetController.queryHomePackages(appContext)}"
+                )
             } catch (e: Exception) {
                 appendLine("(failed to gather settings: ${e.message})")
             }
@@ -1853,6 +2148,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     "start=${it.startTs} home=${it.homeRate} dc=${it.dcRate} " +
                         "loss=${it.acLossPct}/${it.dcLossPct} rule=${it.tripRule}"
                 } ?: "(none)"))
+                appendLine("fuel_price_per_liter=" + (current?.fuelPricePerLiter?.toString() ?: ""))
             } catch (e: Exception) {
                 appendLine("(failed to gather tariff periods: ${e.message})")
             }
@@ -1905,6 +2201,35 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 )
             }
 
+            // «Состояние машины» / «Диагностика»: the stock car status provider as read right now
+            // (raw keys and what the card makes of them). PM2.5 is read by the Tech screen only
+            // and logs its own `pm25 read:` lines under TechPanel.
+            appendLine("--- car status ---")
+            try {
+                appendLine(com.bydmate.app.data.carstatus.CarStatusReader(appContext).dumpLine())
+            } catch (e: Exception) { appendLine("error: ${e.message}") }
+
+            // What the Alice worker was last told (the temperatures Alice answers from) and the
+            // last bridge command. The endpoint and key are secrets: only whether they are set.
+            appendLine("--- alice bridge ---")
+            try {
+                val values = listOf(
+                    SettingsRepository.KEY_ALICE_ENABLED, SettingsRepository.KEY_ALICE_ENDPOINT,
+                    SettingsRepository.KEY_ALICE_API_KEY, SettingsRepository.KEY_ALICE_VEHICLE_CONTROL,
+                    SettingsRepository.KEY_ALICE_NAVIGATION,
+                ).associateWith { settingsRepository.getString(it, "") }
+                appendLine(
+                    "polling=${values[SettingsRepository.KEY_ALICE_ENABLED] == "true"} " +
+                        "endpoint_set=${values[SettingsRepository.KEY_ALICE_ENDPOINT].orEmpty().isNotBlank()} " +
+                        "key_len=${values[SettingsRepository.KEY_ALICE_API_KEY].orEmpty().length} " +
+                        "vehicle_control=${values[SettingsRepository.KEY_ALICE_VEHICLE_CONTROL] == "true"} " +
+                        "navigation=${values[SettingsRepository.KEY_ALICE_NAVIGATION] == "true"}"
+                )
+                appendLine(com.bydmate.app.data.remote.AliceBridgeDiagnostics.dumpLine())
+            } catch (e: Exception) {
+                appendLine("error: ${e.message}")
+            }
+
             // ICE-side addresses nothing in the app reads yet (#184). A DM-i owner sends this
             // dump with the engine running and the raw words say which of them are live there.
             appendLine("--- hybrid probe ---")
@@ -1913,6 +2238,12 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     .format(helperClient.readBatch(HybridProbeDiagnostics.batchItems()))
                     .forEach { appendLine(it) }
             } catch (e: Exception) { appendLine("error: ${e.message}") }
+            try {
+                appendLine(vehicleKindMonitor.dumpLine())
+            } catch (e: Exception) { appendLine("vehicle_kind: error ${e.message}") }
+            try {
+                appendLine(com.bydmate.app.data.dtc.CarAutoType.dumpLine(helperClient))
+            } catch (e: Exception) { appendLine("car_autotype: error ${e.message}") }
 
             appendLine(automationEngine.serviceStartDumpLine())
             // Automation rules (#177): issue reports about a rule that "does nothing"
@@ -1993,6 +2324,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                         files.forEach { appendLine("  ${it.name} (${it.length()}B, mtime=${it.lastModified()})") }
                     }
                     appendLine("liveness: ${energyDataDeadDetector.debugState()}")
+                    appendLine(historyImporter.importStateLine())
                 }
             } catch (e: Exception) {
                 appendLine("(failed to gather vehicle data sources: ${e.message})")
@@ -2009,9 +2341,14 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 val bttsMax = runCatching { am.getStreamMaxVolume(17) }.getOrNull()
                 val bttsVol = runCatching { am.getStreamVolume(17) }.getOrNull()
                 appendLine("byd_btts_stream17: " + if (bttsMax != null) "present vol=$bttsVol/$bttsMax" else "absent")
-                val preDuck = appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
-                    .getInt("pre_duck_volume", -1)
+                val voicePrefs = appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                val preDuck = voicePrefs.getInt("pre_duck_volume", -1)
                 appendLine("pre_duck_volume: " + if (preDuck >= 0) "$preDuck" else "(none)")
+                // #353: the firmware voice duck state; the amp type tells which cars needed it.
+                val ampType = com.bydmate.app.split.readSystemProperty("sys.ext.amp.type") ?: "(none)"
+                val autoVoiceMarker = voicePrefs.getBoolean(com.bydmate.app.voice.AutoVoiceDuck.KEY_MARKER, false)
+                val autoVoiceLast = voicePrefs.getString(com.bydmate.app.voice.AutoVoiceDuck.KEY_LAST, null) ?: "(none)"
+                appendLine("auto_voice: ext_amp_type=$ampType marker=${if (autoVoiceMarker) "set" else "none"} last=$autoVoiceLast")
             } catch (e: Exception) { appendLine("(failed to gather audio state: ${e.message})") }
 
             appendLine("--- displays ---")
@@ -2041,12 +2378,32 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     com.bydmate.app.hud.HudSomeIpBridge.isServicePresent(appContext.packageManager)
                 appendLine("someip_gateway: " + if (gatewayPresent) "present" else "absent")
                 appendLine("speed_sign: ${hudPrefs.getBoolean(com.bydmate.app.hud.HudController.KEY_SPEED_SIGN, true)}")
+                // The way to the glass (1..3, «Способ вывода на стекло»).
+                appendLine("mode: ${hudController.mode()}")
                 // Frame/RC counters from HudPushLoop via HudController.diag().
                 val diag = hudController.diag()
+                // Ways 2 and 3: CAN guidance writes the car accepted and refused (clears not
+                // counted), and what a process death may have left on the instrument or the gateway.
+                appendLine(
+                    "can_accepted=${diag?.canAccepted ?: 0} can_refused=${diag?.canRefused ?: 0} " +
+                        "can_left=${hudPrefs.contains(com.bydmate.app.hud.HudWayChannels.KEY_CAN_LEFT)} " +
+                        "lmcn_left=${hudPrefs.contains(com.bydmate.app.hud.HudWayChannels.KEY_LMCN_LEFT)}"
+                )
                 appendLine("frames_sent=${diag?.framesSent ?: 0} last_frame_ts=${diag?.lastFrameTs ?: 0}")
                 appendLine("last_fire_rc=${diag?.lastRc ?: "n/a"} nonzero_rc_count=${diag?.nonZeroRcCount ?: 0}")
+                // Every gateway service the product's binding holds open (the HUD check's step 4 adds
+                // its own while it runs on that binding), and each topic's fireEvent rcs.
+                val someIp = hudController.boundBridge
+                appendLine("someip_services=${someIp?.startedServices()?.let { com.bydmate.app.hud.HudSomeIpBridge.describeServices(it) } ?: "n/a"}")
+                appendLine("someip_fire_rc=${someIp?.fireCounts()?.let { com.bydmate.app.hud.HudSomeIpBridge.describeFires(it) } ?: "n/a"}")
                 appendLine("amap_capable=${diag?.amapCapable ?: false} amap_frames=${diag?.amapFramesSent ?: 0} amap_stops=${diag?.amapStopsSent ?: 0}")
-                appendLine("hub_snapshot=${com.bydmate.app.navdata.NavGuidanceHub.snapshot()}")
+                // No gateway (#301): TYPE 0 frames and KILLs to the Amap adapter's cluster card.
+                appendLine(hudController.amapCluster?.let {
+                    "amap_cluster: frames=${it.framesSent} kills=${it.killsSent} last_frame_ts=${it.lastFrameTs}"
+                } ?: "amap_cluster: n/a")
+                appendLine("hub_snapshot=${RecordingDumpFormat.hubSnapshot(com.bydmate.app.navdata.NavGuidanceHub.snapshot())}")
+                // The current route's counters, or the last route's (the route-summary trace line).
+                appendLine("route_summary: ${com.bydmate.app.navdata.NavGuidanceHub.routeSummary()}")
                 // What each channel actually carried at every maneuver change (#94): the
                 // SOME/IP arrow field next to the Amap icon, on one timeline.
                 val maneuvers = com.bydmate.app.hud.HudManeuverJournal(hudPrefs).lines()
@@ -2057,6 +2414,8 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     androidx.core.app.NotificationManagerCompat.getEnabledListenerPackages(appContext)
                         .contains(appContext.packageName)
                 }")
+                // Approved is not bound (#325): the framework may never connect an approved listener.
+                appendLine("notif_listener_connected=${com.bydmate.app.media.MediaSessionListenerService.isConnected}")
                 // Self-heal runs for every daemon-backed grant: all-false reasserts point at the
                 // daemon path, true reasserts with granted=false at the system reverting us.
                 val healHistory = com.bydmate.app.service.GrantSelfHeal.history()
@@ -2104,13 +2463,15 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     "target=${clusterPrefs.getString(cpm.KEY_TARGET_PACKAGE, "(default)")}")
                 // #121: the density override carries the scale in direct mode, and apps latched by
                 // the death watch as dying on a non-native density are sent at the panel's own
-                // density instead — their scale slider is inert.
+                // density instead — their scale slider is inert. Each with why and when it latched.
                 val densityUnsafe = cpm.densityUnsafePackages(appContext)
                 appendLine("density: " + when (diag.directDensityDpi) {
                     -1 -> "(not set this session)"
                     0 -> "native"
                     else -> "${diag.directDensityDpi} dpi"
-                } + " unsafe=" + if (densityUnsafe.isEmpty()) "(none)" else densityUnsafe.joinToString())
+                } + " unsafe=" + if (densityUnsafe.isEmpty()) "(none)" else densityUnsafe.joinToString { pkg ->
+                    "$pkg (${cpm.densityUnsafeReason(appContext, pkg) ?: "no reason recorded"})"
+                })
                 appendLine("vd: id=${diag.vdDisplayId} overlay_attached=${diag.overlayAttached} " +
                     "direct_display=${diag.directDisplayId} " +
                     "direct_marker=${clusterPrefs.getInt(cpm.KEY_DIRECT_DISPLAY_ID, -1)}")
@@ -2197,6 +2558,11 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 else clusterJournal.forEach { appendLine("  $it") }
             } catch (e: Exception) { appendLine("(failed to gather cluster state: ${e.message})") }
 
+            appendLine("--- cluster music ---")
+            try {
+                clusterMusicBridge.dumpLines().forEach { appendLine(it) }
+            } catch (e: Exception) { appendLine("(failed to gather cluster music state: ${e.message})") }
+
             appendLine("--- trip counters ---")
             try {
                 // Live-count integrity: km/kWh only tick when liveWholeSession=true and
@@ -2242,15 +2608,36 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 ).getString(com.bydmate.app.data.autoservice.WifiDebuggingDialogAutoAllow.KEY_LAST_OUTCOME, null)
                 appendLine("a11y_auto_allow_last: ${autoAllowLast ?: "(none)"}")
                 val voicePrefs = appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                val voiceCompanions = voiceCompanionsFromCsv(
+                    voicePrefs.getString(SettingsRepository.KEY_VOICE_COMPANIONS, null))
                 appendLine(
                     "voice_ptt: enabled=${voicePrefs.getBoolean("voice_enabled", false)} " +
-                        "keycode=${voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)}"
+                        "keycode=${voicePrefs.getInt("voice_keycode", DEFAULT_VOICE_KEYCODE)} " +
+                        "companions=${voiceCompanionsToCsv(voiceCompanions).ifEmpty { "-" }}"
                 )
                 val clusterPrefs = appContext.getSharedPreferences(
                     com.bydmate.app.cluster.ClusterProjectionManager.PREFS_NAME, Context.MODE_PRIVATE)
                 appendLine("mirror_enabled: ${clusterPrefs.getBoolean(
                     com.bydmate.app.cluster.ClusterProjectionManager.KEY_MIRROR_ENABLED, false)}")
+                appendLine("split_key: enabled=${splitPreferences.isFeatureEnabled()} " +
+                    "keycode=${splitPreferences.getSteeringKeyCode()}")
+                appendLine(com.bydmate.app.cluster.SteeringWheelKeyService.keyCounters.line())
             } catch (e: Exception) { appendLine("(failed to gather steering key state: ${e.message})") }
+
+            appendLine("--- autostart ---")
+            try {
+                val bootPrefs = appContext.getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+                // The a11y recovery gate lives in the cluster prefs, where TrackingService keeps it.
+                val gatePrefs = appContext.getSharedPreferences(
+                    com.bydmate.app.cluster.ClusterProjectionManager.PREFS_NAME, Context.MODE_PRIVATE)
+                AutostartDiagnostics.format(
+                    chainLog = bootPrefs.getString(BootReceiver.KEY_CHAIN_LOG, null),
+                    failStreak = gatePrefs.getInt(com.bydmate.app.service.A11yRecoveryGate.KEY_FAIL_STREAK, 0),
+                    lastAttemptElapsedMs = gatePrefs.getLong(
+                        com.bydmate.app.service.A11yRecoveryGate.KEY_LAST_ATTEMPT_ELAPSED_MS, 0L),
+                    nowElapsedMs = android.os.SystemClock.elapsedRealtime(),
+                ).forEach { appendLine(it) }
+            } catch (e: Exception) { appendLine("(failed to gather autostart state: ${e.message})") }
 
             appendLine("--- native assistant packages ---")
             try {
@@ -2271,6 +2658,13 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
             appendLine("--- helper daemon ---")
             try {
                 appendLine("alive: ${helperDiag.alive?.toString() ?: "(unknown — probe timed out)"}")
+                // The car's own «Опц. содержимое → Навигация» gate (#269), read only.
+                appendLine("hud_navi_gate:")
+                HudDiagnostics.format(helperDiag.hud).forEach { appendLine(it) }
+                // The HUD master switch (#292) and the HUD type, read only.
+                appendLine(HudDiagnostics.switchLine(helperDiag.hudSwitch))
+                // The battery warm-up (#311): fitted or not, and whether the car permits it now, read only.
+                appendLine(BatteryPreheatDiagnostics.line(helperDiag.batteryPreheat))
                 // How the daemon is reachable: a registered service name, or the Binder it
                 // broadcast to us on firmwares that refuse addService (#64/#148).
                 val registered = com.bydmate.app.data.vehicle.helperServiceBinder() != null
@@ -2328,6 +2722,12 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 val lastPair = splitPreferences.getLastPair()
                 appendLine("last_pair: " + if (lastPair == null) "(none)" else
                     "narrow=${lastPair.narrowPkg} wide=${lastPair.widePkg} side=${lastPair.narrowSide}")
+                // last_pair = what the next start-from-saved opens: the session pair, else the menu one.
+                val menuPair = splitPreferences.getMenuPair()
+                val sessionPair = splitPreferences.getSessionPair()
+                appendLine("menu_pair: " + if (menuPair == null) "(none)" else "${menuPair.narrowPkg}+${menuPair.widePkg}")
+                appendLine("session_pair: " + if (sessionPair == null) "(none)" else
+                    "${sessionPair.narrowPkg}+${sessionPair.widePkg}")
                 when (val session = splitSessionManager.state.value) {
                     is com.bydmate.app.split.SplitSessionState.Idle -> appendLine("session: idle")
                     is com.bydmate.app.split.SplitSessionState.Active -> {
@@ -2352,6 +2752,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
             appendLine("--- windows ---")
             // Which write channel this firmware ended up on (#79): percent fids or CTRL.
             appendLine("window channel: ${windowChannelStore.winner()}")
+            WindowDiagnostics.format(helperDiag.windows).forEach { appendLine(it) }
 
             appendLine("--- seats ---")
             SeatsDiagnostics.format(helperDiag.seats).forEach { appendLine(it) }
@@ -2361,6 +2762,15 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
 
             appendLine("--- steering heat ---")
             SteeringHeatDiagnostics.format(helperDiag.steeringHeat).forEach { appendLine(it) }
+
+            // Rear seat heat (#327): the gate the editor's tiles follow, read only.
+            appendLine("--- rear seat heat ---")
+            try {
+                val catalog = fidCatalogManager.catalog
+                val items = RearSeatHeatDiagnostics.batchItems(RearSeatHeatDiagnostics.addresses(catalog))
+                val readings = if (items.isEmpty()) emptyList() else helperClient.readBatch(items)
+                RearSeatHeatDiagnostics.format(catalog, readings).forEach { appendLine(it) }
+            } catch (e: Exception) { appendLine("error: ${e.message}") }
 
             appendLine("--- fid resolve ---")
             try {
@@ -2397,6 +2807,12 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 telegramReporter.diagnosticsLines().forEach { appendLine(it) }
             } catch (e: Exception) { appendLine("error: ${e.message}") }
 
+            appendLine("--- vehicle writes ---")
+            try {
+                RecordingDumpFormat.vehicleWriteLines(vehicleWriteLogDao.getLatest(VEHICLE_WRITES_IN_DUMP))
+                    .forEach { appendLine(it) }
+            } catch (e: Exception) { appendLine("error: ${e.message}") }
+
             appendLine("--- fid push ---")
             try {
                 fidPushChannel.diagnosticsSnapshot().forEach { appendLine(it) }
@@ -2412,6 +2828,16 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 }
             } catch (e: Exception) { appendLine("error: ${e.message}") }
 
+            // The last manual block-fault scan, raw per address, and the daemon's scan state. Never scans.
+            appendLine("--- dtc scan ---")
+            try {
+                val prefs = appContext.getSharedPreferences(
+                    com.bydmate.app.data.dtc.DtcScanRepository.PREFS_NAME, Context.MODE_PRIVATE,
+                )
+                com.bydmate.app.data.dtc.DtcScanRepository.dumpLines(prefs, helperClient.dtcScanStatus())
+                    .forEach { appendLine(it) }
+            } catch (e: Exception) { appendLine("error: ${e.message}") }
+
             appendLine("--- last crash ---")
             try {
                 val crashes = CrashLog.read(appContext)
@@ -2424,6 +2850,13 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     }
                 }
             } catch (e: Exception) { appendLine("(failed to gather crash log: ${e.message})") }
+
+            // What the app did before this recording: logcat was cleared when it started.
+            appendLine("--- trace ---")
+            try {
+                val events = Trace.lines()
+                if (events.isEmpty()) appendLine("(none)") else events.forEach { appendLine(it) }
+            } catch (e: Exception) { appendLine("error: ${e.message}") }
 
             appendLine("===============================")
             appendLine()
@@ -2475,9 +2908,63 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                             appStrings.get(R.string.settings_log_saved, stopped.path, stopped.sizeKb)
                         } ?: it.logSaveStatus
                     }
-                    it.copy(isRecordingLogs = state.isRecording, logSaveStatus = status)
+                    it.copy(
+                        isRecordingLogs = state.isRecording,
+                        logSaveStatus = status,
+                        lastLogPath = state.lastStopped?.path,
+                    )
                 }
                 first = false
+            }
+        }
+    }
+
+    /**
+     * The upload's status lines, from the button and the automatic path alike (#324). A recording
+     * started during the upload owns the status line.
+     */
+    private fun observeLogSender() {
+        viewModelScope.launch {
+            logTelegramSender.sending.collect { sending -> _uiState.update { it.copy(logSending = sending) } }
+        }
+        viewModelScope.launch {
+            logTelegramSender.results.collect { status ->
+                _uiState.update { if (it.isRecordingLogs) it else it.copy(logSaveStatus = status) }
+            }
+        }
+    }
+
+    /** The saved-log button: the bound bot (#324), or the system share sheet without one (#380). */
+    fun sendLog() {
+        val route = com.bydmate.app.diagnostics.logSendRoute(botConfigured = _uiState.value.tgBackupBinding != null)
+        Log.i(TAG, "log send: route=$route")
+        when (route) {
+            com.bydmate.app.diagnostics.LogSendRoute.TELEGRAM -> sendLogToTelegram()
+            com.bydmate.app.diagnostics.LogSendRoute.SHARE_SHEET -> shareLog()
+        }
+    }
+
+    private fun shareLog() {
+        val path = _uiState.value.lastLogPath ?: return
+        try {
+            shareFile(File(path), "text/plain")
+        } catch (e: Exception) {
+            Log.w(TAG, "log share failed: ${e.javaClass.simpleName}")
+            _uiState.update { it.copy(logSaveStatus = appStrings.get(R.string.settings_error_with_message, e.message ?: "?")) }
+        }
+    }
+
+    /** Uploads the saved log to the bound bot chat once per tap; the file stays in Download (#324). */
+    fun sendLogToTelegram() {
+        val path = _uiState.value.lastLogPath ?: return
+        if (_uiState.value.logSending) return
+        // Set here, not only from the sender: a second tap before the upload starts is a no-op.
+        _uiState.update { it.copy(logSending = true) }
+        viewModelScope.launch {
+            try {
+                logTelegramSender.send(File(path))
+            } finally {
+                _uiState.update { it.copy(logSending = logTelegramSender.sending.value) }
             }
         }
     }
@@ -2712,6 +3199,17 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     _uiState.update { it.copy(tgReportOffEnabled = enabled, tgReportOffFields = fields) }
                 }
         }
+        viewModelScope.launch {
+            settingsRepository.observeTgLogAutoSendEnabled()
+                .collect { enabled -> _uiState.update { it.copy(tgLogAutoSendEnabled = enabled) } }
+        }
+    }
+
+    /** «Отправлять записанный лог в Telegram»: the sender reads it at the end of each recording. */
+    fun setTgLogAutoSendEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(tgLogAutoSendEnabled = enabled) }
+        Log.i(TAG_TG_REPORT, "log auto-send: enabled=$enabled")
+        viewModelScope.launch { settingsRepository.setTgLogAutoSendEnabled(enabled) }
     }
 
     /** «Отчёт при выключении машины»; phase B arms the helper daemon from these settings. */
@@ -2787,7 +3285,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 _uiState.update { it.copy(tgBackupCode = newBindCode(), tgBackupBotName = botName) }
                 return null
             }
-            telegramBackupSink.findPrivateChat(token, code).getOrElse { return tgBackupError(it) }
+            telegramBackupSink.findLinkChat(token, code).getOrElse { return tgBackupError(it) }
                 ?: return appStrings.get(R.string.settings_tg_backup_code_not_received)
         }
         telegramBackupSink.sendMessage(token, chat.id, appStrings.get(R.string.settings_tg_backup_greeting))
@@ -2983,6 +3481,19 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
 
 /** Human-readable name for [android.content.pm.PackageManager.getApplicationEnabledSetting] values. */
 /** Localized text for a [TelegramSinkException.key]; an unknown key is shown as is. */
+/**
+ * The apps «Навигатор для маршрутов» offers: the installed ones ([installed] from
+ * RouteNavigatorDiscovery.discover), plus the [saved] one while a manual package stands for it.
+ * Every app when none was detected, so a head unit the detection misreads still lets the driver
+ * choose. Pure.
+ */
+internal fun routeNavigatorOptions(installed: Map<String, List<String>>, saved: String, manualPackage: String): List<String> {
+    val all = com.bydmate.app.data.automation.RouteNavigatorUris.ALL
+    val detected = all.filter { installed[it].orEmpty().isNotEmpty() }
+    if (detected.isEmpty()) return all
+    return all.filter { it in detected || (it == saved && manualPackage.isNotBlank()) }
+}
+
 internal fun telegramErrorText(context: Context, key: String): String {
     if (key.startsWith("HTTP:")) return context.getString(R.string.settings_tg_error_http, key.removePrefix("HTTP:"))
     val res = when (TelegramError.entries.firstOrNull { it.name == key }) {

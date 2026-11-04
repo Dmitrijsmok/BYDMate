@@ -37,6 +37,7 @@ data class SeatCommand(val group: SeatGroup, val level: Int)
  * Values for competitor-sourced entries verified against competitor-actions.json
  * (app/src/main/assets/competitor-actions.json). See value comments below.
  */
+@Suppress("TooManyFunctions") // one parser per command family
 object CommandTranslator {
     data class Resolved(val actionName: String, val value: Int)
 
@@ -55,6 +56,14 @@ object CommandTranslator {
         "后左打开0"   to Resolved("window_rear_left_close",  2),
         "后右打开100" to Resolved("window_rear_right_open",  1),
         "后右打开0"   to Resolved("window_rear_right_close", 2),
+
+        // ── Windows (stop) ── value 3 of the per-door CTRL family (1=open, 2=close, 3=stop),
+        // the family both DiLink generations carry (#79). Used by the Alice bridge to halt a
+        // pane at an arbitrary percentage; a stop is never an open, so it is not speed-gated.
+        "主驾停止" to Resolved("window_driver_ctrl",     3),
+        "副驾停止" to Resolved("window_passenger_ctrl",  3),
+        "后左停止" to Resolved("window_rear_left_ctrl",  3),
+        "后右停止" to Resolved("window_rear_right_ctrl", 3),
 
         // ── Windows (vent, individual) ── crack one window to VENT_PCT via the
         // validated % path. The all-window vent (车窗通风) is a composite fan-out
@@ -75,7 +84,7 @@ object CommandTranslator {
         // ── Climate ── LIVE_VALIDATED (ac_on/ac_off/ac_cycle_*/ac_auto_*) ──────
         // ac_power fid 501219364: 0=off, 1=on (LIVE 2026-07-03, both directions
         // physically confirmed in-car). 设置温度<N> resolves dynamically over
-        // 16..30 in resolve(), so there are no per-temperature entries here (the
+        // 16..33 in resolve(), so there are no per-temperature entries here (the
         // old 18/20/22/25-only table missed every other value).
         "自动空调"    to Resolved("ac_on",         1),  // LIVE 2026-07-03: ac_power fid, 1=on
         "关闭空调"    to Resolved("ac_off",        0),  // LIVE 2026-07-03: ac_power fid, 0=off
@@ -98,6 +107,10 @@ object CommandTranslator {
         "吹脚"     to Resolved("ac_wind_mode", 3),
         "吹脚除霜" to Resolved("ac_wind_mode", 4),
         "除霜"     to Resolved("ac_wind_mode", 5),
+        // Values 6/7 of the same fid exist on some models only, so they sit on their own
+        // allowlist entry (ac_wind_mode_ext) and the 1..5 entry stays as narrow as it was.
+        "吹面吹脚除霜" to Resolved("ac_wind_mode_ext", 6),
+        "吹面除霜"     to Resolved("ac_wind_mode_ext", 7),
 
         // ── Locks ── LIVE_VALIDATED ───────────────────────────────────────────
         "车门上锁"  to Resolved("doors_lock",   2),
@@ -132,6 +145,9 @@ object CommandTranslator {
         // ── Sunshade ── LIVE_VALIDATED ────────────────────────────────────────
         "遮阳帘打开" to Resolved("sunshade_open",  1),
         "遮阳帘关闭" to Resolved("sunshade_close", 2),
+        // Half-open / stop: same fid, values 3/4 from the BYD SDK, not live-validated (#362).
+        "遮阳帘打开50" to Resolved("sunshade_half", 3),
+        "遮阳帘停止"   to Resolved("sunshade_stop", 4),
 
         // ── Interior / ambient light ── LIVE_VALIDATED (dev=1023 carve-out) ──────
         "打开车内灯" to Resolved("interior_light_on",  2),
@@ -156,6 +172,17 @@ object CommandTranslator {
         // dev=1000 fallback) instead of a bare write.
         "方向盘加热"   to Resolved("steering_heat_on",  2),
         "关闭方向盘加热" to Resolved("steering_heat_off", 1),
+
+        // ── HUD master switch (#292) ── CANDIDATE (dev=1023 carve-out, 1=on / 2=off) ──
+        // VehicleApiImpl routes both through HudSwitchChannel (HUD presence check + status readback).
+        "打开抬头显示" to Resolved("hud_on",  1),
+        "关闭抬头显示" to Resolved("hud_off", 2),
+
+        // ── Battery warm-up (#311) ── CANDIDATE (dev=1009 carve-out, 1=on / 2=off) ──
+        // VehicleApiImpl routes both through BatteryPreheatChannel (the stock toggle's checks +
+        // status readback).
+        "打开电池预热" to Resolved("battery_preheat_on",  1),
+        "关闭电池预热" to Resolved("battery_preheat_off", 2),
 
         // ── Drive mode ── dev=1023 carve-out, value = SETTING_PRESELECTED_DRIVING_MODE_SET ──
         // Names follow BYD's voice assistant (切换<name>成功); ECO模式 is the D+ string older
@@ -230,7 +257,8 @@ object CommandTranslator {
         composite[stripped]?.let { return it }
         table[stripped]?.let { return listOf(it) }
         // Dynamic temperature: 设置温度<N> → ac_temp_main, clamped to the validated
-        // 16..30 window (allowlist range-gates it anyway; clamping is friendlier).
+        // 16..33 window (allowlist range-gates it anyway; clamping is friendlier).
+        // 16 is Leopard 3's minimum; 33 is the Seagull maximum (2026-10-06).
         TEMP_REGEX.matchEntire(stripped)?.let { m ->
             val celsius = m.groupValues[1].toInt().coerceIn(TEMP_MIN, TEMP_MAX)
             return listOf(Resolved("ac_temp_main", celsius))
@@ -252,13 +280,21 @@ object CommandTranslator {
             val c = m.groupValues[1].toIntOrNull() ?: return emptyList()
             return fridgeHeat(c.coerceIn(FRIDGE_HEAT_MIN, FRIDGE_HEAT_MAX))
         }
+        // Dynamic window position: <door>打开<N> → window_<door>_pos for 1..99 (an exact share by
+        // local voice, the agent's window_*_position, the automation level row, Alice).
+        // 打开0 / 打开100 are the table's dedicated close / open fids. No clamp: 打开150 or 打开0100
+        // stay unknown, because the speed gate (ActionDispatcher.isWindowOpenCommand) does not
+        // take them for an open either.
+        WINDOW_POS_REGEX.matchEntire(stripped)?.let { m ->
+            return windowsPct(m.groupValues[2].toInt(), WINDOW_DOORS.getValue(m.groupValues[1]))
+        }
         return emptyList()
     }
 
     // Dynamic temperature command: 设置温度<N> (e.g. 设置温度24). Range-clamped in resolve().
     private val TEMP_REGEX = Regex("""设置温度(\d+)""")
     private const val TEMP_MIN = 16
-    private const val TEMP_MAX = 30
+    private const val TEMP_MAX = 33
 
     // Dynamic fan speed command: 风量<N> (e.g. 风量3). Range-clamped in resolve().
     private val FAN_REGEX = Regex("""风量(\d+)""")
@@ -273,12 +309,16 @@ object CommandTranslator {
     private const val FRIDGE_HEAT_MIN = 35
     private const val FRIDGE_HEAT_MAX = 50
 
+    // Dynamic per-door window position: 主驾打开30 (door prefix + percent 1..99, no leading zero).
+    private val WINDOW_POS_REGEX = Regex("""(主驾|副驾|后左|后右)打开([1-9]\d?)""")
+    private val WINDOW_DOORS = mapOf("主驾" to "driver", "副驾" to "passenger", "后左" to "rear_left", "后右" to "rear_right")
+
     // Vent = crack windows to this aperture % (validated per-door % path). Small
     // opening for fresh air; tune from user feedback. Stays under the >80 km/h gate.
     private const val VENT_PCT = 10
 
-    // Half = the 50 % detent, the only aperture between vent and full open that
-    // voice and the agent expose (arbitrary percentages are not offered).
+    // Half = the 50 % detent («наполовину»); a percentage the driver names goes through the
+    // dynamic <door>打开<N> path in resolve() instead.
     private const val HALF_PCT = 50
 
     /** Action names produced only by dynamic resolution (absent from [table]). */
@@ -316,6 +356,25 @@ object CommandTranslator {
             val m = Regex("""(\d)档""").matchEntire(tail) ?: return null
             val lvl = m.groupValues[1].toInt()
             return if (lvl in 1..5) SeatCommand(group, lvl) else null
+        }
+        return null
+    }
+
+    private val REAR_SEAT_HEAT_PREFIXES: Map<String, RearSeat> = mapOf(
+        "后左座椅加热" to RearSeat.LEFT,
+        "后右座椅加热" to RearSeat.RIGHT,
+    )
+
+    /** Parse a rear seat heat command (#327) into (seat, level), or null if not one. */
+    fun resolveRearSeatHeat(commandString: String): RearSeatCommand? {
+        val s = commandString.removePrefix("迪加")
+        for ((prefix, seat) in REAR_SEAT_HEAT_PREFIXES) {
+            if (!s.startsWith(prefix)) continue
+            val tail = s.removePrefix(prefix)
+            if (tail == "关闭") return RearSeatCommand(seat, 0)
+            val m = Regex("""(\d)档""").matchEntire(tail) ?: return null
+            val lvl = m.groupValues[1].toInt()
+            return if (lvl in 1..RearSeatHeat.MAX_LEVEL) RearSeatCommand(seat, lvl) else null
         }
         return null
     }

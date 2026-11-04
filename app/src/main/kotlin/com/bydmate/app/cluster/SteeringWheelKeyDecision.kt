@@ -66,47 +66,63 @@ fun learnDecision(keyCode: Int, isDown: Boolean): LearnAction {
     return if (isAssignable(keyCode)) LearnAction.CAPTURE else LearnAction.REJECT
 }
 
-const val DEFAULT_VOICE_KEYCODE = 320  // steering "voice" button on Leopard 3 (learnable)
+/**
+ * How long after a learned key's DOWN another key still counts as the same press. Some buttons
+ * send two keycodes per press (Atto 3 mic button: 304, plus 327 that the stock assistant reacts to).
+ */
+const val LEARN_COMPANION_WINDOW_MS = 300L
 
 /**
- * Double-press shortcut while Local BYDMate is selected. Hold the first press briefly instead
- * of starting Local immediately. A second DOWN edge cancels the pending Local start and routes
- * directly to Alice, so the two providers never compete for the microphone.
+ * Pure gate for the key right after a learn CAPTURE: true when [keyCode] is a companion of the
+ * learned [primaryKeyCode] press — a DOWN of a different, assignable key within
+ * [LEARN_COMPANION_WINDOW_MS] of the primary's last edge ([learnWindowAnchor]). Times are the
+ * events' uptime millis.
  */
-const val VOICE_DOUBLE_PRESS_WINDOW_MS = 250L
+fun isLearnCompanion(keyCode: Int, isDown: Boolean, primaryKeyCode: Int, primaryAtMs: Long, nowMs: Long): Boolean =
+    isDown && keyCode != primaryKeyCode && isAssignable(keyCode) &&
+        nowMs - primaryAtMs in 0..LEARN_COMPANION_WINDOW_MS
 
-fun isVoiceDoublePress(previousDownMs: Long, nowMs: Long): Boolean =
-    previousDownMs > 0L &&
-        nowMs >= previousDownMs &&
-        nowMs - previousDownMs <= VOICE_DOUBLE_PRESS_WINDOW_MS
+/**
+ * Start of the companion window after this key event: any edge of the learned key restarts it, so
+ * a companion sent after the primary's UP (Atto 3: 327 DOWN 3-59 ms after 304 UP) is caught
+ * however long the button was held. Another key leaves the window where it was.
+ */
+fun learnWindowAnchor(keyCode: Int, primaryKeyCode: Int, anchorMs: Long, eventMs: Long): Long =
+    if (keyCode == primaryKeyCode) eventMs else anchorMs
 
+const val DEFAULT_VOICE_KEYCODE = 320  // steering "voice" button on Leopard 3 (learnable)
 
 enum class VoiceKeyDecision { TRIGGER, CONSUME, IGNORE }
 
 /** Pure gate for the voice push-to-talk button. Independent of star/projection
  *  handling: TRIGGER on key-DOWN of the configured voice keycode while voice is enabled;
  *  CONSUME on that same key's UP edge — swallowed so it never falls through to the native
- *  BYD assistant, which owns the same hardware keycode. Any other key, or voice disabled,
- *  is IGNORE (pass through untouched). */
-fun voiceDecision(keyCode: Int, isDown: Boolean, voiceEnabled: Boolean, voiceKeyCode: Int): VoiceKeyDecision {
-    if (!voiceEnabled || keyCode != voiceKeyCode) return VoiceKeyDecision.IGNORE
+ *  BYD assistant, which owns the same hardware keycode. A [companions] code (sent by the same
+ *  press, learned with the button) is CONSUME on both edges, never TRIGGER. Any other key, or
+ *  voice disabled, is IGNORE (pass through untouched). */
+fun voiceDecision(
+    keyCode: Int,
+    isDown: Boolean,
+    voiceEnabled: Boolean,
+    voiceKeyCode: Int,
+    companions: Set<Int> = emptySet(),
+): VoiceKeyDecision {
+    if (!voiceEnabled) return VoiceKeyDecision.IGNORE
+    if (keyCode != voiceKeyCode) {
+        return if (keyCode in companions) VoiceKeyDecision.CONSUME else VoiceKeyDecision.IGNORE
+    }
     return if (isDown) VoiceKeyDecision.TRIGGER else VoiceKeyDecision.CONSUME
 }
 
-/**
- * DiLink 3 / Android 10 microphone key path observed in the field. The firmware emits 304 for
- * the actual press and also surfaces 327 on the same hardware path. Alice previously had an
- * inline special case for these codes, which meant the physical mic button only worked when
- * Alice was selected. Keep the firmware quirk provider-agnostic: 304 triggers whichever voice
- * provider BYDMate selected; 327 is swallowed so the stock BYD assistant does not also react.
- */
-fun diLink3VoiceDecision(keyCode: Int, isDown: Boolean, voiceEnabled: Boolean): VoiceKeyDecision {
-    if (!voiceEnabled) return VoiceKeyDecision.IGNORE
-    return when (keyCode) {
-        304 -> if (isDown) VoiceKeyDecision.TRIGGER else VoiceKeyDecision.CONSUME
-        327 -> VoiceKeyDecision.CONSUME
-        else -> VoiceKeyDecision.IGNORE
-    }
+/** Stored form of the voice button's companion codes: "304,327", "" when there are none. */
+fun voiceCompanionsToCsv(companions: Set<Int>): String = companions.sorted().joinToString(",")
+
+/** Reverse of [voiceCompanionsToCsv]. Anything unreadable is no companions at all, so a damaged
+ *  value can only fall back to the single-code behaviour, never swallow a random key. */
+fun voiceCompanionsFromCsv(csv: String?): Set<Int> {
+    if (csv.isNullOrEmpty()) return emptySet()
+    val codes = csv.split(',').map { it.toIntOrNull()?.takeIf { code -> code > 0 } }
+    return if (codes.any { it == null }) emptySet() else codes.filterNotNull().toSet()
 }
 
 /**
@@ -118,17 +134,23 @@ fun diLink3VoiceDecision(keyCode: Int, isDown: Boolean, voiceEnabled: Boolean): 
  */
 const val VOLUME_KNOB_PRESS_KEYCODE = 353
 
+/** The knob press as DiLink 3/4 firmware reports it (#326, #367: Han 2022, Seal 2022). */
+const val VOLUME_KNOB_PRESS_KEYCODE_DILINK4 = 293
+
+/** Every code a volume-knob press arrives as, across firmware generations. */
+val VOLUME_KNOB_PRESS_KEYCODES = setOf(VOLUME_KNOB_PRESS_KEYCODE, VOLUME_KNOB_PRESS_KEYCODE_DILINK4)
+
 /** What the a11y filter should do with a volume-knob press. */
 enum class KnobDecision { CONSUME_AND_PLAY_PAUSE, CONSUME, PASS_THROUGH }
 
 /**
  * Pure gate for the volume-knob press, shaped like [starDecision].
- * - feature off, or any key other than [VOLUME_KNOB_PRESS_KEYCODE] → PASS_THROUGH (native intact).
+ * - feature off, or any key outside [VOLUME_KNOB_PRESS_KEYCODES] → PASS_THROUGH (native intact).
  * - knob key, enabled: CONSUME_AND_PLAY_PAUSE on the DOWN edge, CONSUME on the UP edge (so the
  *   native source switch never fires on either edge).
  */
 fun knobDecision(keyCode: Int, isDown: Boolean, enabled: Boolean): KnobDecision {
-    if (!enabled || keyCode != VOLUME_KNOB_PRESS_KEYCODE) return KnobDecision.PASS_THROUGH
+    if (!enabled || keyCode !in VOLUME_KNOB_PRESS_KEYCODES) return KnobDecision.PASS_THROUGH
     return if (isDown) KnobDecision.CONSUME_AND_PLAY_PAUSE else KnobDecision.CONSUME
 }
 

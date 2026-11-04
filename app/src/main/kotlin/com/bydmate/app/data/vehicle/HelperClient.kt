@@ -4,13 +4,18 @@ import android.graphics.Rect
 import android.os.DeadObjectException
 import android.os.IBinder
 import android.os.Parcel
+import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import java.io.ByteArrayOutputStream
 import com.bydmate.app.data.autoservice.SentinelDecoder
+import com.bydmate.app.diagnostics.Trace
+import com.bydmate.app.diagnostics.TraceArea
 import com.bydmate.app.helper.HelperBinderHolder
 import com.bydmate.app.helper.DisplayDevice
 import com.bydmate.app.helper.HelperBinderProtocol
+import com.bydmate.app.helper.dtc.DtcScanStatus
+import com.bydmate.app.helper.dtc.readDtcScanStatus
 import com.bydmate.app.helper.offreport.OffReportStatus
 import com.bydmate.app.helper.offreport.readOffReportStatus
 import com.bydmate.app.helper.offreport.writeOffReportArm
@@ -51,6 +56,47 @@ internal fun helperServiceBinder(): IBinder? = try {
 
 /** One autoservice read request for HelperClient.readBatch: transact code (5=getInt, 7=getFloat bits), device, fid. */
 data class BatchReadItem(val tx: Int, val dev: Int, val fid: Int)
+
+/**
+ * TX_HUD_NAVI_STATUS answer: [outcome] is HelperBinderProtocol.HUD_NAVI_CALLED / _ABSENT / _THREW,
+ * [sdkReturn] what sendAutoNaviStatus returned when it was called.
+ */
+data class HudNaviReply(val outcome: Int, val sdkReturn: Int) {
+    /** The SDK took the status: called, and answered a non-negative code. */
+    val accepted: Boolean get() = outcome == HelperBinderProtocol.HUD_NAVI_CALLED && sdkReturn >= 0
+}
+
+/**
+ * TX_SET_SCREEN_BACKLIGHT answer: [outcome] is one of HelperBinderProtocol.SCREEN_BACKLIGHT_*,
+ * [status] the last getPowerScreenStatus read (0 = off, 1 = on, -1 = none), [detail] the method
+ * the daemon found and its reads, or the exception.
+ */
+data class ScreenBacklightReply(val outcome: Int, val status: Int, val detail: String)
+
+/**
+ * TX_SET_AUTO_VOICE answer (#353): [outcome] is one of HelperBinderProtocol.AUTO_VOICE_*, [detail]
+ * the amp type the daemon read and the call it made, or the exception.
+ */
+data class AutoVoiceReply(val outcome: Int, val detail: String)
+
+/** One TX_HUD_SDK call: the instrument SDK method way 3 makes after its raw writes, as OpenBYD does. */
+sealed class HudSdkCall(val method: Int, val sdkName: String) {
+    data class Guidance(val turnKind: Int, val distanceM: Int) :
+        HudSdkCall(HelperBinderProtocol.HUD_SDK_GUIDANCE, "sendSimpleGuidanceInfo")
+    data class PathName(val name: String) : HudSdkCall(HelperBinderProtocol.HUD_SDK_PATH_NAME, "sendNextPathName")
+    data class RestRoute(val hours: Int, val minutes: Int, val mileageM: Long) :
+        HudSdkCall(HelperBinderProtocol.HUD_SDK_REST_ROUTE, "sendRestRouteInfo")
+
+    /** The request after the method selector, in the order the daemon reads it. */
+    fun writeTo(p: Parcel) {
+        p.writeInt(method)
+        when (this) {
+            is Guidance -> { p.writeInt(turnKind); p.writeInt(distanceM) }
+            is PathName -> p.writeString(name)
+            is RestRoute -> { p.writeInt(hours); p.writeInt(minutes); p.writeLong(mileageM) }
+        }
+    }
+}
 
 /**
  * Windowing state of a running task as reported by TX_GET_TASK_STATE.
@@ -109,6 +155,55 @@ data class Split37AreaInfo(
     val wide: Split37Root?,
     val full: Split37Root?,
 )
+
+/**
+ * Diagnostic snapshot of one native split root and one task in it (TX_SPLIT37_ROOT_STATE), for
+ * the journal only. Components are short flattened names (`pkg/.Activity`); every field is null
+ * when the daemon could not read it. [children] are (taskId, name) in the framework's order.
+ */
+data class Split37RootState(
+    val rootTop: String?,
+    val rootVisible: Boolean?,
+    val children: List<Pair<Int, String>>?,
+    val taskVisible: Boolean?,
+    val taskTop: String?,
+)
+
+/** Sanity cap on TX_SPLIT37_ROOT_STATE children: a pane root holds a handful of tasks. */
+private const val MAX_SPLIT37_ROOT_CHILDREN = 64
+
+/** Parses a TX_SPLIT37_ROOT_STATE reply; null on a non-OK status or a truncated parcel. */
+private fun readSplit37RootState(reply: Parcel): Split37RootState? {
+    if (reply.dataAvail() < 4) return null
+    if (reply.readInt() != HelperBinderProtocol.SPLIT37_OK) return null
+    val rootTop = reply.readString()
+    if (reply.dataAvail() < 8) return null
+    val rootVisible = visibilityFlag(reply.readInt())
+    val count = reply.readInt()
+    // A count past any real root is a foreign or corrupt parcel, not children to allocate.
+    if (count > MAX_SPLIT37_ROOT_CHILDREN) return null
+    val children = if (count < 0) null else List(count) {
+        if (reply.dataAvail() < 4) return null
+        reply.readInt() to reply.readString().orEmpty()
+    }
+    if (reply.dataAvail() < 4) return null
+    val taskVisible = visibilityFlag(reply.readInt())
+    val taskTop = reply.readString()
+    return Split37RootState(
+        rootTop?.takeIf { it.isNotEmpty() },
+        rootVisible,
+        children,
+        taskVisible,
+        taskTop?.takeIf { it.isNotEmpty() },
+    )
+}
+
+/** Daemon visibility flag: 1 / 0, anything else (-1) = not read. */
+private fun visibilityFlag(value: Int): Boolean? = when (value) {
+    1 -> true
+    0 -> false
+    else -> null
+}
 
 /** Result of the daemon's direct freeform launch (TX_LAUNCH_FREEFORM). */
 enum class FreeformLaunchResult { OK, UNAVAILABLE, FAILED }
@@ -297,7 +392,8 @@ interface HelperClient {
     suspend fun getGlobalSetting(key: String): Int?
 
     /** Disable ([hidden]=true) or re-enable the native BYD assistant family via `pm disable-user/enable`
-     *  under shell uid. Daemon-whitelisted to com.byd.autovoice (+ .engine/.tts). Reversible. */
+     *  under shell uid. Daemon-whitelisted to com.byd.autovoice (+ .engine/.tts) and
+     *  com.byd.vrassistant. Reversible. */
     suspend fun setAppHidden(packageName: String, hidden: Boolean): Boolean
 
     /**
@@ -308,12 +404,37 @@ interface HelperClient {
      */
     suspend fun enableNotificationListenerAccess(): Boolean
 
+    /** First half of the listener rebind (#325): disallows our own listener through the daemon;
+     *  [enableNotificationListenerAccess] gives it back. False on an old daemon without the op. */
+    suspend fun disallowNotificationListener(): Boolean = false
+
     /** Powers the cluster compositor on/off via auto_container (Wave P). True on daemon status 0. */
     suspend fun setClusterContainerMode(on: Boolean): Boolean
 
     /** Enable or disable the Wi-Fi hotspot (TETHERING_WIFI) via the daemon (shell uid holds
      *  TETHER_PRIVILEGED). True on daemon status 0. Needs on-car validation. */
     suspend fun setHotspot(enable: Boolean): Boolean
+
+    /** Central screen backlight on / off inside the daemon (TX_SET_SCREEN_BACKLIGHT, #275). Null
+     *  when the daemon is unreachable or too old to know the transaction; [isAlive] tells the
+     *  two apart. */
+    suspend fun setScreenBacklight(on: Boolean): ScreenBacklightReply?
+
+    /** Stock-assistant voice duck state inside the daemon (TX_SET_AUTO_VOICE, #353).
+     *  Null when the daemon is unreachable; AUTO_VOICE_UNSUPPORTED when it is too old to know
+     *  the transaction. */
+    suspend fun setAutoVoiceActive(active: Boolean): AutoVoiceReply?
+
+    /** Starts the daemon's manual fault-code scan (TX_DTC_SCAN_START): 0 started, 1 busy, -1 refused,
+     *  -2 daemon too old to know the code; null when the daemon is unreachable. */
+    suspend fun dtcScanStart(gearDev: Int, gearFid: Int): Int? = null
+
+    /** State and raw answers of the fault-code scan (TX_DTC_SCAN_STATUS); null when unreachable. */
+    suspend fun dtcScanStatus(): DtcScanStatus? = null
+
+    /** Starts the daemon's erase of the stored codes of [addrs] (TX_DTC_ERASE_START): 0 started,
+     *  1 busy, -1 refused, -2 daemon too old to know the code; null when the daemon is unreachable. */
+    suspend fun dtcEraseStart(gearDev: Int, gearFid: Int, speedDev: Int, speedFid: Int, addrs: IntArray): Int? = null
 
     /**
      * Direct freeform launch: find-or-launch [packageName], switch its task to freeform,
@@ -506,6 +627,13 @@ interface HelperClient {
     suspend fun split37ChangeMode(mode: Int): Int?
 
     /**
+     * What stands in the split root [rootTaskId] and whether [taskId] is visible
+     * (TX_SPLIT37_ROOT_STATE) — a read for the journal, never a decision input. Null on any
+     * transport failure, any non-OK status and on a daemon that does not know the verb.
+     */
+    suspend fun split37RootState(rootTaskId: Int, taskId: Int): Split37RootState?
+
+    /**
      * Installs the fid push subscription (TX_PUSH_SUBSCRIBE): [callback] is the app binder the
      * daemon pushes events to, [subs] the resolved fid/device pairs. Returns the daemon's
      * per-fid outcome table, or null when the daemon is unreachable or does not know the verb.
@@ -546,14 +674,34 @@ interface HelperClient {
 
     /** Where report [id] stands in the daemon (TX_OFFREPORT_STATUS); null when there is no answer. */
     suspend fun offReportStatus(id: String): OffReportStatus?
+
+    /**
+     * BYDAutoInstrumentDevice.sendAutoNaviStatus([status]) inside the daemon (TX_HUD_NAVI_STATUS);
+     * [HelperBinderProtocol.HUD_NAVI_PROBE] only asks whether the firmware has the method. Null
+     * when the daemon is unreachable or too old to know the transaction; [isAlive] tells the two
+     * apart.
+     */
+    suspend fun hudNaviStatus(status: Int): HudNaviReply?
+
+    /** Way 3's instrument SDK [call] inside the daemon (TX_HUD_SDK); null when the daemon is
+     *  unreachable or too old to know the transaction. */
+    suspend fun hudSdk(call: HudSdkCall): HudNaviReply?
+
+    /** Raw autoservice setBuffer status (transact 14); null when the daemon is unreachable or too old. */
+    suspend fun writeBufferStatus(dev: Int, fid: Int, bytes: ByteArray): Int?
 }
 
 @Singleton
+@Suppress("LargeClass") // every app call into the shell-uid daemon, one transaction each
 open class HelperClientImpl @Inject constructor() : HelperClient {
     private val mutex = Mutex()
     @Volatile private var cached: IBinder? = null
     /** Last transport reported by [noteSource] — kept so the log line is printed only on change. */
     @Volatile private var lastSource: String? = null
+    /** The daemon binder the trace last reported, so it records a change, not every lookup. */
+    @Volatile private var tracedBinder: IBinder? = null
+    /** Which write lines reach logcat: every sparse write, a streaming fid once a minute. */
+    private val writeLogGate = WriteLogGate()
 
     /** Test seam: invoked right before every attempt to acquire [mutex] in [transactParsed],
      *  i.e. right before the write path takes the lock — lets a test observe "about to enter the
@@ -602,7 +750,12 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
         // 0 = accepted no-op (fid ineffective on this trim), <0 = error, null =
         // daemon unreachable. INFO so a "green" automation that physically did
         // nothing (no-op) is distinguishable from one that actually moved the actuator.
-        Log.i(TAG, "write dev=$dev fid=$fid value=$value status=$status accepted=${status != null && writeAccepted(status)}")
+        // Streaming writers (music card progress, HUD guidance) get a line a minute (WriteLogGate).
+        val accepted = status != null && writeAccepted(status)
+        writeLogGate.onWrite("$dev:$fid", status, accepted, SystemClock.elapsedRealtime())?.let { quiet ->
+            Log.i(TAG, "write dev=$dev fid=$fid value=$value status=$status accepted=$accepted" +
+                if (quiet > 0) " (+$quiet unlogged)" else "")
+        }
         return status
     }
 
@@ -738,6 +891,37 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
 
     override suspend fun setHotspot(enable: Boolean): Boolean =
         statusOk(HelperBinderProtocol.TX_SET_HOTSPOT) { it.writeInt(if (enable) 1 else 0) }
+
+    override suspend fun setScreenBacklight(on: Boolean): ScreenBacklightReply? =
+        transactParsed(HelperBinderProtocol.TX_SET_SCREEN_BACKLIGHT, { it.writeInt(if (on) 1 else 0) }) { reply ->
+            if (reply.dataAvail() < 8) return@transactParsed null
+            ScreenBacklightReply(reply.readInt(), reply.readInt(), reply.readString().orEmpty())
+        }
+
+    // Only the wait for the channel is bounded, not the transact: a timeout cannot interrupt a
+    // blocking binder.transact, it would only drop an answer the daemon already gave, and a lost
+    // APPLIED leaves AutoVoiceDuck's media fallback on for the whole session (#353). The caller
+    // (AutoVoiceDuck's own queue) waits for the real reply; a dead daemon fails the transact at once.
+    override suspend fun setAutoVoiceActive(active: Boolean): AutoVoiceReply? =
+        withContext(Dispatchers.IO) {
+            if (withTimeoutOrNull(AUTO_VOICE_LOCK_WAIT_MS) { mutex.lock() } == null) {
+                Log.w(TAG, "setAutoVoiceActive: helper channel busy for ${AUTO_VOICE_LOCK_WAIT_MS}ms, not sent")
+                return@withContext null
+            }
+            try {
+                // A daemon started by an older APK does not handle the code: same as a firmware
+                // without the method for the caller (fallback, verdict cached, marker cleared).
+                transactBodyUnlocked(
+                    HelperBinderProtocol.TX_SET_AUTO_VOICE, { it.writeInt(if (active) 1 else 0) },
+                    notHandled = AutoVoiceReply(HelperBinderProtocol.AUTO_VOICE_UNSUPPORTED, "daemon does not handle TX_SET_AUTO_VOICE"),
+                ) { reply ->
+                    if (reply.dataAvail() < 4) return@transactBodyUnlocked null
+                    AutoVoiceReply(reply.readInt(), reply.readString().orEmpty())
+                }
+            } finally {
+                mutex.unlock()
+            }
+        }
 
     // Two-stage budget instead of the single transactParsed timeout: the daemon plans its own work
     // against FORCE_TIMEOUT_MS (~9.5s cold-start launch retry loop, then the pin loop, the grace
@@ -1064,6 +1248,11 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
             if (status == HelperBinderProtocol.SPLIT37_OK) areaMode else null
         }
 
+    override suspend fun split37RootState(rootTaskId: Int, taskId: Int): Split37RootState? =
+        transactParsed(HelperBinderProtocol.TX_SPLIT37_ROOT_STATE, { d ->
+            d.writeInt(rootTaskId); d.writeInt(taskId)
+        }, parse = ::readSplit37RootState)
+
     /** Reads one (rootTaskId, l, t, r, b) block of a TX_SPLIT37_AREA_INFO reply; null = area absent. */
     private fun readSplit37Root(reply: Parcel): Split37Root? {
         val rootTaskId = reply.readInt()
@@ -1085,6 +1274,12 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
         transactParsed(HelperBinderProtocol.TX_ENABLE_NOTIFICATION_LISTENER, { }, timeoutMs = FORCE_TIMEOUT_MS) { reply ->
             val status = if (reply.dataAvail() >= 4) reply.readInt() else return@transactParsed false
             status == 0
+        } ?: false
+
+    // FORCE_TIMEOUT_MS like the allow above: one `cmd` process spawn, slow on a cold head unit.
+    override suspend fun disallowNotificationListener(): Boolean =
+        transactParsed(HelperBinderProtocol.TX_DISALLOW_NOTIFICATION_LISTENER, { }, timeoutMs = FORCE_TIMEOUT_MS) { reply ->
+            if (reply.dataAvail() >= 4) reply.readInt() == 0 else false
         } ?: false
 
     override suspend fun pushSubscribe(callback: IBinder, subs: List<FidPushSub>): List<FidPushResult>? =
@@ -1130,6 +1325,43 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
             readRecStatus(reply)
         }
 
+    // transactParsed's path, plus the notHandled answer: a daemon spawned by an older APK does
+    // not know the code (transact returns false) and the caller tells that apart from unreachable.
+    override suspend fun dtcScanStart(gearDev: Int, gearFid: Int): Int? =
+        withContext(Dispatchers.IO) {
+            withTimeoutOrNull(REQ_TIMEOUT_MS) {
+                onBeforeLock?.invoke()
+                mutex.withLock {
+                    transactBodyUnlocked(
+                        HelperBinderProtocol.TX_DTC_SCAN_START, { it.writeInt(gearDev); it.writeInt(gearFid) },
+                        notHandled = DTC_SCAN_NOT_HANDLED,
+                    ) { if (it.dataAvail() < 4) null else it.readInt() }
+                }
+            }
+        }
+
+    override suspend fun dtcScanStatus(): DtcScanStatus? =
+        transactParsed(HelperBinderProtocol.TX_DTC_SCAN_STATUS, { }, parse = ::readDtcScanStatus)
+
+    // dtcScanStart's path: an older daemon answers notHandled, which the caller reports as outdated.
+    override suspend fun dtcEraseStart(gearDev: Int, gearFid: Int, speedDev: Int, speedFid: Int, addrs: IntArray): Int? =
+        withContext(Dispatchers.IO) {
+            withTimeoutOrNull(REQ_TIMEOUT_MS) {
+                onBeforeLock?.invoke()
+                mutex.withLock {
+                    transactBodyUnlocked(
+                        HelperBinderProtocol.TX_DTC_ERASE_START,
+                        { p ->
+                            p.writeInt(gearDev); p.writeInt(gearFid)
+                            p.writeInt(speedDev); p.writeInt(speedFid)
+                            p.writeIntArray(addrs)
+                        },
+                        notHandled = DTC_SCAN_NOT_HANDLED,
+                    ) { if (it.dataAvail() < 4) null else it.readInt() }
+                }
+            }
+        }
+
     override suspend fun offReportArm(id: String, token: String, chatId: Long, text: String, lateMark: String): Boolean =
         transactParsed(
             HelperBinderProtocol.TX_OFFREPORT_ARM,
@@ -1149,6 +1381,32 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
             readOffReportStatus(reply)
         }
 
+    override suspend fun hudNaviStatus(status: Int): HudNaviReply? {
+        val reply = transact(HelperBinderProtocol.TX_HUD_NAVI_STATUS) { it.writeInt(status) }
+            ?.let { (outcome, sdkReturn) -> HudNaviReply(outcome, sdkReturn) }
+        Log.i(TAG, "hudNaviStatus status=$status outcome=${reply?.outcome} ret=${reply?.sdkReturn}")
+        return reply
+    }
+
+    // No line per call: way 3 counts the answers and logs them once per route.
+    override suspend fun hudSdk(call: HudSdkCall): HudNaviReply? =
+        transact(HelperBinderProtocol.TX_HUD_SDK) { call.writeTo(it) }
+            ?.let { (outcome, sdkReturn) -> HudNaviReply(outcome, sdkReturn) }
+
+    override suspend fun writeBufferStatus(dev: Int, fid: Int, bytes: ByteArray): Int? {
+        val status = transact(HelperBinderProtocol.TX_WRITE_BUFFER) {
+            it.writeInt(dev); it.writeInt(fid); it.writeByteArray(bytes)
+        }?.first
+        // Same raw autoservice status convention as writeStatus, forwarded untouched; null also
+        // covers a daemon too old to know TX_WRITE_BUFFER (transact returns false).
+        val accepted = status != null && writeAccepted(status)
+        writeLogGate.onWrite("buf:$dev:$fid", status, accepted, SystemClock.elapsedRealtime())?.let { quiet ->
+            Log.i(TAG, "writeBuffer dev=$dev fid=$fid bytes=${bytes.size} status=$status accepted=$accepted" +
+                if (quiet > 0) " (+$quiet unlogged)" else "")
+        }
+        return status
+    }
+
     /** (status,value) reply; true iff status == 0. Shared by the boolean projection ops. */
     private suspend fun statusOk(code: Int, writeArgs: (Parcel) -> Unit): Boolean =
         transact(code, writeArgs)?.let { (status, _) -> readAccepted(status) } ?: false
@@ -1164,7 +1422,7 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
         withContext(Dispatchers.IO) {
             withTimeoutOrNull(timeoutMs) {
                 onBeforeLock?.invoke()
-                mutex.withLock { transactBodyUnlocked(code, writeArgs, beforeSend, parse) }
+                mutex.withLock { transactBodyUnlocked(code, writeArgs, beforeSend, parse = parse) }
             }
         }
 
@@ -1176,11 +1434,14 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
      * verdict from before the retry never reaches the second send (2026-09-27, review round 2).
      * It is handed [lockedReader], bound to THIS already-held lock via a direct
      * [transactBodyUnlocked] call, never [readBatch] (which would re-take the mutex and deadlock).
+     * [notHandled] is returned instead of null when the daemon refuses the code (uid gate, or a
+     * daemon too old to know it).
      */
     private suspend fun <T> transactBodyUnlocked(
         code: Int,
         writeArgs: (Parcel) -> Unit,
         beforeSend: (suspend (LockedReader) -> Boolean)? = null,
+        notHandled: T? = null,
         parse: (Parcel) -> T?,
     ): T? {
         repeat(2) { attempt ->
@@ -1192,7 +1453,7 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
                 data.writeInterfaceToken(HelperBinderProtocol.DESCRIPTOR)
                 writeArgs(data)
                 val ok = binder.transact(code, data, reply, 0)
-                if (!ok) return null                          // uid gate rejected / not handled
+                if (!ok) return notHandled                    // uid gate rejected / not handled
                 return parse(reply)
             } catch (e: DeadObjectException) {
                 cached = null                                 // stale binder; loop re-resolves once
@@ -1253,7 +1514,16 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
 
     private fun ensureBinder(): IBinder? {
         cached?.takeIf { it.isBinderAlive }?.let { return it }
-        return resolveBinder()?.also { cached = it }
+        return resolveBinder()?.also { cached = it }.also(::traceBinder)
+    }
+
+    /** Trace: the daemon went away, came up, or both (it restarted between two lookups). */
+    private fun traceBinder(binder: IBinder?) {
+        val was = tracedBinder
+        if (binder === was) return
+        tracedBinder = binder
+        if (was != null) Trace.event(TraceArea.APP, "helper-lost")
+        if (binder != null) Trace.event(TraceArea.APP, "helper-connected", "via" to lastSource)
     }
 
     /**
@@ -1301,6 +1571,8 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
 
         private const val TAG = "HelperClient"
         private const val REQ_TIMEOUT_MS = 2000L
+        /** dtcScanStart's / dtcEraseStart's answer from a daemon that does not know the code. */
+        private const val DTC_SCAN_NOT_HANDLED = -2
         /** Budget for a [writeStatus] beforeSend guard (e.g. DriveModeChannel's terrain speed
          *  re-check): well under REQ_TIMEOUT_MS so a slow guard cannot hold the transport mutex
          *  for the whole shared write budget, or make a caller behind it wait the full 2 s just
@@ -1319,6 +1591,9 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
          *  FORCE_TIMEOUT_MS so a queued launch still gets the full daemon budget; the caller's
          *  worst case is the sum (20s), which the split/cluster callers absorb fail-soft. */
         private const val MUTEX_WAIT_MS = 5_000L
+        /** How long [setAutoVoiceActive] waits for the channel; NO_ANSWER after that, which
+         *  AutoVoiceDuck retries for an off call. */
+        private const val AUTO_VOICE_LOCK_WAIT_MS = 5_000L
         /** TX_READ_BATCH budget: 58 in-process transacts typically take ~100 ms; 5 s is a 50× margin. */
         const val BATCH_TIMEOUT_MS = 5_000L
         /** TX_RAISE_FREEFORM_TASK budget: two shell spawns (resolve-activity + am start).

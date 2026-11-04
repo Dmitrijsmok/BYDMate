@@ -42,7 +42,11 @@ import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.data.remote.IternioTelemetryClient
 import com.bydmate.app.data.remote.WebhookTelemetryClient
 import com.bydmate.app.data.repository.ChargeRepository
+import com.bydmate.app.diagnostics.Trace
+import com.bydmate.app.diagnostics.TraceArea
 import com.bydmate.app.helper.HelperBinderHolder
+import com.bydmate.app.domain.tracker.RecentTrack
+import com.bydmate.app.domain.tracker.TrackPoint
 import com.bydmate.app.domain.tracker.TripState
 import com.bydmate.app.domain.tracker.TripTracker
 import com.bydmate.app.domain.calculator.BigNumberCalculator
@@ -56,6 +60,7 @@ import com.bydmate.app.domain.calculator.RangeEstimate
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.workDataOf
 import com.bydmate.app.BuildConfig
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -66,6 +71,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
@@ -78,6 +85,7 @@ import org.json.JSONObject
 class TrackingService : Service(), LocationListener {
 
     @Inject lateinit var parsReader: ParsReader
+    @Inject lateinit var vehicleWriteLogDao: com.bydmate.app.data.local.dao.VehicleWriteLogDao
     @Inject lateinit var tripTracker: TripTracker
     @Inject lateinit var chargeRepository: ChargeRepository
     @Inject lateinit var tripRepository: com.bydmate.app.data.repository.TripRepository
@@ -97,6 +105,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var cameraStateMonitor: com.bydmate.app.data.camera.CameraStateMonitor
     @Inject lateinit var adbOnDeviceClient: com.bydmate.app.data.autoservice.AdbOnDeviceClient
     @Inject lateinit var adbRestoreManager: com.bydmate.app.data.autoservice.AdbRestoreManager
+    @Inject lateinit var cloudOverWifiManager: com.bydmate.app.data.autoservice.CloudOverWifiManager
     @Inject lateinit var adbVerdictMonitor: com.bydmate.app.data.autoservice.AdbVerdictMonitor
     @Inject lateinit var iternioTelemetryClient: IternioTelemetryClient
     @Inject lateinit var webhookTelemetryClient: WebhookTelemetryClient
@@ -116,15 +125,22 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var ttsModelManager: com.bydmate.app.voice.TtsModelManager
     @Inject lateinit var ttsEngine: com.bydmate.app.voice.TtsEngine
     @Inject lateinit var audioCapture: com.bydmate.app.voice.AudioCapture
+    @Inject lateinit var autoVoiceDuck: com.bydmate.app.voice.AutoVoiceDuck
     @Inject lateinit var hudController: com.bydmate.app.hud.HudController
     @Inject lateinit var fidPushChannel: com.bydmate.app.data.push.FidPushChannel
     @Inject lateinit var blindSpotController: com.bydmate.app.camera.BlindSpotController
+    @Inject lateinit var clusterMusicBridge: com.bydmate.app.media.ClusterMusicBridge
     @Inject lateinit var logRecorder: com.bydmate.app.diagnostics.LogRecorder
+    @Inject lateinit var splitPreferences: com.bydmate.app.split.SplitPreferences
+    @Inject lateinit var logTelegramSender: com.bydmate.app.diagnostics.LogTelegramSender
     @Inject lateinit var autoBackupScheduler: com.bydmate.app.data.backup.AutoBackupScheduler
     @Inject lateinit var postRestoreCheck: com.bydmate.app.data.backup.PostRestoreCheck
     @Inject lateinit var appStrings: com.bydmate.app.util.AppStrings
     @Inject lateinit var telegramReporter: com.bydmate.app.data.telegram.TelegramReporter
     @Inject lateinit var powerOffArmer: com.bydmate.app.data.telegram.PowerOffArmer
+    @Inject lateinit var vehicleKindMonitor: com.bydmate.app.data.nativestack.VehicleKindMonitor
+    @Inject lateinit var counterSnapshotWriter: com.bydmate.app.data.trips.CounterSnapshotWriter
+    @Inject lateinit var lastStateDao: com.bydmate.app.data.local.dao.LastStateDao
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pollingJob: Job? = null
@@ -160,6 +176,8 @@ class TrackingService : Service(), LocationListener {
     // estimate() runs on every ~3s poll tick.
     private var lastLoggedRangeKm: Int? = null
     @Volatile private var lastGuidanceGrantRearmTs: Long = 0L
+    // One listener rebind (#325) at a time: the guidance check may come while the startup one runs.
+    private val notifRebindRunning = java.util.concurrent.atomic.AtomicBoolean(false)
     // Live charging-end detector. We track gun-connect state across polls and
     // fire runCatchUp on the connected→disconnected edge. The gun signal is
     // sourced from autoservice (system SDK) — DiPlus' chargeGunState is
@@ -223,6 +241,9 @@ class TrackingService : Service(), LocationListener {
     // (exponential backoff). We refuse to send until `now >= iternioCooldownUntilMs`.
     @Volatile private var iternioCooldownUntilMs: Long = 0L
     @Volatile private var iternioConsecutive5xx: Int = 0
+    // Sends between two summary lines, and the 10-min sample of a send's contents.
+    private val iternioTally = com.bydmate.app.data.remote.SendTally()
+    private val iternioLogThrottle = com.bydmate.app.data.autoservice.LogThrottle(com.bydmate.app.data.remote.SendTally.WINDOW_MS)
     // Last cadence state we logged. A trip log has to show the moment the app decided
     // «стоим» — the interval change is otherwise invisible from the outside.
     @Volatile private var lastTelemetryState: IternioIntervalPolicy.TelemetryState? = null
@@ -230,6 +251,10 @@ class TrackingService : Service(), LocationListener {
     // Flat 60 s after any failure — a dead URL then costs one request per minute
     // instead of one per second while driving.
     @Volatile private var webhookCooldownUntilMs: Long = 0L
+
+    // onStartCommand calls since onCreate, main thread only: tells the start that created the
+    // service apart from repeats on a running one in the trace.
+    private var startCommands = 0
 
     // Self-heal engines for daemon-backed grants. Lazy so they capture the service context only
     // after onCreate, and are never instantiated for callers that short-circuit before use.
@@ -279,6 +304,8 @@ class TrackingService : Service(), LocationListener {
         private const val TAG = "TrackingService"
         private const val NOTIFICATION_ID = 1
         private const val A11Y_ATTEMPTS_ANDROID10 = 2
+        private const val A11Y_RECOVERY_TRACE_FLUSH_MS = 500L
+        private const val VEHICLE_WRITE_LOG_KEEP = 500
         private const val CHANNEL_ID = "bydmate_tracking"
         // Opt-in "quiet" channel (IMPORTANCE_MIN): the mandatory foreground notification collapses
         // into the shade's silent list with no status-bar icon. Off by default - existing users keep
@@ -303,6 +330,11 @@ class TrackingService : Service(), LocationListener {
         // self-heal run per 10 min at most, so a permanently-failing grant can't
         // hammer the daemon for a whole trip.
         private const val GUIDANCE_GRANT_REARM_MS = 600_000L
+        // After a listener rebind (#325): when to look whether the framework bound it.
+        private const val NOTIF_REBIND_RECHECK_MS = 5_000L
+
+        /** Per process, not per service instance: MAX_ATTEMPTS counts this process's rebinds (#325). */
+        @Volatile private var notifListenerRebinder: com.bydmate.app.media.NotificationListenerRebinder? = null
         // Resuming a log recording interrupted by ignition-off: a couple of retries
         // cover the storage mount lagging the service start, then we stop trying.
         private const val LOG_RESUME_ATTEMPTS = 3
@@ -413,6 +445,9 @@ class TrackingService : Service(), LocationListener {
         @Volatile internal var lastLocationFix: LocationFix? = null
             private set
 
+        /** The fixes of the last minutes, for the voice agent's direction of travel. */
+        internal val recentTrack = RecentTrack()
+
         // GPS fix older than this is not forwarded to ABRP: a stale coordinate would
         // pin the car marker to an old position, which is worse than sending none.
         private const val TELEMETRY_LOCATION_FRESH_MS = 60_000L
@@ -509,13 +544,14 @@ class TrackingService : Service(), LocationListener {
          * Same shape as [fireAutomationButton]; matched count is diagnostics only
          * (the key was already consumed by the time the rules run).
          */
-        fun fireSteeringKey(keyCode: Int, onResult: (matched: Int) -> Unit) {
+        fun fireSteeringKey(keyCode: Int, cause: Long, onResult: (matched: Int) -> Unit) {
             val svc = instance
             if (svc == null) {
                 onResult(0)
                 return
             }
-            svc.serviceScope.launch {
+            // The key press is the cause of every rule line the engine traces for it.
+            svc.serviceScope.launch(Trace.causedBy(cause)) {
                 val matched = try {
                     svc.automationEngine.onSteeringKey(keyCode)
                 } catch (e: Exception) {
@@ -534,8 +570,10 @@ class TrackingService : Service(), LocationListener {
         fun steeringKeyAssigned(keyCode: Int): Boolean =
             instance?.automationEngine?.steeringKeyCodes?.value?.contains(keyCode) == true
 
-        fun start(context: Context) {
+        /** [trigger] names the entry point for the trace (see [AutostartTrace]). */
+        fun start(context: Context, trigger: String) {
             val intent = Intent(context, TrackingService::class.java)
+                .putExtra(AutostartTrace.EXTRA_TRIGGER, trigger)
             context.startForegroundService(intent)
         }
 
@@ -547,6 +585,8 @@ class TrackingService : Service(), LocationListener {
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "onCreate: starting TrackingService")
+        Trace.event(TraceArea.APP, "service-start")
+        com.bydmate.app.platform.LegacyHeadUnit.noteServiceStart()
         ChainLog.append(this, "TrackingService onCreate")
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification(appStrings.get(R.string.service_foreground_content_starting)))
@@ -558,6 +598,12 @@ class TrackingService : Service(), LocationListener {
         hudController.startIfEnabled()
         // Rule journal retention: 30 days, 2000 rows.
         serviceScope.launch { automationEngine.pruneJournal() }
+        // Vehicle write audit rows: the newest 500 (the dump shows 40), nothing else bounds them.
+        serviceScope.launch {
+            runCatching { vehicleWriteLogDao.trimTo(VEHICLE_WRITE_LOG_KEEP) }
+                .onSuccess { if (it > 0) Log.i(TAG, "vehicle_write_log trimmed: $it rows") }
+                .onFailure { Log.w(TAG, "vehicle_write_log trim failed: ${it.javaClass.simpleName}") }
+        }
 
         // A daemon can be spawned by any ensureRunning() caller (GrantSelfHeal reassert, Settings,
         // cluster) after the startup resolve already failed with "daemon unreachable" — crazyhack's
@@ -580,7 +626,9 @@ class TrackingService : Service(), LocationListener {
             }
             // A binder that just arrived carries no subscription yet: the daemon clears its
             // listener table when it dies, and a fresh one starts empty.
-            serviceScope.launch { fidPushChannel.resubscribe("binder accepted") }
+            serviceScope.launch { fidPushChannel.resubscribe("binder accepted") { fidCatalogManager.catalog } }
+            // An off call of the firmware voice duck that found no daemon lands now (#353).
+            runCatching { autoVoiceDuck.recoverStuck() }
             // Tell the daemon we hold its binder so it stops re-announcing it (#64/#148).
             // Must not block the receiver thread — registerClient is a binder transact.
             serviceScope.launch { helperClient.registerClient() }
@@ -673,6 +721,12 @@ class TrackingService : Service(), LocationListener {
             try {
                 val ok = helperBootstrap.ensureRunning()
                 Log.i(TAG, "HelperBootstrap.ensureRunning → $ok")
+                // Time zone lock (#379): re-assert auto_time_zone=0 if the user turned it on.
+                if (ok) {
+                    runCatching {
+                        com.bydmate.app.data.settings.TimezoneLock.create(this@TrackingService, helperClient).onServiceStart()
+                    }.onFailure { Log.w(TAG, "TimezoneLock: service start failed: ${it.message}") }
+                }
                 // First start after a backup restore: re-grant the overlay through the daemon
                 // that is now up, report the rest to the dialog in MainActivity.
                 serviceScope.launch {
@@ -684,6 +738,10 @@ class TrackingService : Service(), LocationListener {
                 }
                 adbVerdictMonitor.recompute()
                 ChainLog.append(this@TrackingService, "Helper daemon: ${if (ok) "alive" else "unreachable"}")
+                // Companion of restoreStuckDuck() above (#353): turn the firmware voice duck off
+                // if a process died with it on. Needs the daemon, hence here; without an answer
+                // the duck retries, and so does every later daemon arrival.
+                runCatching { autoVoiceDuck.recoverStuck() }
                 // Not gated on ok: a cached catalog resolves over the ADB read path without the
                 // daemon, and without one the call just returns and the respawn path retries.
                 resolveFidCatalog()
@@ -707,13 +765,14 @@ class TrackingService : Service(), LocationListener {
                         "")
                     if (pref.isNotEmpty()) {
                         val disabled = pref == "true"
+                        // SteeringWheelKeyService reads this to route the wheel button to Alice
+                        // while the stock assistant is taken over.
                         getSharedPreferences("voice", Context.MODE_PRIVATE)
                             .edit()
                             .putBoolean("alice_native_takeover", disabled)
                             .apply()
-                        helperClient.setAppHidden("com.byd.autovoice", disabled)
-                        val vrBlocked = helperClient.setAppHidden("com.byd.vrassistant", disabled)
-                        Log.i(TAG, "ALICE4_5_VRASSISTANT_BLOCK startup=$vrBlocked disabled=$disabled")
+                        com.bydmate.app.data.vehicle.NativeAssistant.setDisabled(
+                            helperClient, packageManager, disabled)
                     }
                 }
                 // Power down a cluster compositor left "on" by a car shutdown mid-projection —
@@ -815,6 +874,12 @@ class TrackingService : Service(), LocationListener {
         // The power-off report: keeps the helper daemon armed while the car is on (it sends the
         // report itself at the power-off, when this process is already killed).
         serviceScope.launch { powerOffArmer.run() }
+        // A log recording that ends for good goes to the bot when the user asked for it (#324).
+        serviceScope.launch { logTelegramSender.run() }
+        // Car type (EV / DM-i hybrid): cache first, then a read round; the poll tick continues it.
+        serviceScope.launch { vehicleKindMonitor.onServiceStart(System.currentTimeMillis()) }
+        // Car model code (AutoType): read once per process, logged for the DTC descriptions.
+        serviceScope.launch { com.bydmate.app.data.dtc.CarAutoType.read(helperClient) }
         startPolling()
         startCameraMonitor()
         // Pushed fid values are laid into the live snapshot as they arrive; the poll above is
@@ -823,17 +888,26 @@ class TrackingService : Service(), LocationListener {
         // Blind-spot pipeline: idle until the poll below reports the car near the speed
         // threshold, and only when the feature is switched on (default off).
         blindSpotController.start(serviceScope)
+        // Cluster music card: mirrors Yandex music the stock controller leaves blank.
+        clusterMusicBridge.start(serviceScope) { reason -> notificationListenerGrant.ensure(reason) }
+        // #325: an approved listener the framework never bound after a car start. Healthy starts
+        // bind within ~10 s, so this one check does nothing on them.
+        serviceScope.launch {
+            delay(com.bydmate.app.media.NotificationListenerHealth.GRACE_MS)
+            checkNotificationListenerBinding("startup")
+        }
         instance = this
         _isRunning.value = true
         adbVerdictMonitor.onServiceStarted()
         ChainLog.append(this, "TrackingService fully started")
 
-        // Start Smart Home polling if configured
+        // Smart Home (Alice bridge) polling follows its setting while the service runs, so
+        // switching it in Settings takes effect without a restart.
         serviceScope.launch {
-            val enabled = settingsRepository.getString(
-                com.bydmate.app.data.repository.SettingsRepository.KEY_ALICE_ENABLED, "false"
-            ) == "true"
-            if (enabled) alicePollingManager.start()
+            settingsRepository.observeString(com.bydmate.app.data.repository.SettingsRepository.KEY_ALICE_ENABLED)
+                .map { it == "true" }
+                .distinctUntilChanged()
+                .collect { enabled -> if (enabled) alicePollingManager.start() else alicePollingManager.stop() }
         }
 
         // v2.0: event-based sync on service start
@@ -920,7 +994,7 @@ class TrackingService : Service(), LocationListener {
         val applied = com.bydmate.app.data.push.FidPushApplier.patch(
             _lastData, field, event.intValue, event.doubleValue,
         )
-        if (applied && pushLogThrottle.shouldLog(field)) {
+        if (applied && pushLogThrottleFor(field).shouldLog(field)) {
             Log.i("FidPush", "push fid=${event.fid} $field=${event.intValue}/${event.doubleValue} applied")
         }
         if (applied) _lastData.value?.let(beltProbeLog::onSnapshot)
@@ -930,7 +1004,7 @@ class TrackingService : Service(), LocationListener {
         if (applied && field in PUSH_EVALUATE_FIELDS) {
             // Throttled on its own key: a window travelling end to end pushes its percent
             // ~100 times, and every one of them does evaluate — only the line is rationed.
-            if (pushLogThrottle.shouldLog("eval:$field")) Log.i("FidPush", "push $field -> evaluate")
+            if (pushLogThrottleFor(field).shouldLog("eval:$field")) Log.i("FidPush", "push $field -> evaluate")
             // Snapshot and session are captured HERE, on the thread that just patched them:
             // the coroutine may start after further pushes landed, and the rule must see the
             // state of its own event, not whatever the snapshot holds by the time it runs.
@@ -947,11 +1021,18 @@ class TrackingService : Service(), LocationListener {
     }
 
     /**
-     * One push line per field per second. With every FidMap field subscribed the busy ones
-     * (current, rpm, speed, a window travelling end to end) would otherwise bury the rest of
-     * the log. Only the logging is throttled — every event still patches the snapshot.
+     * One push line per field per second, per minute for a continuous reading (FidPushLogPolicy).
+     * With every FidMap field subscribed the busy ones (current, rpm, speed, a window travelling
+     * end to end) would otherwise bury the rest of the log. Only the logging is throttled — every
+     * event still patches the snapshot.
      */
-    private val pushLogThrottle = com.bydmate.app.data.autoservice.LogThrottle(1_000L)
+    private val pushLogThrottle =
+        com.bydmate.app.data.autoservice.LogThrottle(com.bydmate.app.data.push.FidPushLogPolicy.DISCRETE_WINDOW_MS)
+    private val analogPushLogThrottle =
+        com.bydmate.app.data.autoservice.LogThrottle(com.bydmate.app.data.push.FidPushLogPolicy.ANALOG_WINDOW_MS)
+
+    private fun pushLogThrottleFor(field: String) =
+        if (com.bydmate.app.data.push.FidPushLogPolicy.isAnalog(field)) analogPushLogThrottle else pushLogThrottle
     private val beltProbeLog = BeltProbeLog()
 
     private fun resolveFidCatalog() {
@@ -959,7 +1040,7 @@ class TrackingService : Service(), LocationListener {
             fidCatalogManager.ensureResolved()
             // The one point every daemon path passes through once the daemon is live, on both
             // transports: startup chain, watchdog respawn, binder arrival and the retry timer.
-            fidPushChannel.resubscribe("fid catalog resolved")
+            fidPushChannel.resubscribe("fid catalog resolved") { fidCatalogManager.catalog }
         }
     }
 
@@ -978,7 +1059,7 @@ class TrackingService : Service(), LocationListener {
                 // still spawning the daemon would be a wasted one.
                 if (fidCatalogManager.resolvePending) {
                     fidCatalogManager.ensureResolved()
-                    fidPushChannel.resubscribe("fid catalog resolved")
+                    fidPushChannel.resubscribe("fid catalog resolved") { fidCatalogManager.catalog }
                 }
             }
             Log.i(TAG, "fid resolve: retry timer done (${fidCatalogManager.resolveStatus})")
@@ -986,6 +1067,10 @@ class TrackingService : Service(), LocationListener {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // n=1 is the command that follows onCreate; later ones hit an already running service.
+        Trace.event(TraceArea.APP, "service-trigger",
+            "trigger" to AutostartTrace.startTrigger(intent != null, intent?.getStringExtra(AutostartTrace.EXTRA_TRIGGER)),
+            "n" to ++startCommands)
         maybeAttachWidget()
         return START_STICKY
     }
@@ -1131,12 +1216,68 @@ class TrackingService : Service(), LocationListener {
      * notification — nothing retries. Guidance-active is exactly that moment.
      */
     private fun maybeRearmNotificationListenerGrant(now: Long) {
-        if (!com.bydmate.app.navdata.NavGuidanceHub.snapshot(now).active) return
+        // Without the gateway (#301) a11y stays off, so the hub needs the listener to activate at all.
+        if (!com.bydmate.app.navdata.NavGuidanceHub.snapshot(now).active &&
+            hudController.status.value != com.bydmate.app.hud.HudController.Status.CLUSTER_ONLY) return
+        checkNotificationListenerBinding("guidance-active")
         if (now - lastGuidanceGrantRearmTs < GUIDANCE_GRANT_REARM_MS) return
         if (runCatching { notificationListenerGranted() }.getOrDefault(false)) return
         lastGuidanceGrantRearmTs = now
         serviceScope.launch { notificationListenerGrant.ensure("guidance-active") }
     }
+
+    /**
+     * #325: approved but never bound by the framework → disallow/allow through the daemon, at most
+     * NotificationListenerRebinder.MAX_ATTEMPTS per process. A missing approval stays on the grant
+     * path above; a connected listener is never touched.
+     */
+    private fun checkNotificationListenerBinding(reason: String) {
+        val approved = runCatching { notificationListenerGranted() }.getOrDefault(false)
+        val connected = com.bydmate.app.media.MediaSessionListenerService.isConnected
+        val ageMs = android.os.SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime()
+        val needs = com.bydmate.app.media.NotificationListenerHealth.needsRebind(approved, connected, ageMs)
+        val attempts = notifListenerRebinder?.attempts ?: 0
+        val exhausted = attempts >= com.bydmate.app.media.NotificationListenerRebinder.MAX_ATTEMPTS
+        // The guidance check runs every minute while driving: only a startup or a rebind decision is logged.
+        if (reason == "startup" || (needs && !exhausted)) {
+            Log.i(TAG, "notif-listener check reason=$reason approved=$approved connected=$connected " +
+                "age=${ageMs / 1000}s attempts=$attempts rebind=${needs && !exhausted}")
+        }
+        if (!needs || exhausted) return
+        if (!notifRebindRunning.compareAndSet(false, true)) return
+        serviceScope.launch {
+            try {
+                val rebinder = notificationListenerRebinder()
+                val ok = rebinder.rebind(reason)
+                Trace.event(TraceArea.HUD, "notif-listener rebind", "reason" to reason, "ok" to ok,
+                    "attempt" to rebinder.attempts)
+                delay(NOTIF_REBIND_RECHECK_MS)
+                val after = com.bydmate.app.media.MediaSessionListenerService.isConnected
+                Log.i(TAG, "notif-listener after-rebind reason=$reason ok=$ok connected=$after")
+                Trace.event(TraceArea.HUD, "notif-listener after-rebind", "connected" to after)
+            } finally {
+                notifRebindRunning.set(false)
+            }
+        }
+    }
+
+    private fun notificationListenerRebinder(): com.bydmate.app.media.NotificationListenerRebinder =
+        synchronized(TrackingService) {
+            notifListenerRebinder ?: com.bydmate.app.media.NotificationListenerRebinder(
+                disallow = {
+                    kotlinx.coroutines.runBlocking {
+                        helperBootstrap.ensureRunning() && helperClient.disallowNotificationListener()
+                    }
+                },
+                allow = {
+                    kotlinx.coroutines.runBlocking {
+                        com.bydmate.app.media.MediaSessionGrant.ensureGranted(helperClient)
+                    }
+                },
+                sleep = { Thread.sleep(it) },
+                hooks = listOf(clusterMusicBridge),
+            ).also { notifListenerRebinder = it }
+        }
 
     /**
      * Отправка живой телеметрии с адаптивной частотой (см.
@@ -1219,6 +1360,10 @@ class TrackingService : Service(), LocationListener {
                     ""
                 ).trim().takeIf { it.isNotEmpty() }
 
+                val abrpSendLocation = settingsRepository.getString(
+                    com.bydmate.app.data.repository.SettingsRepository.KEY_ABRP_SEND_LOCATION,
+                    "false"
+                ) == "true"
                 val webhookSendLocation = settingsRepository.getString(
                     com.bydmate.app.data.repository.SettingsRepository.KEY_WEBHOOK_SEND_LOCATION,
                     "false"
@@ -1241,7 +1386,7 @@ class TrackingService : Service(), LocationListener {
                 // 1 Hz. Null → client falls back to DiPars power.
                 val enginePowerKw: Int? = enginePowerKwFromSnapshot(data)
 
-                // Built once per tick and shared: the webhook's own GPS toggle is the only
+                // Built once per tick and shared: each target's own GPS toggle is the only
                 // per-target difference, so those fields go into a copy (see [withLocation]).
                 val telemetry = iternioTelemetryClient.buildTelemetry(
                     data = data,
@@ -1258,25 +1403,38 @@ class TrackingService : Service(), LocationListener {
                 var delivered = false
 
                 if (sendToIternio) {
-                    // NO position ever goes to ABRP: it merges telemetry position with the GPS it
-                    // reads on the head unit itself, and the car marker jumps between the two
-                    // sources (ABRP tickets, June 2026). The webhook keeps its own toggle.
-                    // Every real send is logged: without this line a trip log shows nothing
-                    // between two ABRP failures, and «данных нет» has no diagnosis.
-                    Log.i(TAG, "Iternio send: state=$state interval=${intervalSec}s " +
-                        "gear=${data.gear} speed=${data.speed} soc=${data.soc} " +
-                        "hv=${data.hvVoltage ?: "-"}/${data.hvCurrent ?: "-"} " +
-                        "setpoint=${data.acTemp ?: "-"}")
+                    // Position goes to ABRP only behind its own opt-in toggle, off by default.
+                    // ABRP open on the head unit reads GPS itself and merges it with the telemetry
+                    // position, so two sources make the car marker jump (ABRP tickets, June 2026).
+                    // The toggle is for the narrow case of watching the car from ABRP on a phone
+                    // while ABRP in the car is not running (@ptuchik, #302).
+                    // Gate against the clock now, not snapshotMs: the settings and autoservice reads
+                    // above suspend, and a fix that arrived meanwhile is newer than the snapshot.
+                    val abrpLocation = locationForTelemetry(
+                        abrpSendLocation, _lastLocation.value, System.currentTimeMillis(),
+                    )
+                    // A sample send every 10 min plus the tally below: without them a trip log shows
+                    // nothing between two ABRP failures, and «данных нет» has no diagnosis. A line
+                    // per send was thousands an hour.
+                    if (iternioLogThrottle.shouldLog("send")) {
+                        Log.i(TAG, "Iternio send: state=$state interval=${intervalSec}s " +
+                            "gear=${data.gear} speed=${data.speed} soc=${data.soc} " +
+                            "hv=${data.hvVoltage ?: "-"}/${data.hvCurrent ?: "-"} " +
+                            "setpoint=${data.acTemp ?: "-"} gps=${abrpLocation != null}")
+                    }
                     val sentAtMs = System.currentTimeMillis()
                     iternioTelemetryClient.sendTelemetry(
                         apiKey = apiKey,
                         userToken = token,
-                        telemetry = telemetry,
+                        telemetry = withLocation(telemetry, abrpLocation),
                     ).onSuccess {
                         delivered = true
                         iternioConsecutive5xx = 0
-                        Log.i(TAG, "Iternio sent ok ${System.currentTimeMillis() - sentAtMs}ms")
+                        val nowMs = System.currentTimeMillis()
+                        iternioTally.record(true, nowMs - sentAtMs, nowMs)?.let { Log.i(TAG, "Iternio $it") }
                     }.onFailure { e ->
+                        val nowMs = System.currentTimeMillis()
+                        iternioTally.record(false, nowMs - sentAtMs, nowMs)?.let { Log.i(TAG, "Iternio $it") }
                         when (e) {
                             is IternioRateLimitException -> {
                                 // Upstream said wait. Honor Retry-After if present;
@@ -1304,7 +1462,9 @@ class TrackingService : Service(), LocationListener {
                 }
 
                 if (sendToWebhook) {
-                    val location = locationForTelemetry(webhookSendLocation, _lastLocation.value, snapshotMs)
+                    val location = locationForTelemetry(
+                        webhookSendLocation, _lastLocation.value, System.currentTimeMillis(),
+                    )
                     webhookTelemetryClient.send(
                         url = webhookUrl,
                         secret = webhookSecret,
@@ -1333,21 +1493,9 @@ class TrackingService : Service(), LocationListener {
         }
     }
 
-    /**
-     * Копия [telemetry] с GPS-полями. Базовый payload координат не содержит —
-     * тумблер «отправлять координаты» у ABRP и вебхука свой, а объект один на оба.
-     */
-    private fun withLocation(telemetry: JSONObject, location: Location?): JSONObject {
-        if (location == null) return telemetry
-        return JSONObject(telemetry.toString()).apply {
-            put("lat", location.latitude)
-            put("lon", location.longitude)
-            if (location.hasBearing()) put("heading", location.bearing.toDouble())
-        }
-    }
-
     override fun onDestroy() {
         Log.i(TAG, "onDestroy: stopping TrackingService")
+        Trace.event(TraceArea.APP, "service-stop")
         com.bydmate.app.ui.widget.WidgetController.detach("service_destroy")
         ChainLog.append(this, "TrackingService onDestroy")
         pollingJob?.cancel()
@@ -1375,6 +1523,7 @@ class TrackingService : Service(), LocationListener {
 
         alicePollingManager.stop()
         blindSpotController.stop()
+        clusterMusicBridge.stop()
         cameraStateMonitor.stop()
         _cameraActive.value = false
         _youtubeForeground.value = false
@@ -1405,7 +1554,9 @@ class TrackingService : Service(), LocationListener {
 
         // Auto-restart via WorkManager (like BydConnect AutoRestartReceiver)
         try {
-            val request = OneTimeWorkRequestBuilder<ServiceStartWorker>().build()
+            val request = OneTimeWorkRequestBuilder<ServiceStartWorker>()
+                .setInputData(workDataOf(AutostartTrace.KEY_WORKER_SOURCE to AutostartTrace.SOURCE_SERVICE_DESTROYED))
+                .build()
             WorkManager.getInstance(this).enqueueUniqueWork(
                 ServiceStartWorker.WORK_NAME,
                 ExistingWorkPolicy.KEEP,
@@ -1416,6 +1567,7 @@ class TrackingService : Service(), LocationListener {
             Log.w(TAG, "Failed to schedule restart: ${e.message}")
         }
 
+        Trace.flush()
         super.onDestroy()
     }
 
@@ -1424,7 +1576,9 @@ class TrackingService : Service(), LocationListener {
         Log.i(TAG, "onTaskRemoved: scheduling restart via WorkManager")
         ChainLog.append(this, "onTaskRemoved → restart")
         try {
-            val request = OneTimeWorkRequestBuilder<ServiceStartWorker>().build()
+            val request = OneTimeWorkRequestBuilder<ServiceStartWorker>()
+                .setInputData(workDataOf(AutostartTrace.KEY_WORKER_SOURCE to AutostartTrace.SOURCE_TASK_REMOVED))
+                .build()
             WorkManager.getInstance(this).enqueueUniqueWork(
                 ServiceStartWorker.WORK_NAME,
                 ExistingWorkPolicy.REPLACE,
@@ -1440,6 +1594,8 @@ class TrackingService : Service(), LocationListener {
     override fun onLocationChanged(location: Location) {
         lastLocationFix = LocationFix(location, isLive = true)
         _lastLocation.value = location
+        recentTrack.add(TrackPoint(android.os.SystemClock.elapsedRealtime(), location.latitude, location.longitude,
+            if (location.hasSpeed()) location.speed * 3.6 else null))
         // AC-06: never log raw coordinates in release — logcat is readable on DiLink
         // and ends up in user-shared diagnostic dumps.
         if (BuildConfig.DEBUG) {
@@ -1460,6 +1616,15 @@ class TrackingService : Service(), LocationListener {
     private fun startPolling() {
         Log.i(TAG, "Starting polling via SharedAdaptiveLoop")
         pollingJob = serviceScope.launch {
+            // The cold-start reconciliation decides by the car type whether the open trip gets
+            // litres; onServiceStart loads the cached type concurrently.
+            runCatching { vehicleKindMonitor.awaitCache() }
+                .onFailure { Log.w(TAG, "vehicle kind cache load failed", it) }
+            // DM-i: the last ON tick of the previous process becomes the cold_start counter row
+            // before the first tick of this one can rewrite it. HistoryImporter.runSync() makes
+            // the same call; the ±90 s check keeps it to one row.
+            runCatching { counterSnapshotWriter.onColdStart(lastStateDao.getCurrent(), vehicleKindMonitor.kind.value) }
+                .onFailure { Log.w(TAG, "CounterSnapshotWriter.onColdStart failed", it) }
             // Cold-start reconciliation BEFORE subscribing — so we never receive
             // a tick into a stale open trip from a previous session.
             runCatching { tripRecorder.reconcileColdStart() }
@@ -1526,6 +1691,12 @@ class TrackingService : Service(), LocationListener {
                     // lives in gunEdgeDetector; runCatchUp's mutex serializes us
                     // against the cold-start path.
                     pollTickCount++
+                    // Car type read round: one batch read at most every 10 s until confirmed,
+                    // then once a day. claimProbe is a cheap check, the read runs off-tick.
+                    val kindProbeAt = System.currentTimeMillis()
+                    if (vehicleKindMonitor.claimProbe(kindProbeAt)) {
+                        serviceScope.launch { vehicleKindMonitor.probe(kindProbeAt) }
+                    }
                     if (pollTickCount % GUN_STATE_POLL_EVERY_N_TICKS == 0L) {
                         serviceScope.launch {
                             pollGunStateForEdge(data)
@@ -1650,14 +1821,15 @@ class TrackingService : Service(), LocationListener {
                         shortAvg = shortAvg,
                     )
 
-                    val rangeEstimate = rangeCalculator.estimateDetailed(
-                        soc = data.soc,
-                        totalElecKwh = data.totalElecConsumption,
-                        batteryTempC = data.avgBatTemp,
-                    )
-                    val rangeKm = rangeEstimate?.rangeKm
-                    _lastRangeKm.value = rangeKm
-                    logRangeIfChanged(rangeEstimate, data.soc, data.totalElecConsumption)
+                    _lastRangeKm.value = liveRangeKm(vehicleKindMonitor.kind.value, data) {
+                        val rangeEstimate = rangeCalculator.estimateDetailed(
+                            soc = data.soc,
+                            totalElecKwh = data.totalElecConsumption,
+                            batteryTempC = data.avgBatTemp,
+                        )
+                        logRangeIfChanged(rangeEstimate, data.soc, data.totalElecConsumption)
+                        rangeEstimate?.rangeKm
+                    }
 
                     _tripDistanceKm.value = tripDistance
                     _tripKwhConsumed.value = tripKwhConsumed
@@ -1681,6 +1853,9 @@ class TrackingService : Service(), LocationListener {
                     // Native trip recorder (writes only when energydata absent — i.e. Song/Atto/non-Leopard3)
                     runCatching { tripRecorder.consume(data) }
                         .onFailure { Log.w(TAG, "TripRecorder.consume failed", it) }
+                    // DM-i counter snapshots for the energydata trips; no-op unless HYBRID.
+                    runCatching { counterSnapshotWriter.onTick(data, vehicleKindMonitor.kind.value, nowMs) }
+                        .onFailure { Log.w(TAG, "CounterSnapshotWriter.onTick failed", it) }
                 } catch (e: Exception) {
                     Log.e(TAG, "Downstream consumer threw on tick: ${e.message}", e)
                 }
@@ -1807,6 +1982,8 @@ class TrackingService : Service(), LocationListener {
             } catch (e: Exception) {
                 Log.w(TAG, "ADB appop grant failed: ${e.message}")
             }
+            // Cloud over Wi-Fi (#310): the manager gates itself on its toggle.
+            cloudOverWifiManager.requestAttempt("service_start")
         }
         cameraStateMonitor.start()
         serviceScope.launch {
@@ -1854,6 +2031,7 @@ class TrackingService : Service(), LocationListener {
                     runCatching { adbRestoreManager.attemptIfNeeded("wifi_validated") }
                         .onFailure { Log.w(TAG, "ADB restore on validated wifi failed: ${it.message}") }
                 }
+                cloudOverWifiManager.onWifiValidated()
             }
 
             override fun onLost(network: Network) {
@@ -1905,22 +2083,11 @@ class TrackingService : Service(), LocationListener {
         // track — while parked the GPS provider goes quiet (8 m filter) and only
         // network kept firing far-away points that got recorded into the route.
         // Same params as TripInfo (2000ms, 8m, explicit MainLooper).
-        if (gpsEnabled) {
-            try {
-                lm.requestLocationUpdates(
-                    LocationManager.GPS_PROVIDER,
-                    2000L, 8.0f,
-                    this, Looper.getMainLooper()
-                )
-                Log.i(TAG, "requestLocationUpdates(GPS_PROVIDER) registered")
-            } catch (e: Exception) {
-                Log.e(TAG, "GPS provider registration failed: ${e.message}", e)
-            }
-        }
+        registerGpsUpdates(lm, this, Looper.getMainLooper())
 
         // Immediate fix from GPS last-known only (like TripInfo).
         try {
-            val lastKnown = if (gpsEnabled) lm.getLastKnownLocation(LocationManager.GPS_PROVIDER) else null
+            val lastKnown = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
             // A seed is never live; with no fresh seed (GPS off, no fix yet), any snapshot kept
             // from a previous run of this service is demoted too, so a restart never keeps
             // serving a stale point as if the listener just delivered it.
@@ -1937,7 +2104,7 @@ class TrackingService : Service(), LocationListener {
         }
 
         if (!gpsEnabled) {
-            Log.e(TAG, "GPS provider not enabled! GPS tracking will not work.")
+            Log.e(TAG, "GPS provider not enabled! Listener registered, waiting for the provider.")
         }
     }
 
@@ -2026,17 +2193,7 @@ class TrackingService : Service(), LocationListener {
 
     private suspend fun ensureStarServiceRunning(reason: String) {
         val prefs = getSharedPreferences(ClusterProjectionManager.PREFS_NAME, Context.MODE_PRIVATE)
-        val mirrorEnabled = prefs.getBoolean(ClusterProjectionManager.KEY_MIRROR_ENABLED, false)
-        // Voice PTT depends on the same a11y service (SteeringWheelKeyService reads "voice" prefs
-        // itself); without this, enabling Voice alone never re-binds the service (Finding 3).
-        val voiceEnabled = getSharedPreferences("voice", Context.MODE_PRIVATE)
-            .getBoolean(SettingsRepository.KEY_VOICE_ENABLED, false)
-        // The volume-knob play/pause interception lives in the same a11y filter: without the
-        // service bound the knob falls back to the firmware's audio-source switch.
-        val knobEnabled = prefs.getBoolean(ClusterProjectionManager.KEY_KNOB_PLAY_PAUSE, false)
-        // HUD guidance also reads Navigator via this a11y service; gate on CONFIRMED
-        // support, not the raw pref, so unsupported cars stay untouched (Codex fix 1).
-        if (!mirrorEnabled && !voiceEnabled && !knobEnabled && !hudController.requiresA11y()) return
+        if (!starServiceNeeded(prefs)) return
         starGrant.ensure(reason)
         // Android 10 (DiLink 3.0/4.0): once our process died while bound, AccessibilityManagerService
         // parks the component in mBindingServices and skips it on every settings rewrite until a
@@ -2045,6 +2202,10 @@ class TrackingService : Service(), LocationListener {
         // state only when every re-assert succeeded (daemon path healthy) and the service still is
         // not running - all-false re-asserts mean a broken daemon, not a stuck framework.
         val last = GrantSelfHeal.history().lastOrNull { it.name == "star a11y" }
+        last?.let {
+            Trace.event(TraceArea.APP, "a11y-grant", "reason" to it.reason, "granted" to it.granted,
+                "tries" to it.tries, "reasserts" to AutostartTrace.reasserts(it.reasserts))
+        }
         val daemonOkButUnbound = last != null && !last.granted &&
             last.reasserts.isNotEmpty() && last.reasserts.all { it }
         if (android.os.Build.VERSION.SDK_INT <= 29 && daemonOkButUnbound && !starServiceRunning()) {
@@ -2057,15 +2218,55 @@ class TrackingService : Service(), LocationListener {
             val nowElapsed = android.os.SystemClock.elapsedRealtime()
             if (A11yRecoveryGate.shouldAttempt(prefs, nowElapsed)) {
                 if (A11yRecoveryGate.markAttempt(prefs, nowElapsed)) {
-                    Log.w(TAG, "star a11y recovery: asking daemon to force-stop + re-bind " +
-                        "(streak=${prefs.getInt(A11yRecoveryGate.KEY_FAIL_STREAK, 0)})")
+                    val streak = prefs.getInt(A11yRecoveryGate.KEY_FAIL_STREAK, 0)
+                    Log.w(TAG, "star a11y recovery: asking daemon to force-stop + re-bind (streak=$streak)")
+                    // The force-stop kills this process: write the line to disk before asking.
+                    Trace.event(TraceArea.APP, "a11y-recovery-force-stop", "reason" to reason, "streak" to streak)
+                    Trace.flushBlocking(A11Y_RECOVERY_TRACE_FLUSH_MS)
+                    automationEngine.markSelfRestart()
                     helperClient.recoverAccessibilityService()
+                    // Still alive: the force-stop did not happen, the next process is a real start.
+                    automationEngine.clearSelfRestartMark()
                 } else {
                     Log.w(TAG, "star a11y recovery: skipped, could not persist the rate-limit mark")
+                    Trace.event(TraceArea.APP, "a11y-recovery-refused", "cause" to "mark_not_saved")
                 }
+            } else {
+                val streak = prefs.getInt(A11yRecoveryGate.KEY_FAIL_STREAK, 0)
+                val waitMs = A11yRecoveryGate.remainingWaitMs(
+                    prefs.getLong(A11yRecoveryGate.KEY_LAST_ATTEMPT_ELAPSED_MS, 0L), nowElapsed, streak)
+                Trace.event(TraceArea.APP, "a11y-recovery-refused", "cause" to "rate_limit",
+                    "streak" to streak, "wait_ms" to waitMs)
             }
         }
     }
+
+    private suspend fun starServiceNeeded(prefs: android.content.SharedPreferences): Boolean {
+        // The split key is caught by the same a11y filter; without this a split-key-only car loses it on boot.
+        if (splitPreferences.isSteeringKeyActive()) return true
+        val mirrorEnabled = prefs.getBoolean(ClusterProjectionManager.KEY_MIRROR_ENABLED, false)
+        // Voice PTT depends on the same a11y service (SteeringWheelKeyService reads "voice" prefs
+        // itself); without this, enabling Voice alone never re-binds the service (Finding 3).
+        val voiceEnabled = getSharedPreferences("voice", Context.MODE_PRIVATE)
+            .getBoolean(SettingsRepository.KEY_VOICE_ENABLED, false)
+        // The volume-knob play/pause interception lives in the same a11y filter: without the
+        // service bound the knob falls back to the firmware's audio-source switch.
+        val knobEnabled = prefs.getBoolean(ClusterProjectionManager.KEY_KNOB_PLAY_PAUSE, false)
+        // HUD guidance also reads Navigator via this a11y service; gate on CONFIRMED
+        // support, not the raw pref, so unsupported cars stay untouched (Codex fix 1).
+        if (!mirrorEnabled && !voiceEnabled && !knobEnabled && !hudController.requiresA11y()) {
+            // A steering-key rule is caught by the same a11y filter (#262); the DB is read last,
+            // only when every cheap check above left the gate closed.
+            return steeringKeyRuleEnabled()
+        }
+        return true
+    }
+
+    private suspend fun steeringKeyRuleEnabled(): Boolean =
+        runCatching { automationEngine.steeringKeyRuleEnabled() }.getOrElse {
+            Log.w(TAG, "steering-key rule check failed, treating as none: ${it.javaClass.simpleName}: ${it.message}")
+            false
+        }
 
     private fun notificationListenerGranted(): Boolean {
         val component = ComponentName(this, com.bydmate.app.media.MediaSessionListenerService::class.java)
@@ -2165,6 +2366,26 @@ class TrackingService : Service(), LocationListener {
     }
 }
 
+/** GPS listener registration, whatever the provider state at this instant (#361): DiLink 3.0/4.0
+ *  switch the provider off with the ignition, and a service created during an ignition-off wake
+ *  lives on into the next drive. Android keeps a request made for a disabled provider and starts
+ *  delivering once it comes back on. A unit with no GPS provider at all throws; that is logged. */
+@Suppress("TooGenericExceptionCaught") // a vendor LocationManager must not take the service down
+internal fun registerGpsUpdates(lm: LocationManager, listener: LocationListener, looper: Looper) {
+    try {
+        lm.requestLocationUpdates(
+            LocationManager.GPS_PROVIDER,
+            2000L, 8.0f,
+            listener, looper
+        )
+        Log.i("TrackingService", "requestLocationUpdates(GPS_PROVIDER) registered")
+    } catch (e: SecurityException) {
+        Log.e("TrackingService", "GPS permission denied: ${e.message}", e)
+    } catch (e: Exception) {
+        Log.e("TrackingService", "GPS provider registration failed: ${e.message}", e)
+    }
+}
+
 /** [TrackingService.lastLocationFix] at service (re)start: a fresh [lastKnown] seed replaces it,
  *  never live; with no fresh seed (GPS off, or no fix yet), [previous] is kept but demoted to
  *  not-live, since a seed from a prior run of the same process is not this run's data either.
@@ -2175,3 +2396,16 @@ internal fun nextSnapshotOnRestart(
     lastKnown: Location?,
 ): TrackingService.LocationFix? =
     lastKnown?.let { TrackingService.LocationFix(it, isLive = false) } ?: previous?.copy(isLive = false)
+
+/**
+ * Копия [telemetry] с GPS-полями. Базовый payload координат не содержит —
+ * тумблер «отправлять координаты» у ABRP и вебхука свой, а объект один на оба.
+ */
+internal fun withLocation(telemetry: JSONObject, location: Location?): JSONObject {
+    if (location == null) return telemetry
+    return JSONObject(telemetry.toString()).apply {
+        put("lat", location.latitude)
+        put("lon", location.longitude)
+        if (location.hasBearing()) put("heading", location.bearing.toDouble())
+    }
+}

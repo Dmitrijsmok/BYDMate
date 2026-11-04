@@ -33,6 +33,8 @@ class VoiceButtonServiceTest {
         service = Robolectric.buildService(SteeringWheelKeyService::class.java).create().get()
         val ep = mockk<ClusterEntryPoint>()
         every { ep.voiceController() } returns voice
+        // Upstream 4.x: a key no other feature took is offered to the split key before automation.
+        every { ep.splitPreferences() } returns com.bydmate.app.split.DisabledSplitPreferences
         every { alice.ownsMicButton() } returns false
         every { alice.localHandoff.requestLocal(any()) } answers { firstArg<() -> Unit>().invoke() }
         SteeringWheelKeyService::class.java.getDeclaredField("cachedEntryPoint").apply {

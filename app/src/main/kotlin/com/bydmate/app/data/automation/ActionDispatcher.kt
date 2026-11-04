@@ -8,19 +8,25 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
+import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
+import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
+import android.provider.Settings
 import android.util.Log
+import android.view.KeyEvent
 import androidx.core.app.NotificationCompat
 import com.bydmate.app.R
+import com.bydmate.app.agent.AgentTools
 import com.bydmate.app.cluster.ClusterMode
 import com.bydmate.app.cluster.ClusterVoiceControl
 import com.bydmate.app.data.autoservice.SentinelDecoder
 import com.bydmate.app.data.local.entity.ActionDef
 import com.bydmate.app.data.nativestack.FidAddresses
+import com.bydmate.app.data.remote.AliceAppCatalog
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.telegram.TELEGRAM_REPORT_KIND
 import com.bydmate.app.data.telegram.TelegramReporter
@@ -29,13 +35,20 @@ import com.bydmate.app.data.vehicle.BatchReadItem
 import com.bydmate.app.data.vehicle.CommandTranslator
 import com.bydmate.app.data.vehicle.DriveMode
 import com.bydmate.app.data.vehicle.HelperClient
+import com.bydmate.app.data.vehicle.RearSeatHeat
+import com.bydmate.app.data.vehicle.ScreenBacklightReply
 import com.bydmate.app.data.vehicle.VehicleApi
 import com.bydmate.app.data.vehicle.VehicleWriteError
 import com.bydmate.app.data.vehicle.WindowPane
 import com.bydmate.app.data.vehicle.WriteAllowlist
+import com.bydmate.app.diagnostics.Trace
+import com.bydmate.app.diagnostics.TraceArea
+import com.bydmate.app.helper.HelperBinderProtocol
+import com.bydmate.app.media.KnobPlayPause
 import com.bydmate.app.media.MediaSessionListenerService
 import com.bydmate.app.navdata.NavPackages
 import com.bydmate.app.service.TrackingService
+import com.bydmate.app.split.MEDIACENTER_PKG
 import com.bydmate.app.split.SplitPair
 import com.bydmate.app.split.SplitSessionManager
 import com.bydmate.app.split.SplitSessionState
@@ -80,7 +93,9 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         private const val BT_CALL_ACTION_DIAL_HANGUP = "com.byd.btcall.action.DIAL_HANGUP"
         private const val BT_CALL_KEYCODE_DIAL = 313
         private const val YANDEX_MUSIC_PACKAGE = "ru.yandex.music"
-        private val YOUTUBE_PACKAGES = listOf("anddea.youtube", "com.google.android.youtube")
+        // The shared app table's YouTube builds, ReVanced/RVX included (fork a6918f26).
+        private val YOUTUBE_PACKAGES = AliceAppCatalog.YOUTUBE_PACKAGES
+        private const val CAR_SETTINGS_PACKAGE = "com.byd.carsettings"
         private const val NAVI_PACKAGE = "ru.yandex.yandexnavi"
         // Hard cap on user-set delay action; protects against typos like "60000000".
         private const val MAX_DELAY_MS = 60_000L
@@ -296,6 +311,36 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         /** Localized name of a toggle target; null when the id is not a known target. */
         internal fun toggleTargetNameRes(target: String): Int? = TOGGLE_TARGET_NAMES[target]
 
+        /** «Медиа: играть / пауза»: the explicit key, never PLAY_PAUSE, so a step cannot flip the wrong way. */
+        internal fun mediaKeyCode(payload: String?): Int? = when (payload) {
+            "play" -> KeyEvent.KEYCODE_MEDIA_PLAY
+            "pause" -> KeyEvent.KEYCODE_MEDIA_PAUSE
+            else -> null
+        }
+
+        /** «Экран: выключить / включить» (#275): payload "0" / "1". */
+        internal fun screenNameRes(payload: String?): Int? = when (payload) {
+            "0" -> R.string.automation_action_screen_off
+            "1" -> R.string.automation_action_screen_on
+            else -> null
+        }
+
+        /** One word per answer of the daemon for the log and the trace; no answer is told apart by [daemonAlive]. */
+        internal fun screenVerdict(reply: ScreenBacklightReply?, daemonAlive: Boolean): String = when (reply?.outcome) {
+            null -> if (daemonAlive) "daemon_outdated" else "daemon_unreachable"
+            HelperBinderProtocol.SCREEN_BACKLIGHT_CONFIRMED -> "confirmed"
+            HelperBinderProtocol.SCREEN_BACKLIGHT_NOT_FOLLOWED -> "not_followed"
+            HelperBinderProtocol.SCREEN_BACKLIGHT_ABSENT -> "absent"
+            HelperBinderProtocol.SCREEN_BACKLIGHT_THREW -> "threw"
+            else -> "unknown_${reply.outcome}"
+        }
+
+        internal fun mediaKeyNameRes(payload: String?): Int? = when (payload) {
+            "play" -> R.string.automation_action_media_play
+            "pause" -> R.string.automation_action_media_pause
+            else -> null
+        }
+
         /**
          * Outcome of resolving a "toggle" against the live state: either the concrete
          * command that flips it, or why it cannot be flipped right now.
@@ -352,11 +397,16 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
             else -> resolveLocksToggle(value)   // TOGGLE_LOCKS -- the only target left
         }
 
-        /** Why a param dispatch failed, as the step reason, always in the app language. Only the
-         *  steering heat channel reports NotEquipped (see VehicleWriteError). The raw error
-         *  (`value=-10011 sentinel returned` and the like) stays in the log only. */
+        /** Why a param dispatch failed, as the step reason, always in the app language. Besides
+         *  drive mode and the battery warm-up, the steering heat and HUD channels report
+         *  NotEquipped. The raw error (`value=-10011 sentinel returned` and the like) stays in
+         *  the log only. */
         internal fun paramFailureReason(err: Throwable?, strings: AppStrings): String = when {
             err is VehicleWriteError && DriveMode.ofAction(err.action) != null -> driveModeFailureReason(err, strings)
+            err is VehicleWriteError && err.action.startsWith("battery_preheat_") -> batteryPreheatFailureReason(err, strings)
+            err is VehicleWriteError.NotEquipped && err.action.startsWith("hud_") -> strings.get(R.string.hud_not_equipped)
+            err is VehicleWriteError.NotEquipped && err.action in RearSeatHeat.ACTIONS ->
+                strings.get(R.string.rear_seat_heat_not_equipped)
             err is VehicleWriteError.NotEquipped -> strings.get(R.string.steering_heat_not_equipped)
             err is VehicleWriteError.ReadbackMismatch && err.stuckPanes.isNotEmpty() ->
                 stuckWindowsReason(err.stuckPanes, strings)
@@ -405,6 +455,14 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
             is VehicleWriteError.StateBlocked -> strings.get(R.string.drive_mode_flotation)
             is VehicleWriteError.ReadbackMismatch -> strings.get(R.string.drive_mode_not_changed)
             else -> strings.get(R.string.drive_mode_failed)
+        }
+
+        /** A refused battery warm-up (#311): not on this car, a charge gun connected, or a warm battery. */
+        private fun batteryPreheatFailureReason(err: VehicleWriteError, strings: AppStrings): String = when (err) {
+            is VehicleWriteError.NotEquipped -> strings.get(R.string.battery_preheat_not_equipped)
+            is VehicleWriteError.StateBlocked -> strings.get(R.string.battery_preheat_gun_connected)
+            is VehicleWriteError.NotNeeded -> strings.get(R.string.battery_preheat_not_needed)
+            else -> strings.get(writeErrorText(err))
         }
 
         /** «окно водителя не сдвинулось…» for one pane, «не сдвинулись с места: …» for several. */
@@ -584,9 +642,12 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
     /** Last seat step asked for per seat, so a «toggle» can bring the seat back to it. */
     internal var seatLevelMemory = SeatLevelMemory(context)
 
-    /** Test seam -- how long to wait for the cluster projection to actually come up. */
+    /**
+     * Test seam -- how long to wait for the cluster projection to actually come up. 15 s in
+     * total: direct projection on a Sea Lion 07 takes 5-6 s (issue #263).
+     */
     internal var clusterPollIntervalMs = 500L
-    internal var clusterPollAttempts = 10
+    internal var clusterPollAttempts = 30
 
     internal var activeMediaControllers: () -> List<MediaController> = {
         runCatching {
@@ -594,6 +655,21 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
             msm.getActiveSessions(ComponentName(context, MediaSessionListenerService::class.java))
         }.getOrDefault(emptyList())
     }
+
+    /**
+     * Test seam -- PLAY or PAUSE to a session through its transport controls, which reach the
+     * player's onPlay/onPause even when it handles only PLAY_PAUSE as a media button; false when
+     * the session token died.
+     */
+    internal var sendMediaKey: (MediaController, Int) -> Boolean = { controller, keyCode ->
+        runCatching {
+            if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY) controller.transportControls.play()
+            else controller.transportControls.pause()
+        }.isSuccess
+    }
+
+    /** Package of the last session a «pause» step paused while it was playing; never persisted (#275). */
+    @Volatile private var lastPausedPkg: String? = null
 
     init {
         createUserChannels()
@@ -604,6 +680,8 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
             "param" -> dispatchParam(action, data)
             "notification", "notification_silent", "notification_sound" -> showNotification(action)
             "app_launch" -> launchApp(action)
+            "system_settings" -> openSystemSettings(action)
+            "app_close" -> closeApp(action)
             "call" -> dial(action)
             "navigate" -> navigate(action)
             "url" -> openUrl(action)
@@ -612,8 +690,10 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
             "go_home" -> goHome()
             "delay" -> dispatchDelay(action)
             "media_volume" -> setMediaVolume(action)
+            "media_key" -> dispatchMediaKey(action)
             "sentry" -> dispatchSentry(action)
             "hotspot" -> dispatchHotspot(action)
+            "screen" -> dispatchScreen(action)
             "cluster_projection" -> dispatchClusterProjection(action)
             "toggle" -> dispatchToggle(action, data)
             "speak" -> dispatchSpeak(action)
@@ -631,6 +711,93 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         // Class name only: an exception message can carry the intent URI (tokens, coordinates).
         Log.e(TAG, "dispatch failed for kind=${action.kind}: ${e.javaClass.simpleName}")
         DispatchResult(false, e.javaClass.simpleName)
+    }
+
+    // --- media key (#212, #275) ---
+
+    /**
+     * Sends PLAY or PAUSE to the session the volume-knob press would pick. Only a running player
+     * is reached: no session is a failed step, with no AudioManager fallback, because on V1.6 a
+     * global media key lets com.byd.mediacenter switch the audio source.
+     * The stock mediacenter keeps a session in NONE/STOPPED (or with no state) while nothing plays,
+     * and play/pause to it starts Kuwo (#275), so that session is not a candidate; STOPPED sessions of other players
+     * stay, some of them resume from STOPPED.
+     * A mediacenter session left PAUSED after a pause we sent to another, playing player is not
+     * resumed by the next play (#275); a PLAYING session still wins, and a pause we send to the
+     * playing stock player itself resets that. The memory lives as long as the process.
+     */
+    private fun dispatchMediaKey(action: ActionDef): DispatchResult {
+        val keyCode = mediaKeyCode(action.payload)
+            ?: return DispatchResult(false, appStrings.get(R.string.dispatch_media_key_invalid))
+        val all = runCatching { activeMediaControllers() }.getOrDefault(emptyList())
+        val sessions = all.joinToString(" ") { mediaSessionTag(it) }
+        val kept = all.filterNot { isIdleStockSession(it) }
+        val controllers = if (skipsPausedStock(keyCode)) kept.filterNot { isPausedStockSession(it) } else kept
+        val index = KnobPlayPause.pickTarget(
+            controllers.map { KnobPlayPause.SessionSnapshot(it.packageName, it.playbackState?.state) })
+        if (index == null) {
+            Log.w(TAG, if (controllers.size < kept.size) {
+                "media key ${action.payload}: stock player paused, last paused $lastPausedPkg gone: skipped"
+            } else {
+                "media key ${action.payload}: no media session sessions=[$sessions]"
+            })
+            return DispatchResult(false, appStrings.get(R.string.dispatch_media_no_session))
+        }
+        val target = controllers[index]
+        val wasPlaying = target.playbackState?.state == PlaybackState.STATE_PLAYING
+        val ok = sendMediaKey(target, keyCode)
+        if (ok && keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE && wasPlaying) lastPausedPkg = target.packageName
+        Log.i(TAG, "media key ${action.payload} -> ${target.packageName} ok=$ok sessions=[$sessions]")
+        return if (ok) DispatchResult(true)
+        else DispatchResult(false, appStrings.get(R.string.dispatch_media_key_failed, target.packageName))
+    }
+
+    /** Track and play/pause steps the media_key action does not offer (the Alice bridge). */
+    enum class MediaTransport { NEXT, PREVIOUS, PLAY_PAUSE }
+
+    /**
+     * Next / previous track to the session [dispatchMediaKey] would pick, through its transport
+     * controls; play/pause becomes the explicit PAUSE when a player is playing, else PLAY. Never a
+     * global media key, for the same reason as [dispatchMediaKey].
+     */
+    fun dispatchMediaTransport(op: MediaTransport): DispatchResult {
+        val controllers = runCatching { activeMediaControllers() }.getOrDefault(emptyList())
+            .filterNot { isIdleStockSession(it) }
+        if (op == MediaTransport.PLAY_PAUSE) {
+            val playing = controllers.any { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+            return dispatchMediaKey(ActionDef(command = "", displayName = "media", kind = "media_key",
+                payload = if (playing) "pause" else "play"))
+        }
+        val index = KnobPlayPause.pickTarget(
+            controllers.map { KnobPlayPause.SessionSnapshot(it.packageName, it.playbackState?.state) })
+            ?: return DispatchResult(false, appStrings.get(R.string.dispatch_media_no_session))
+        val target = controllers[index]
+        val ok = runCatching {
+            if (op == MediaTransport.NEXT) target.transportControls.skipToNext()
+            else target.transportControls.skipToPrevious()
+        }.isSuccess
+        Log.i(TAG, "media transport $op -> ${target.packageName} ok=$ok")
+        return if (ok) DispatchResult(true)
+        else DispatchResult(false, appStrings.get(R.string.dispatch_media_key_failed, target.packageName))
+    }
+
+    private fun isIdleStockSession(c: MediaController): Boolean {
+        val state = c.playbackState?.state
+        return c.packageName == MEDIACENTER_PKG &&
+            (state == null || state == PlaybackState.STATE_NONE || state == PlaybackState.STATE_STOPPED)
+    }
+
+    private fun isPausedStockSession(c: MediaController): Boolean =
+        c.packageName == MEDIACENTER_PKG && c.playbackState?.state == PlaybackState.STATE_PAUSED
+
+    private fun skipsPausedStock(keyCode: Int): Boolean =
+        keyCode == KeyEvent.KEYCODE_MEDIA_PLAY && lastPausedPkg != null && lastPausedPkg != MEDIACENTER_PKG
+
+    /** pkg:state:t1 when the session's metadata carries a title, else pkg:state:t0. */
+    private fun mediaSessionTag(c: MediaController): String {
+        val titled = runCatching { !c.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE).isNullOrBlank() }
+            .getOrDefault(false)
+        return "${c.packageName}:${c.playbackState?.state}:t${if (titled) 1 else 0}"
     }
 
     // --- sentry mode (Settings.Global via helper daemon) ---
@@ -657,6 +824,38 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         val ok = helper.setHotspot(enable)
         return if (ok) DispatchResult(true)
         else DispatchResult(false, appStrings.get(R.string.dispatch_hotspot_failed))
+    }
+
+    // --- screen backlight (#275, the stock screen-off call inside the helper daemon; no speed gate, as the stock button) ---
+
+    /**
+     * Only a status the daemon read back makes the step a success. No answer is the same text
+     * for the driver whether the daemon is gone or is an old one still running after an update
+     * (it does not know the transaction); the log and the trace tell the two apart.
+     */
+    private suspend fun dispatchScreen(action: ActionDef): DispatchResult {
+        val on = when (action.payload) {
+            "1" -> true
+            "0" -> false
+            else -> return DispatchResult(false, appStrings.get(R.string.dispatch_screen_invalid_state))
+        }
+        val reply = helper.setScreenBacklight(on)
+        val verdict = screenVerdict(reply, daemonAlive = reply != null || helper.isAlive())
+        val want = if (on) "on" else "off"
+        Log.i(TAG, "screen want=$want verdict=$verdict status=${reply?.status} detail=${reply?.detail}")
+        Trace.event(
+            TraceArea.CAR, "screen", "want" to want, "verdict" to verdict, "status" to reply?.status,
+            "detail" to reply?.detail, by = Trace.cause(),
+        )
+        return when (reply?.outcome) {
+            HelperBinderProtocol.SCREEN_BACKLIGHT_CONFIRMED -> DispatchResult(true)
+            null -> DispatchResult(false, appStrings.get(R.string.auto_err_unreachable))
+            HelperBinderProtocol.SCREEN_BACKLIGHT_NOT_FOLLOWED ->
+                DispatchResult(false, appStrings.get(R.string.auto_err_not_confirmed))
+            HelperBinderProtocol.SCREEN_BACKLIGHT_ABSENT ->
+                DispatchResult(false, appStrings.get(R.string.dispatch_screen_not_available))
+            else -> DispatchResult(false, appStrings.get(R.string.auto_err_failed))
+        }
     }
 
     // --- cluster projection (steering-wheel star key path, via ClusterVoiceControl) ---
@@ -801,11 +1000,17 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         return voiceActions.get().speak(text)
     }
 
-    /** "agent_query": run the payload prompt through an isolated agent turn, speak the answer. */
+    /** "agent_query": run the payload prompt through an isolated agent turn, speak the answer. A
+     *  payload with permissions (the Alice bridge, see [AgentQueryPermissions]) keeps the turn's
+     *  tools within them; a rule's payload has none and gets the full detached set. */
     private suspend fun dispatchAgentQuery(action: ActionDef): DispatchResult {
-        val prompt = parsePayload(action.payload)?.optString("prompt")?.trim().orEmpty()
+        val payload = parsePayload(action.payload)
+        val prompt = payload?.optString("prompt")?.trim().orEmpty()
         if (prompt.isEmpty()) return DispatchResult(false, appStrings.get(R.string.dispatch_agent_query_prompt_missing))
-        return voiceActions.get().agentQuery(prompt)
+        val denied = AgentQueryPermissions.from(payload)
+            ?.let { AgentTools.deniedTools(vehicleControl = it.vehicleControl, navigation = it.navigation) }
+            .orEmpty()
+        return voiceActions.get().agentQuery(prompt, denied)
     }
 
     /**
@@ -1014,13 +1219,32 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
 
     // --- external activities ---
 
+    /**
+     * Opens a navigation app without a route — the offline «открой навигатор» / «открой вейз».
+     * [navigator] is a [RouteNavigatorUris] id, null = the app chosen in settings (then Yandex
+     * Navigator when that one is missing). Packages come from [RouteNavigatorResolver] exactly as
+     * for the agent's launch_app: the first one with a launcher entry, else the first candidate,
+     * whose launch reports honestly that it is not installed.
+     */
+    suspend fun openNavigatorApp(navigator: String?): DispatchResult {
+        val launcher = RouteNavigatorDiscovery.launcherApps(context.packageManager)
+        val candidates = RouteNavigatorResolver.launchCandidates(
+            RouteNavigatorResolver.choice(context), navigator, launcher)
+        val launchable = launcher.mapTo(HashSet()) { it.packageName }
+        val pkg = candidates.firstOrNull { it in launchable } ?: candidates.firstOrNull() ?: NAVI_PACKAGE
+        Log.i(TAG, "navigator open: app=${navigator ?: "default"} pkg=$pkg")
+        return launchApp(ActionDef(command = "", displayName = "Навигатор", kind = "app_launch",
+            payload = JSONObject().put("packageName", pkg).toString()))
+    }
+
     private suspend fun launchApp(action: ActionDef): DispatchResult {
         val payload = parsePayload(action.payload)
         val pkg = payload?.optString("packageName")?.takeIf(String::isNotBlank)
             ?: return DispatchResult(false, appStrings.get(R.string.dispatch_package_missing))
-        if (context.packageManager.getLaunchIntentForPackage(pkg) == null) {
-            return DispatchResult(false, appStrings.get(R.string.dispatch_app_not_installed, pkg))
-        }
+        // Not only getLaunchIntentForPackage: a vendor or ReVanced build can have none and still
+        // open (fork 96251b23). Nothing that opens at all is still "not installed".
+        val intent = openIntentFor(pkg)
+            ?: return DispatchResult(false, appStrings.get(R.string.dispatch_app_not_installed, pkg))
         // Authoritative launch via the shell-uid daemon (am start): a startActivity from
         // this @ApplicationContext can lose the foreground race when BYDMate is on top
         // (e.g. a voice session started from the Settings screen), so the launched app
@@ -1030,11 +1254,74 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
             maybeMinimize(payload)
             return DispatchResult(true)
         }
-        val intent = context.packageManager.getLaunchIntentForPackage(pkg)!!
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val result = tryStartActivity(intent, "app_launch:$pkg")
+        val result = tryStartActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), "app_launch:$pkg")
         if (result.success) maybeMinimize(payload)
         return result
+    }
+
+    /**
+     * What opens [pkg]: its launch intent, else a launcher activity of the package found by
+     * queryIntentActivities, else its main activity; null when the package has none of them (not
+     * installed, or nothing to open).
+     */
+    private fun openIntentFor(pkg: String): Intent? {
+        val pm = context.packageManager
+        runCatching { pm.getLaunchIntentForPackage(pkg) }.getOrNull()?.let { return it }
+        fun main(category: String?): Intent = Intent(Intent.ACTION_MAIN).also { if (category != null) it.addCategory(category) }
+        fun activity(category: String?): Intent? {
+            val probe = main(category).setPackage(pkg)
+            val name = runCatching { pm.queryIntentActivities(probe, 0) }.getOrNull()
+                ?.firstNotNullOfOrNull { info -> info.activityInfo?.takeIf { it.packageName == pkg }?.name }
+                ?: return null
+            return main(category).setClassName(pkg, name)
+        }
+        return activity(Intent.CATEGORY_LAUNCHER) ?: activity(null)
+    }
+
+    /**
+     * "system_settings": one screen of the system settings, from the closed set of
+     * [AliceAppCatalog.SETTINGS_SECTIONS] only (fork a6918f26). "car" is BYD's own settings app,
+     * launched like any app; the rest are the Android settings intents.
+     */
+    private suspend fun openSystemSettings(action: ActionDef): DispatchResult {
+        val section = parsePayload(action.payload)?.optString("section")?.trim()?.lowercase().orEmpty()
+        val intentAction = when (section) {
+            "car" -> return launchApp(ActionDef(command = "", displayName = action.displayName, kind = "app_launch",
+                payload = JSONObject().put("packageName", CAR_SETTINGS_PACKAGE).toString()))
+            "android" -> Settings.ACTION_SETTINGS
+            "display" -> Settings.ACTION_DISPLAY_SETTINGS
+            "wifi" -> Settings.ACTION_WIFI_SETTINGS
+            "bluetooth" -> Settings.ACTION_BLUETOOTH_SETTINGS
+            "sound" -> Settings.ACTION_SOUND_SETTINGS
+            "apps" -> Settings.ACTION_APPLICATION_SETTINGS
+            else -> return DispatchResult(false, appStrings.get(R.string.dispatch_settings_section_unknown, section))
+        }
+        return tryStartActivity(Intent(intentAction).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), "system_settings:$section")
+    }
+
+    /**
+     * Force-stop through the shell-uid daemon (#280). Only an app with a launcher entry is
+     * closed, never BYDMate itself, and the package is checked again here because a shared
+     * rule or the agent can carry any string.
+     */
+    private suspend fun closeApp(action: ActionDef): DispatchResult {
+        val pkg = parsePayload(action.payload)?.optString("packageName")?.takeIf(String::isNotBlank)
+            ?: return DispatchResult(false, appStrings.get(R.string.dispatch_package_missing))
+        val refusal = when {
+            pkg == context.packageName -> appStrings.get(R.string.dispatch_app_close_self)
+            context.packageManager.getLaunchIntentForPackage(pkg) == null ->
+                appStrings.get(R.string.dispatch_app_not_installed, pkg)
+            !helper.isAlive() -> appStrings.get(R.string.dispatch_cluster_daemon_restarting)
+            else -> null
+        }
+        if (refusal != null) {
+            Log.w(TAG, "app close refused: $pkg ($refusal)")
+            return DispatchResult(false, refusal)
+        }
+        val ok = helper.forceStop(pkg)
+        Log.i(TAG, "app close: $pkg ok=$ok")
+        return if (ok) DispatchResult(true)
+        else DispatchResult(false, appStrings.get(R.string.dispatch_app_close_failed, pkg))
     }
 
     private suspend fun dial(action: ActionDef): DispatchResult {
@@ -1119,11 +1406,26 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
      * result list, and 2GIS has no such node at all. Maps is excluded too, whether by
      * app="maps" or as the settings default (#200, willOpenMaps): the a11y read that finds
      * and presses «Поехали» looks at the Navigator's window, not Maps' - including for the
-     * Home/Work shortcut, which now can land on Maps as well.
+     * Home/Work shortcut, which now can land on Maps as well, and for an app whose Home/Work
+     * is its own ([ownsHomeWork]).
      */
-    fun autoGoSupported(payload: JSONObject): Boolean =
-        !payload.optBoolean("show", false) && payload.optString("query").isBlank() && !willOpenMaps(payload) &&
-            (payload.optString("shortcut").isNotBlank() || resolveNavigator().first == RouteNavigatorUris.YANDEX)
+    fun autoGoSupported(payload: JSONObject): Boolean {
+        if (payload.optBoolean("show", false) || payload.optString("query").isNotBlank()) return false
+        val navigator = resolveNavigator(payload).navigator
+        if (navigator == RouteNavigatorUris.MAPS) return false
+        return if (payload.optString("shortcut").isNotBlank()) !ownsHomeWork(navigator, payload)
+        else navigator == RouteNavigatorUris.YANDEX
+    }
+
+    /**
+     * Whether Home/Work for [navigator] is the app's own business rather than Yandex Navigator's
+     * shortcut action: Waze opens its saved favourite, Google Maps has no such link. A 2GIS the
+     * command named is not sent to another app either; 2GIS from settings keeps Yandex
+     * Navigator's Home/Work, as it always had.
+     */
+    private fun ownsHomeWork(navigator: String, payload: JSONObject): Boolean =
+        navigator == RouteNavigatorUris.WAZE || navigator == RouteNavigatorUris.GOOGLE_MAPS ||
+            (navigator == RouteNavigatorUris.DGIS && requestedNavigator(payload) != null)
 
     /** Whether [navigate] will press «Поехали» itself for [payload]: asked for, and possible here. */
     fun autoGoWillRun(payload: JSONObject): Boolean = autoGoRequested(payload) && autoGoSupported(payload)
@@ -1145,39 +1447,39 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
     }
 
     /**
-     * Which map app routes go to, plus the reason text when 2GIS or Maps was replaced by
-     * Yandex Navigator because it is not installed (#190, #200).
+     * Which map app the routes of [payload] go to and the package the intent is pinned to
+     * (#190, #200, #305): the app the payload names, else the one chosen in settings, its
+     * installed package found by [RouteNavigatorDiscovery] (never by getLaunchIntentForPackage)
+     * or the manual package from settings as given. A chosen app that is not installed is
+     * replaced by Yandex Navigator, see [fallbackReason].
      */
-    private fun resolveNavigator(): Pair<String, String?> {
-        val chosen = RouteNavigatorUris.normalize(
-            context.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
-                .getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null))
-        Log.i(TAG, "navigate: navigator=$chosen")
-        val dgisFellBack = chosen == RouteNavigatorUris.DGIS &&
-            !isPackageInstalled(RouteNavigatorUris.DGIS_PACKAGE)
-        if (dgisFellBack) {
-            Log.i(TAG, "navigate: 2gis not installed, falling back to yandex")
-            return RouteNavigatorUris.YANDEX to appStrings.get(R.string.dispatch_dgis_fallback)
-        }
-        val mapsFellBack = chosen == RouteNavigatorUris.MAPS &&
-            NavPackages.YANDEX_MAPS.none { isPackageInstalled(it) }
-        if (mapsFellBack) {
-            Log.i(TAG, "navigate: yandex maps not installed, falling back to yandex")
-            return RouteNavigatorUris.YANDEX to appStrings.get(R.string.dispatch_maps_fallback)
-        }
-        return chosen to null
+    private fun resolveNavigator(payload: JSONObject): NavigatorTarget {
+        val target = RouteNavigatorResolver.resolve(context, requestedNavigator(payload))
+        target.fellBackFrom?.let { Log.i(TAG, "navigate: $it not installed, falling back to yandex") }
+        Log.i(TAG, "navigate: navigator=${target.navigator} pkg=${target.pkg}")
+        return target
+    }
+
+    /** The reason text when the chosen app was replaced by Yandex Navigator, or null. */
+    private fun fallbackReason(target: NavigatorTarget): String? = when (target.fellBackFrom) {
+        RouteNavigatorUris.DGIS -> appStrings.get(R.string.dispatch_dgis_fallback)
+        RouteNavigatorUris.MAPS -> appStrings.get(R.string.dispatch_maps_fallback)
+        RouteNavigatorUris.WAZE -> appStrings.get(R.string.dispatch_waze_fallback)
+        RouteNavigatorUris.GOOGLE_MAPS -> appStrings.get(R.string.dispatch_google_maps_fallback)
+        else -> null
     }
 
     private fun sendNavigateIntent(payload: JSONObject, shortcut: String?): DispatchResult {
-        // #190/#200: which map app the user picked for routes and map search. 2GIS or Maps that
-        // is not installed falls back to Yandex Navigator for this action, and says so in the
-        // result reason.
-        val (navigator, fallbackReason) = resolveNavigator()
+        // #190/#200: which map app the user picked for routes and map search. One that is not
+        // installed falls back to Yandex Navigator for this action, and says so in the result
+        // reason.
+        val target = resolveNavigator(payload)
+        val navigator = target.navigator
+        val fallbackReason = fallbackReason(target)
         // app="maps" (voice: «…в Яндекс Картах») or Maps as the settings default mirror the
         // whole command set, Home/Work shortcut included, into Yandex Maps.
-        if (isMapsRequest(payload) || navigator == RouteNavigatorUris.MAPS) {
-            return navigateMaps(payload, shortcut)
-        }
+        if (navigator == RouteNavigatorUris.MAPS) return navigateMaps(payload, shortcut, target.pkg)
+        if (shortcut != null && ownsHomeWork(navigator, payload)) return ownHomeWork(target, shortcut)
         // Navigator's own saved Home/Work: exported shortcut actions on its MapActivity
         // resolve the address internally, so no coordinates are needed. Undocumented
         // (launcher-shortcut contract); tryStartActivity degrades to a clear error if
@@ -1189,7 +1491,7 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
                 else -> return DispatchResult(false, appStrings.get(R.string.dispatch_shortcut_unknown, shortcut))
             }
             val intent = Intent(intentAction)
-                .setPackage(NAVI_PACKAGE)
+                .setPackage(yandexShortcutPackage(target))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             return tryStartActivity(intent, "navigate_shortcut:$shortcut")
         }
@@ -1198,7 +1500,7 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         val query = payload.optString("query").takeIf(String::isNotBlank)
         if (query != null) {
             return startNavigate(
-                navigator, RouteNavigatorUris.MODE_SEARCH,
+                target, RouteNavigatorUris.MODE_SEARCH,
                 RouteNavigatorUris.search(navigator, query),
                 "navigate_search:$query", fallbackReason,
             )
@@ -1210,21 +1512,51 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         if (payload.optBoolean("show", false)) {
             val desc = payload.optString("label").takeIf(String::isNotBlank)
             return startNavigate(
-                navigator, RouteNavigatorUris.MODE_SHOW,
+                target, RouteNavigatorUris.MODE_SHOW,
                 RouteNavigatorUris.showPoint(navigator, lat, lon, desc),
                 "navigate_show:$lat,$lon", fallbackReason,
             )
         }
         return startNavigate(
-            navigator, RouteNavigatorUris.MODE_ROUTE,
+            target, RouteNavigatorUris.MODE_ROUTE,
             RouteNavigatorUris.route(navigator, lat, lon),
             "navigate:$lat,$lon", fallbackReason,
         )
     }
 
-    /** Per-command target of a navigate payload: Maps only when the driver named it. */
-    private fun isMapsRequest(payload: JSONObject): Boolean =
-        payload.optString("app").trim().equals(RouteNavigatorUris.MAPS, ignoreCase = true)
+    /**
+     * Home/Work in the app itself ([ownsHomeWork]): Waze's saved favourite; Google Maps and a
+     * named 2GIS have no such link and refuse with the BYDMate Place advice rather than open a
+     * different app than the one asked for.
+     */
+    private fun ownHomeWork(target: NavigatorTarget, shortcut: String): DispatchResult = when {
+        shortcut != "home" && shortcut != "work" ->
+            DispatchResult(false, appStrings.get(R.string.dispatch_shortcut_unknown, shortcut))
+        target.navigator == RouteNavigatorUris.WAZE -> startNavigate(
+            target, RouteNavigatorUris.MODE_ROUTE, RouteNavigatorUris.wazeFavorite(shortcut),
+            "navigate_waze_shortcut:$shortcut", fallbackReason = null,
+        )
+        target.navigator == RouteNavigatorUris.GOOGLE_MAPS ->
+            DispatchResult(false, appStrings.get(R.string.dispatch_google_maps_shortcut_unsupported))
+        else -> DispatchResult(false, appStrings.get(R.string.dispatch_dgis_shortcut_unsupported))
+    }
+
+    /**
+     * The app the navigate payload itself names (`app`), or null for the settings default: Maps
+     * («…в Яндекс Картах», #200) or any other route app by its id («…в Waze»). Unknown values
+     * keep the default.
+     */
+    private fun requestedNavigator(payload: JSONObject): String? =
+        payload.optString("app").trim().lowercase(java.util.Locale.ROOT).takeIf { it in RouteNavigatorUris.ALL }
+
+    /**
+     * The package Yandex Navigator's own Home/Work action goes to: the manual package when the
+     * Navigator is the chosen app, else its installed variant, else the canonical package.
+     */
+    private fun yandexShortcutPackage(target: NavigatorTarget): String =
+        target.pkg?.takeIf { target.navigator == RouteNavigatorUris.YANDEX }
+            ?: RouteNavigatorDiscovery.firstPackage(context.packageManager, RouteNavigatorUris.YANDEX)
+            ?: NAVI_PACKAGE
 
     /**
      * Whether [navigate]/[sendNavigateIntent] will land on Yandex Maps for this payload, either
@@ -1233,14 +1565,32 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
      * foreground-verification app. Mirrors [sendNavigateIntent]'s own routing exactly.
      */
     fun willOpenMaps(payload: JSONObject): Boolean =
-        isMapsRequest(payload) || resolveNavigator().first == RouteNavigatorUris.MAPS
+        resolveNavigator(payload).navigator == RouteNavigatorUris.MAPS
+
+    /**
+     * The package [sendNavigateIntent] will pin the intent to for this payload (#305): the
+     * installed 2GIS or Waze, a manual package from settings, a non-standard Yandex Navigator
+     * variant for Home/Work. Null when it lands on the canonical Yandex Navigator (chosen, as
+     * the fallback, or its Home/Work action) or on Maps resolved by scheme. Mirrors
+     * [sendNavigateIntent]'s routing exactly, like [willOpenMaps].
+     */
+    fun willOpenPinned(payload: JSONObject): String? {
+        val target = resolveNavigator(payload)
+        val pinned = when {
+            target.navigator == RouteNavigatorUris.MAPS -> target.pkg
+            payload.optString("shortcut").isNotBlank() && !ownsHomeWork(target.navigator, payload) ->
+                yandexShortcutPackage(target)
+            else -> target.pkg
+        }
+        return pinned?.takeUnless { it == NAVI_PACKAGE }
+    }
 
     /**
      * The app="maps" mirror of [sendNavigateIntent] on Yandex Maps' own yandexmaps:// dialect
-     * (#200, from a user patch). URI intents are not package-pinned — the scheme resolves to
-     * whichever store variant of Maps is installed.
+     * (#200, from a user patch). URI intents are pinned only to a manual package from settings
+     * ([manualPackage]); otherwise the scheme resolves to whichever store variant is installed.
      */
-    private fun navigateMaps(payload: JSONObject, shortcut: String?): DispatchResult {
+    private fun navigateMaps(payload: JSONObject, shortcut: String?, manualPackage: String?): DispatchResult {
         // Home/Work: the shortcut actions carry the yandexmaps prefix even in the Navigator
         // (shared engine), so Maps plausibly exports them too — try each store variant, then
         // fall through to the honest "save a BYDMate Place" advice.
@@ -1251,7 +1601,7 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
                 else -> return DispatchResult(false, appStrings.get(R.string.dispatch_shortcut_unknown, shortcut))
             }
             var failure: DispatchResult? = null
-            for (pkg in NavPackages.YANDEX_MAPS) {
+            for (pkg in (listOfNotNull(manualPackage) + NavPackages.YANDEX_MAPS).distinct()) {
                 Log.i(TAG, "navigate app=maps kind=shortcut target=$shortcut pkg=$pkg")
                 val intent = Intent(intentAction).setPackage(pkg)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -1266,7 +1616,8 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         // for an arbitrary street-level address.
         val query = payload.optString("query").takeIf(String::isNotBlank)
         if (query != null) return startMapsIntent(
-            RouteNavigatorUris.MODE_SEARCH, RouteNavigatorUris.mapsSearch(query), "navigate_maps_search:$query")
+            RouteNavigatorUris.MODE_SEARCH, RouteNavigatorUris.mapsSearch(query), "navigate_maps_search:$query",
+            manualPackage)
         val lat = payload.optDouble("lat", Double.NaN)
         val lon = payload.optDouble("lon", Double.NaN)
         if (lat.isNaN() || lon.isNaN()) return DispatchResult(false, appStrings.get(R.string.dispatch_coords_missing))
@@ -1274,17 +1625,19 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
             val desc = payload.optString("label").takeIf(String::isNotBlank)
             return startMapsIntent(
                 RouteNavigatorUris.MODE_SHOW, RouteNavigatorUris.mapsShowPoint(lat, lon),
-                "navigate_maps_show:$lat,$lon" + (desc?.let { " ($it)" } ?: ""))
+                "navigate_maps_show:$lat,$lon" + (desc?.let { " ($it)" } ?: ""), manualPackage)
         }
         return startMapsIntent(
-            RouteNavigatorUris.MODE_ROUTE, RouteNavigatorUris.mapsRoute(lat, lon), "navigate_maps:$lat,$lon")
+            RouteNavigatorUris.MODE_ROUTE, RouteNavigatorUris.mapsRoute(lat, lon), "navigate_maps:$lat,$lon",
+            manualPackage)
     }
 
-    /** [startNavigate] for the Maps dialect: no package pin, no 2GIS fallback reason. */
-    private fun startMapsIntent(mode: String, uri: String, label: String): DispatchResult {
+    /** [startNavigate] for the Maps dialect: pinned only to [pkg], no 2GIS fallback reason. */
+    private fun startMapsIntent(mode: String, uri: String, label: String, pkg: String?): DispatchResult {
         Log.i(TAG, "navigate app=maps kind=$mode uri=${LinkRedaction.forLog(uri)}")
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        pkg?.let(intent::setPackage)
         val result = tryStartActivity(intent, label)
         Log.i(TAG, "navigate app=maps intent sent label=${LinkRedaction.forLog(label)} ok=${result.success}" +
             (result.reason?.let { " reason=$it" } ?: ""))
@@ -1294,18 +1647,18 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
     /**
      * Fires one navigation deep link and journals which app it went to (#190).
      *
-     * The package is pinned for 2GIS only: the Yandex links have always resolved by scheme, and
-     * pinning them now would break any head unit whose navigator ships under another package.
+     * The package is the resolved one ([NavigatorTarget.pkg]): the installed 2GIS or Waze, or
+     * a manual package from settings. The Yandex links without one resolve by scheme as they
+     * always have: pinning them would break any head unit whose navigator ships under another
+     * package.
      */
     private fun startNavigate(
-        navigator: String, mode: String, uri: String, label: String, fallbackReason: String?,
+        target: NavigatorTarget, mode: String, uri: String, label: String, fallbackReason: String?,
     ): DispatchResult {
-        Log.i(TAG, "navigate: app=$navigator mode=$mode uri=${LinkRedaction.forLog(uri)}")
+        Log.i(TAG, "navigate: app=${target.navigator} mode=$mode uri=${LinkRedaction.forLog(uri)}")
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (navigator == RouteNavigatorUris.DGIS) {
-            intent.setPackage(RouteNavigatorUris.DGIS_PACKAGE)
-        }
+        target.pkg?.let(intent::setPackage)
         val result = tryStartActivity(intent, label)
         Log.i(TAG, "navigate: intent sent label=${LinkRedaction.forLog(label)} ok=${result.success}")
         return if (result.success && fallbackReason != null) result.copy(reason = fallbackReason)
@@ -1399,8 +1752,8 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         return result
     }
 
-    private fun isPackageInstalled(pkg: String): Boolean =
-        context.packageManager.getLaunchIntentForPackage(pkg) != null
+    // Like app_launch: a build without a standard launch intent still counts when it opens.
+    private fun isPackageInstalled(pkg: String): Boolean = openIntentFor(pkg) != null
 
     private fun goHome(): DispatchResult {
         val home = Intent(Intent.ACTION_MAIN)

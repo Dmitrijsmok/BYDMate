@@ -21,7 +21,7 @@ import org.json.JSONObject
  * - 1004 = light enums (firmware-protected)
  * - 1006 = drive mode
  * - 1007 = seatbelt sensor
- * - 1009 = charging gun state
+ * - 1009 = charging (gun state, charge settings)
  * - 1011 = gear
  * - 1012 = engine power
  * - 1013 = vehicle speed
@@ -80,6 +80,13 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
             // SETTING_PRESELECTED_DRIVING_MODE_SET — the BYD voice assistant's drive mode write.
             // Only the values of [RESTRICTED_VALUES] pass, see there.
             DRIVE_MODE_DEV to DRIVE_MODE_WRITE_FID,
+            // SET_HUD_SWITCH_SET — the HUD master switch (stock settings HudSwitchModel, BYD voice
+            // HeadUpDisplayApiImpl). Only 1 (on) and 2 (off) pass, see [RESTRICTED_VALUES].
+            HUD_DEV to HUD_SWITCH_FID,
+            // CHARGING_PREHEAT_SET — the stock «Battery Warm-up» toggle (CarSetting ChargingPreheat,
+            // #311). Only 1 (on) and 2 (off) pass, see [RESTRICTED_VALUES]; the rest of the
+            // charging device stays banned. Carve-out approved by the owner 2026-10-10.
+            BATTERY_PREHEAT_DEV to BATTERY_PREHEAT_SET_FID,
         )
 
         /** Drive mode: written and read back on the Setting device (dev=1023). */
@@ -90,6 +97,35 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
          *  modes (live Leopard 3 2026-09-27), so only this fid confirms a write. */
         const val DRIVE_MODE_TARGET_FID = 255852712
 
+        /** HUD master switch (#292): written on the Setting device (dev=1023), 1 = on, 2 = off. */
+        const val HUD_DEV = 1023
+        const val HUD_SWITCH_FID = 1276174371
+        /** SET_HUD_SWITCH_STATUS_FEEDBACK (tx=5): 1 = on, 2 = off, anything else invalid. */
+        const val HUD_SWITCH_STATUS_FID = 951058460
+        /** SET_HUD_CONFIG (tx=5): 1 = W-HUD, 2 = AR-HUD; a car without a HUD reads 65535. */
+        const val HUD_CONFIG_FID = 951058453
+
+        /** Battery warm-up (#311): written on the Charging device (dev=1009), 1 = on, 2 = off. */
+        const val BATTERY_PREHEAT_DEV = 1009
+        const val BATTERY_PREHEAT_SET_FID = 1324617774
+        /** CHARGING_PREHEAT_STATUS (tx=5): 1 = heating, 2 = warm-up finished; 0 read while idle. */
+        const val BATTERY_PREHEAT_STATUS_FID = 879755302
+        /** CHARGING_PREHEAT_PERMIT (tx=5): 0 = the car lets the warm-up start, anything else is
+         *  the stock «no preheating is required» refusal (1 on a warm battery). */
+        const val BATTERY_PREHEAT_PERMIT_FID = 1151336468
+        /** CHARGING_PREHEAT_FUNCTION_CONFIG (tx=5): 0 = the function is fitted. */
+        const val BATTERY_PREHEAT_CONFIG_FID = 879755304
+        /** CHARGING_GUN_CONNECT_STATE (tx=5): 2, 3 and 4 disable the stock toggle; 1 = no gun. */
+        const val CHARGE_GUN_STATE_FID = 876609586
+        /** CHARGING_CURRENT_BATTERY_HEATING_POWER (tx=5), raw; diagnostics only. */
+        const val BATTERY_HEATING_POWER_FID = 584067131
+        /** HEV odometer (dev=1014, tx=5): 1048575 on a pure EV, a real number on a hybrid.
+         *  Stands in for the stock toggle's isEVCarType() check. */
+        const val HEV_MILEAGE_DEV = 1014
+        const val HEV_MILEAGE_FID = 1246773264
+        /** Fuel percent (dev=1014, tx=5), raw; diagnostics only. */
+        const val FUEL_PERCENT_FID = 1246785600
+
         /**
          * Carve-outs that open only some values of their fid: an entry on such a fid must be a
          * single value from the set, anything else is dropped at load like a banned dev. The drive
@@ -97,12 +133,43 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
          */
         val RESTRICTED_VALUES: Map<Pair<Int, Int>, Set<Int>> = mapOf(
             (DRIVE_MODE_DEV to DRIVE_MODE_WRITE_FID) to DriveMode.entries.map { it.value }.toSet(),
+            (HUD_DEV to HUD_SWITCH_FID) to setOf(1, 2),
+            (BATTERY_PREHEAT_DEV to BATTERY_PREHEAT_SET_FID) to setOf(1, 2),
         )
 
         /** False when [entry] sits on a [RESTRICTED_VALUES] fid with a value outside its set. */
         internal fun valuesAllowed(entry: WriteEntry): Boolean {
             val allowed = RESTRICTED_VALUES[entry.dev to entry.writeFid] ?: return true
             return entry.valueMin == entry.valueMax && entry.valueMin in allowed
+        }
+
+        /**
+         * "No request" on a window target-position fid. The fid holds its last value as a live
+         * request, so BYD's own apps write the percent, wait 300 ms and write 255 to the same
+         * fid (autovoice CarWindowApiImpl.setLeftFrontWindowPercent → setLeftFrontWindowPercentInvalid,
+         * BydMyCar carlib vz). Never a user target: the percent entries stop at 100.
+         */
+        const val PERCENT_RESET_VALUE = 255
+
+        /** The percent window actions whose fid takes [PERCENT_RESET_VALUE]. */
+        private val PERCENT_RESET_ACTIONS = setOf(
+            "window_driver_pos", "window_passenger_pos", "window_rear_left_pos", "window_rear_right_pos",
+        )
+
+        /**
+         * The reset write of a percent window [entry] (same dev and fid, value 255 only), or null
+         * for every other entry. Not in the action map: [find] never returns it, so no command,
+         * automation or agent tool can send 255.
+         */
+        fun percentResetFor(entry: WriteEntry): WriteEntry? {
+            if (entry.actionName.lowercase() !in PERCENT_RESET_ACTIONS) return null
+            return entry.copy(
+                actionName = "${entry.actionName}_reset",
+                valueMin = PERCENT_RESET_VALUE,
+                valueMax = PERCENT_RESET_VALUE,
+                validated = false,
+                source = "byd-stock CarWindowApiImpl",
+            )
         }
 
         /** An entry may load: not on a banned dev (unless carved out) and within its value set. */
@@ -139,7 +206,10 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
             // Both values physically validated in-car 2026-07-07.
             WriteEntry("ac_auto_on",     1000, 501219352, null, 0, 0,   "climate",  true, "live-leopard3-2026-07-07"),
             WriteEntry("ac_auto_off",    1000, 501219352, null, 1, 1,   "climate",  true, "live-leopard3-2026-07-07"),
-            WriteEntry("ac_temp_main",   1000, 501219368, null, 16, 30, "climate",  true, "live-leopard3-2026-05-28"),
+            // Raw °C. Leopard 3 accepts 16..30 (2026-05-28). Seagull accepts 17..33
+            // (2026-10-06, same SET fid). The window is the union: 16 stays so a
+            // Leopard can still reach its minimum, 33 is the Seagull maximum.
+            WriteEntry("ac_temp_main",   1000, 501219368, null, 16, 33, "climate",  true, "live-leopard3-2026-05-28"),
             WriteEntry("ac_cycle_inner", 1000, 501219355, null, 1, 1,   "climate",  true, "live-leopard3-2026-05-28"),
             WriteEntry("ac_cycle_outer", 1000, 501219355, null, 0, 0,   "climate",  true, "live-leopard3-2026-06-28"),
 
@@ -300,10 +370,14 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
             // unsupported off Leopard 3. Not live-validated yet (#201).
             WriteEntry("ac_wind_level", 1000, 501219340, null, 1, 7, "climate", false, "competitor-actions ac_wind_level; #201"),
             // Blow direction (AC_WIND_MODE_SET, dev=1000): 1=face, 2=face+feet, 3=feet,
-            // 4=feet+windshield, 5=windshield. 6/7 exist on some models and stay out.
+            // 4=feet+windshield, 5=windshield. 6/7 exist on some models only and get their own
+            // entry below, so this one keeps the 1..5 range.
             // Same value-less competitor entry problem and same per-model readback fid
             // divergence as ac_wind_level above, so no readbackFid here either (#201).
             WriteEntry("ac_wind_mode", 1000, 501219336, null, 1, 5, "climate", false, "competitor-actions ac_wind_mode; AirConditioningService decompiled; #201"),
+            // Blow direction 6 = face+feet+windshield, 7 = face+windshield, same fid. Seen on a
+            // BYD e2 live log; a car without them refuses the write. Unvalidated (#201).
+            WriteEntry("ac_wind_mode_ext", 1000, 501219336, null, 6, 7, "climate", false, "BYD e2 live log; #201"),
             // Steering wheel heat — SET_STEERING_WHEEL_HEAT_STATE_SET on the Setting device
             // (dev=1023 carve-out), 2=on, 1=off; the set accepts nothing else (levels live on
             // separate fids and stay out). Override the competitor's same-named dev=1000
@@ -315,10 +389,32 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
             // Drive mode rock (8) — BYD voice assistant value, not tried: the Leopard 3 support
             // flag reports it absent. Same dev=1023 carve-out as the validated modes.
             WriteEntry("drive_mode_rock", 1023, 1276260400, null, 8, 8, "drive_mode", false, "byd-sdk autovoice DrivingPatternApiImpl"),
+            // HUD master switch (#292) — dev=1023 carve-out, 1=on, 2=off. No readbackFid: the
+            // status feedback follows the write on CAN with a delay, so [HudSwitchChannel] checks
+            // that a HUD is fitted and reads the status back itself.
+            WriteEntry("hud_on",  1023, 1276174371, null, 1, 1, "hud", false, "byd-sdk carsetting HudSwitchModel + autovoice"),
+            WriteEntry("hud_off", 1023, 1276174371, null, 2, 2, "hud", false, "byd-sdk carsetting HudSwitchModel + autovoice"),
+            // Battery warm-up (#311) — dev=1009 carve-out, 1=on, 2=off, the stock toggle's write.
+            // No readbackFid: [BatteryPreheatChannel] runs the stock checks (function fitted, no
+            // charge gun, the car's permit) and reads the status back itself. Not tried on a car:
+            // the car refuses the warm-up on a warm battery.
+            WriteEntry("battery_preheat_on",  1009, 1324617774, null, 1, 1, "energy", false, "byd-sdk carsetting ChargingPreheat"),
+            WriteEntry("battery_preheat_off", 1009, 1324617774, null, 2, 2, "energy", false, "byd-sdk carsetting ChargingPreheat"),
             WriteEntry("driver_seat_heat_fallback",    1001, 1125122068, null, 1, 6, "seats", false, "competitor-v80"),
             WriteEntry("driver_seat_vent_fallback",    1001, 1125122064, null, 1, 6, "seats", false, "competitor-v80"),
             WriteEntry("passenger_seat_heat_fallback", 1001, 1125122076, null, 1, 6, "seats", false, "competitor-v80"),
             WriteEntry("passenger_seat_vent_fallback", 1001, 1125122072, null, 1, 6, "seats", false, "competitor-v80"),
+            // Rear seat heat (#327) — SET_REAR_*_SEAT_HEATING_STATE_SET, 1=off, 2=lvl1, 3=lvl2.
+            // No readbackFid: the state fid (dev=1023) differs per platform, so
+            // [RearSeatHeatChannel] resolves it from the car's catalog and reads it back itself.
+            WriteEntry("rear_left_seat_heat",  1001, 1125122091, null, 1, 3, "seats", false, "byd-sdk setSeatHeatingState seat 3 (#327)"),
+            WriteEntry("rear_right_seat_heat", 1001, 1125122099, null, 1, 3, "seats", false, "byd-sdk setSeatHeatingState seat 4 (#327)"),
+            // Sunshade half-open (3) and stop (4) on the live-validated open/close fid (#362).
+            // BYDAutoBodyworkDevice.voiceCtlSunshadePanel accepts 1..4 with the same voice
+            // constants as the sunroof fid, where 3/4 are live-validated. Stock voice sends only
+            // 1/2 here, so not tried on a car.
+            WriteEntry("sunshade_half", 1001, 1125122060, null, 3, 3, "sunshade", false, "byd-sdk BYDAutoBodyworkDevice.voiceCtlSunshadePanel"),
+            WriteEntry("sunshade_stop", 1001, 1125122060, null, 4, 4, "sunshade", false, "byd-sdk BYDAutoBodyworkDevice.voiceCtlSunshadePanel"),
         )
 
         /**

@@ -1,5 +1,7 @@
 package com.bydmate.app.ui.tech
 
+import com.bydmate.app.data.nativestack.VehicleKind
+
 /**
  * The cards of the «Техника» screen, in their factory order. The id is what gets persisted,
  * so it must never change once shipped — the enum name may.
@@ -9,8 +11,11 @@ enum class TechCard(val id: String) {
     LIMITS("limits"),
     HISTORY("history"),
     MOTORS("motors"),
-    CLIMATE("climate"),
-    TYRES("tyres"),
+    /** «Состояние машины»: climate on top, tyres below. Keeps the shipped climate id. */
+    CAR_STATE("climate"),
+    /** DM-i hybrid only (#184): in the order only on a hybrid, see [TechCardOrder.forKind]. */
+    FUEL("fuel"),
+    DIAGNOSTICS("diagnostics"),
 }
 
 /**
@@ -20,14 +25,30 @@ enum class TechCard(val id: String) {
  */
 object TechCardOrder {
 
-    val DEFAULT: List<TechCard> = TechCard.entries.toList()
+    val DEFAULT: List<TechCard> = TechCard.entries.filterNot { it == TechCard.FUEL }
+
+    /**
+     * Ids of cards merged away. «Шины» joined «Климат» in «Состояние машины», so a stored `tyres`
+     * becomes that card and the merged card takes the earlier of the two old slots.
+     */
+    private val LEGACY_IDS = mapOf("tyres" to TechCard.CAR_STATE)
 
     fun parse(raw: String): List<TechCard> {
-        val byId = TechCard.entries.associateBy { it.id }
+        val byId = TechCard.entries.associateBy { it.id } + LEGACY_IDS
         val saved = raw.split(',')
             .mapNotNull { byId[it.trim()] }
             .distinct()
         return saved + DEFAULT.filterNot { it in saved }
+    }
+
+    /**
+     * The order for this car: a hybrid gets the fuel card (appended when the stored order predates
+     * it), any other car drops it, so an EV's stored order never gains `fuel`.
+     */
+    fun forKind(order: List<TechCard>, kind: VehicleKind): List<TechCard> = when {
+        kind != VehicleKind.HYBRID -> order.filterNot { it == TechCard.FUEL }
+        TechCard.FUEL in order -> order
+        else -> order + TechCard.FUEL
     }
 
     fun serialize(order: List<TechCard>): String = order.joinToString(",") { it.id }

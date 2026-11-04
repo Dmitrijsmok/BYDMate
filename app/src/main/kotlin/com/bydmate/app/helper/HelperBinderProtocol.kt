@@ -41,6 +41,7 @@ import android.os.IBinder
  *   TX_SET_APP_HIDDEN : writeString(packageName), writeInt(hidden: 1=disable 0=enable)
  *       -> reply: writeInt(status), writeInt(0)   // status 0 = ok; -1 = not whitelisted / failed
  *   TX_ENABLE_NOTIFICATION_LISTENER : (no args)           -> reply: writeInt(status), writeInt(0)  // status 0 = our listener stub enabled
+ *   TX_DISALLOW_NOTIFICATION_LISTENER : (no args)         -> reply: writeInt(status)  // status 0 = our listener stub disallowed (#325 rebind)
  *   TX_SET_CLUSTER_MODE: [int on(0|1)] -> [int status]; status 0 = ok.
  *   TX_GET_TASK_STATE : writeString(packageName)
  *       -> reply: writeInt(status), then on status 0:
@@ -477,6 +478,169 @@ object HelperBinderProtocol {
      * Request: [String id] -> Reply: [int status (0 = ok), OffReportStatus (see OffReportWire)]
      */
     val TX_OFFREPORT_STATUS: Int = IBinder.FIRST_CALL_TRANSACTION + 54  // 55
+
+    /**
+     * HUD navigation status (HUD wave 1, #198): BYDAutoInstrumentDevice.sendAutoNaviStatus(status)
+     * called reflectively inside the daemon. From the app uid the SDK answers
+     * `SecurityException: [setInt] permission deny!`; under the shell uid it goes through.
+     *
+     * Request: [int status (0..4; [HUD_NAVI_PROBE] = only say whether the method exists)]
+     * Reply:   [int outcome (HUD_NAVI_CALLED / HUD_NAVI_ABSENT / HUD_NAVI_THREW), int sdkReturn]
+     * An old daemon without this handler makes transact return false → the client returns null,
+     * and the app, finding the daemon alive, logs it as outdated and writes the fid raw instead.
+     */
+    val TX_HUD_NAVI_STATUS: Int = IBinder.FIRST_CALL_TRANSACTION + 55  // 56
+
+    /**
+     * autoservice setBuffer (tx 14): the instrument's road-name field takes a byte buffer, not an
+     * int. Ported from the archived CAN probe (test/hud-can-probe); the bytes go out as given.
+     *
+     * Request: [int dev, int fid, byte[] bytes] -> Reply: [int status, int 0] (raw autoservice status)
+     * An old daemon without this handler makes transact return false → the client returns null.
+     */
+    val TX_WRITE_BUFFER: Int = IBinder.FIRST_CALL_TRANSACTION + 56  // 57
+
+    /**
+     * Way 3 of the HUD output: the BYDAutoInstrumentDevice call OpenBYD's CAN strategy makes after
+     * its raw writes of the same fields, picked by [HUD_SDK_GUIDANCE] / [HUD_SDK_PATH_NAME] /
+     * [HUD_SDK_REST_ROUTE] and called reflectively inside the daemon, like [TX_HUD_NAVI_STATUS].
+     *
+     * Request: [int method, then GUIDANCE: int icon, int distance | PATH_NAME: String name |
+     *           REST_ROUTE: int hours, int minutes, long mileage]
+     * Reply:   [int outcome (HUD_NAVI_CALLED / HUD_NAVI_ABSENT / HUD_NAVI_THREW), int sdkReturn]
+     * An unknown method answers HUD_NAVI_ABSENT. An old daemon without this handler makes transact
+     * return false → the client returns null, and way 3 keeps its raw writes alone.
+     */
+    val TX_HUD_SDK: Int = IBinder.FIRST_CALL_TRANSACTION + 57  // 58
+
+    /**
+     * Central screen backlight off / on (#275): the hidden PowerManager.turnBacklightOff(long) /
+     * turnBacklightOn(long) the stock screen-off button calls, `TurnBacklight*` on DiLink 3.0 / 4.0,
+     * looked up by name inside the daemon (DEVICE_POWER, which the shell uid holds). Only the
+     * backlight changes: Android stays awake. The daemon then reads getPowerScreenStatus()
+     * (0 = off, 1 = on) until it shows the wanted state.
+     *
+     * Request: [int on: 1=on, 0=off]
+     * Reply:   [int outcome (SCREEN_BACKLIGHT_*), int status (last read, -1 = none),
+     *           String detail (the method found and the reads, or the exception)]
+     * An old daemon without this handler makes transact return false → the client returns null.
+     */
+    val TX_SET_SCREEN_BACKLIGHT: Int = IBinder.FIRST_CALL_TRANSACTION + 58  // 59
+
+    /**
+     * Diagnostic read of one native split root and one task in it, for the journal line the split
+     * engine writes when a pane task is "already in root" (field 2026-10-13: Navi vanished from
+     * the wide pane leaving the gray backdrop while its task still read as in the root). Read-only.
+     * Root data comes from the getAllRootTaskInfos() entry of [rootTaskId]: topActivity (the
+     * root's top running activity), `visible`, and the leaf children (childTaskIds/childTaskNames,
+     * in the framework's order — bottom to top on API 31/32). The task data comes from the
+     * getTasks() entry of [taskId]: isVisible and topActivity.
+     *
+     * Request: [int rootTaskId, int taskId]
+     * Reply:   [int status (see SPLIT37_*), String rootTop ("" = unknown), int rootVisible (1/0/-1),
+     *           int childCount (-1 = root not listed), childCount × (int taskId, String name),
+     *           int taskVisible (1/0/-1), String taskTop ("" = unknown)]
+     * An old daemon without this handler makes transact return false → the client returns null.
+     */
+    val TX_SPLIT37_ROOT_STATE: Int = IBinder.FIRST_CALL_TRANSACTION + 59  // 60
+
+    /**
+     * Voice session duck the stock assistant's way (#353): the hidden
+     * IAudioService.setAutoVoiceActiveState(isActive, isDuckMedia, callingPackageName) that
+     * com.byd.autovoice calls. The firmware then ducks media at track level and makes stream 17
+     * the active one, so on cars with an external amplifier (which gets the active stream's
+     * volume only) our reply plays at the "Голос" volume instead of the ducked media one. The
+     * method is looked up by name (its transaction number differs between firmwares) and gets
+     * the stock assistant's package, the only check the firmware makes.
+     *
+     * Request: [int active: 1=on, 0=off]
+     * Reply:   [int outcome (AUTO_VOICE_*), String detail (amp type, the call or the exception)]
+     * An old daemon without this handler makes transact return false → the client returns null.
+     */
+    val TX_SET_AUTO_VOICE: Int = IBinder.FIRST_CALL_TRANSACTION + 60  // 61
+
+    /**
+     * Manual ECU fault-code scan, start: the daemon runs the whole job on its own thread so the
+     * shared client mutex is held for milliseconds only. No address or payload bytes come from
+     * the app, only where to read the gear fid.
+     *
+     * The daemon holds the 18 addresses (DtcWire.ADDRESSES) and builds only `19 01 FF`,
+     * `19 02 0D`/`19 02 09` (by the block's availability mask, `19 02 FF` once after a negative
+     * answer) and `22 F1 94`. Before every request: the 90 s budget, `sys.diagmgrsrv.task_bk`
+     * at its idle value and the gear read live (getInt) == P; a 2 s passive listen comes first.
+     *
+     * Request: [int gearDev, int gearFid]
+     * Reply:   [int status: 0 = started, 1 = busy (poll it), -1 = refused]
+     * An old daemon without this handler makes transact return false → the client returns -2.
+     */
+    val TX_DTC_SCAN_START: Int = IBinder.FIRST_CALL_TRANSACTION + 61  // 62
+
+    /**
+     * Fault-code scan, status (see [TX_DTC_SCAN_START]).
+     *
+     * Reply: [int state, int done, int total, String reason, int count,
+     *         count × (int addr, String outcome, byte[] countUds, byte[] listUds, byte[] idUds),
+     *         int mode (0 scan, 1 erase), int eraseCount, eraseCount × (int addr, String confirm,
+     *         int nrc (-1 none), String reason, int hasReread, [the five reread fields above])]
+     * A daemon from before the erase ends after the results; the client reads that as a scan.
+     * state: DtcWire.STATE_* (0 idle, 1 running, 2 done, 3 unavailable, 4 aborted); a failed
+     * call answers a lone -1. A uds array is null when that request was not sent or not answered,
+     * `7F sid nrc` for a negative answer, the raw frame for outcome multiframe.
+     * An old daemon without this handler makes transact return false → the client returns null.
+     */
+    val TX_DTC_SCAN_STATUS: Int = IBinder.FIRST_CALL_TRANSACTION + 62  // 63
+
+    /**
+     * Erase of stored fault codes, start: `14 FF FF FF` to each of the given blocks in order, then
+     * the codes of those blocks read again; runs on the scan's thread and state, so a scan and an
+     * erase never overlap. The addresses must all be in DtcWire.ADDRESSES (else refused, nothing
+     * sent). Before every request: the 120 s budget, the guard property at its idle value, the
+     * gear == P and the speed (getFloat) exactly 0, unknown = refuse; any foreign frame stops it.
+     * Progress and the per-block result come through [TX_DTC_SCAN_STATUS] (mode 1).
+     *
+     * Request: [int gearDev, int gearFid, int speedDev, int speedFid, int[] addrs]
+     * Reply:   [int status: 0 = started, 1 = busy, -1 = refused]
+     * An old daemon without this handler makes transact return false → the client returns -2.
+     */
+    val TX_DTC_ERASE_START: Int = IBinder.FIRST_CALL_TRANSACTION + 63  // 64
+
+    /**
+     * First half of the notification-listener rebind (#325): `cmd notification disallow_listener`
+     * for [NOTIFICATION_LISTENER_COMPONENT] only, the component is fixed daemon-side and no
+     * argument is read. The app gives it back with [TX_ENABLE_NOTIFICATION_LISTENER] 200 ms later.
+     *
+     * Request: (no args) -> Reply: [int status (0 = disallowed, -1 = failed)]
+     * An old daemon without this handler makes transact return false → the client returns false
+     * and the rebind stops there, nothing revoked.
+     */
+    val TX_DISALLOW_NOTIFICATION_LISTENER: Int = IBinder.FIRST_CALL_TRANSACTION + 64  // 65
+
+    /** TX_SET_AUTO_VOICE outcomes: called; no such method on this firmware; the audio service or
+     *  the call threw. */
+    const val AUTO_VOICE_APPLIED = 0
+    const val AUTO_VOICE_UNSUPPORTED = 2
+    const val AUTO_VOICE_FAILED = -1
+
+    /** TX_SET_SCREEN_BACKLIGHT outcomes: called and the status shows the wanted state; called but
+     *  the status did not follow (or could not be read); no such method on this firmware; the
+     *  PowerManager or the call threw. */
+    const val SCREEN_BACKLIGHT_CONFIRMED = 0
+    const val SCREEN_BACKLIGHT_NOT_FOLLOWED = 1
+    const val SCREEN_BACKLIGHT_ABSENT = 2
+    const val SCREEN_BACKLIGHT_THREW = -1
+
+    /** TX_HUD_SDK methods: sendSimpleGuidanceInfo, sendNextPathName, sendRestRouteInfo. */
+    const val HUD_SDK_GUIDANCE = 1
+    const val HUD_SDK_PATH_NAME = 2
+    const val HUD_SDK_REST_ROUTE = 3
+
+    /** TX_HUD_NAVI_STATUS: the status that asks only whether the SDK method exists. */
+    const val HUD_NAVI_PROBE = -1
+    /** TX_HUD_NAVI_STATUS outcomes: the method exists (and was called unless probed), is absent
+     *  on this firmware, or the device / the call threw (the daemon logs the exception class). */
+    const val HUD_NAVI_CALLED = 0
+    const val HUD_NAVI_ABSENT = 1
+    const val HUD_NAVI_THREW = -1
 
     /** Status codes of the TX_SPLIT37_* verbs. Distinct from the (status, value) autoservice
      *  convention: 2 says the firmware has no native split surface at all (methods absent on the

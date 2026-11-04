@@ -2,11 +2,15 @@ package com.bydmate.app.data.automation
 
 import android.app.NotificationManager
 import android.app.SearchManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.pm.ResolveInfo
 import android.net.Uri
 import android.provider.MediaStore
+import android.provider.Settings
 import androidx.test.core.app.ApplicationProvider
 import com.bydmate.app.cluster.ClusterVoiceControl
 import com.bydmate.app.data.local.LocalePreferences
@@ -16,6 +20,7 @@ import com.bydmate.app.data.vehicle.VehicleApi
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
+import io.mockk.MockKMatcherScope
 import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.verify
@@ -91,6 +96,74 @@ class ActionDispatcherLaunchTest {
         dispatcher.dispatch(launchAction("com.example.app"), null)
         coVerify(exactly = 1) { helper.launchApp("com.example.app") }
         verify(exactly = 1) { context.startActivity(any()) }
+    }
+
+    // --- app_launch without the launch-intent gate (fork 96251b23) ---
+
+    private fun activity(pkg: String, name: String) = ResolveInfo().apply {
+        activityInfo = ActivityInfo().apply { packageName = pkg; this.name = name }
+    }
+
+    private fun MockKMatcherScope.launcherQuery() =
+        match<Intent> { it.categories?.contains(Intent.CATEGORY_LAUNCHER) == true }
+
+    private fun MockKMatcherScope.mainQuery() = match<Intent> { it.categories.isNullOrEmpty() }
+
+    @Test fun `app_launch opens a vendor build without a launch intent through its launcher activity`() {
+        val pkg = "app.rvx.android.youtube"
+        every { packageManager.getLaunchIntentForPackage(pkg) } returns null
+        every { packageManager.queryIntentActivities(launcherQuery(), 0) } returns
+            listOf(activity(pkg, "$pkg.HomeActivity"))
+        coEvery { helper.launchApp(pkg) } returns false
+        val (result, intent) = dispatchAndCapture(launchAction(pkg))
+        assertTrue(result.success)
+        assertEquals(ComponentName(pkg, "$pkg.HomeActivity"), intent.component)
+        coVerify(exactly = 1) { helper.launchApp(pkg) }
+    }
+
+    @Test fun `app_launch falls back to the package's main activity`() {
+        val pkg = "com.vendor.navi"
+        every { packageManager.getLaunchIntentForPackage(pkg) } returns null
+        every { packageManager.queryIntentActivities(launcherQuery(), 0) } returns emptyList()
+        every { packageManager.queryIntentActivities(mainQuery(), 0) } returns listOf(activity(pkg, "$pkg.Main"))
+        coEvery { helper.launchApp(pkg) } returns false
+        val (result, intent) = dispatchAndCapture(launchAction(pkg))
+        assertTrue(result.success)
+        assertEquals(ComponentName(pkg, "$pkg.Main"), intent.component)
+    }
+
+    @Test fun `app_launch with nothing to open stays not installed`() = runBlocking {
+        every { packageManager.getLaunchIntentForPackage("com.absent.app") } returns null
+        every { packageManager.queryIntentActivities(any(), 0) } returns emptyList()
+        val result = dispatcher.dispatch(launchAction("com.absent.app"), null)
+        assertFalse(result.success)
+        assertEquals("Приложение не установлено: com.absent.app", result.reason)
+        coVerify(exactly = 0) { helper.launchApp(any()) }
+    }
+
+    // --- system_settings: an allowlisted set of screens (fork a6918f26) ---
+
+    private fun settingsAction(section: String) = ActionDef(command = "", displayName = "Настройки",
+        kind = "system_settings", payload = """{"section":"$section"}""")
+
+    @Test fun `system_settings opens the asked Android settings screen`() {
+        val (result, intent) = dispatchAndCapture(settingsAction("wifi"))
+        assertTrue(result.success)
+        assertEquals(Settings.ACTION_WIFI_SETTINGS, intent.action)
+    }
+
+    @Test fun `system_settings car launches BYD's own settings app`() = runBlocking {
+        every { packageManager.getLaunchIntentForPackage("com.byd.carsettings") } returns mockk<Intent>(relaxed = true)
+        coEvery { helper.launchApp("com.byd.carsettings") } returns true
+        assertTrue(dispatcher.dispatch(settingsAction("car"), null).success)
+        coVerify(exactly = 1) { helper.launchApp("com.byd.carsettings") }
+    }
+
+    @Test fun `system_settings refuses a screen outside the allowlist`() = runBlocking {
+        val result = dispatcher.dispatch(settingsAction("developer"), null)
+        assertFalse(result.success)
+        assertEquals("Неизвестный раздел настроек: developer", result.reason)
+        verify(exactly = 0) { context.startActivity(any()) }
     }
 
     // --- navigate ---

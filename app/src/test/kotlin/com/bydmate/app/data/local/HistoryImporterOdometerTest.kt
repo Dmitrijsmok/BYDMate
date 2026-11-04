@@ -41,6 +41,10 @@ class HistoryImporterOdometerTest {
         tripTombstoneDao = mockk<TripTombstoneDao>(relaxed = true),
         costCalculator = mockk(relaxed = true),
         odometerMarks = odometerMarks,
+        vehicleKind = com.bydmate.app.data.nativestack.kindMonitor(),
+        counterSnapshotDao = mockk(relaxed = true),
+        counterSnapshotWriter = mockk(relaxed = true),
+        lastStateDao = mockk(relaxed = true),
     )
 
     private val record = BydTripRecord(
@@ -61,7 +65,7 @@ class HistoryImporterOdometerTest {
         coEvery { energyDataReader.readTripsSince(any()) } returns listOf(record)
         coEvery { settingsRepository.getBatteryCapacity() } returns 72.9
         coEvery { tripDao.getByBydId(record.id) } returns null
-        coEvery { tripDao.getByStartTsRange(any(), any()) } returns existingByTime
+        coEvery { tripDao.getSameTripByTime(any(), any()) } returns existingByTime
     }
 
     @Test fun `imported trip gets the odometer from the matching mark`() = runTest {

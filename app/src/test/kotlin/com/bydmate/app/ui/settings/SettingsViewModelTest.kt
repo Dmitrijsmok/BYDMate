@@ -1,11 +1,16 @@
 package com.bydmate.app.ui.settings
 
 import android.content.Context
+import android.content.pm.PackageManager
 import androidx.test.core.app.ApplicationProvider
 import com.bydmate.app.data.automation.RouteNavigatorUris
+import com.bydmate.app.diagnostics.Trace
+import com.bydmate.app.diagnostics.TraceArea
+import com.bydmate.app.diagnostics.TraceRecorder
 import com.bydmate.app.data.autoservice.AdbConnectFailure
 import com.bydmate.app.data.autoservice.AdbOnDeviceClient
 import com.bydmate.app.data.backup.BackupManager
+import com.bydmate.app.data.charging.ChargeConnector
 import com.bydmate.app.data.local.EnergyDataDeadDetector
 import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.data.local.EnergyDataReader
@@ -54,6 +59,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import com.bydmate.app.data.vehicle.DumpFidsResult
 import com.bydmate.app.data.vehicle.SeatChannel
@@ -82,6 +88,8 @@ import org.robolectric.annotation.Config
 @Config(sdk = [29])
 class SettingsViewModelTest {
 
+    @get:Rule val trace = TraceRecorder()
+
     private val testDispatcher = StandardTestDispatcher()
     private val seatChannelStore: SeatChannelStore = mockk(relaxed = true)
     private val windowChannelStore: com.bydmate.app.data.vehicle.WindowChannelStore = mockk(relaxed = true)
@@ -94,6 +102,8 @@ class SettingsViewModelTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
+        // The bare test Application does not run the app's locale bootstrap: pin the language the assertions read.
+        LocalePreferences(ApplicationProvider.getApplicationContext<Context>()).setLanguage("en")
     }
 
     @After
@@ -127,10 +137,13 @@ class SettingsViewModelTest {
         override suspend fun getByBydId(bydId: Long): TripEntity? = null
         override suspend fun getTripsWithoutSoc(): List<TripEntity> = emptyList()
         override suspend fun getTripsWithoutCost(): List<TripEntity> = emptyList()
+        override suspend fun getEnergyDataTripsWithoutCounters(sinceTs: Long): List<TripEntity> = emptyList()
+        override suspend fun getHybridTripsWithoutCost(): List<TripEntity> = emptyList()
         override suspend fun getPeriodSummary(from: Long, to: Long): TripSummary = TripSummary(0.0, 0.0)
         override suspend fun getLiveTrips(): List<TripEntity> = emptyList()
-        override suspend fun getByStartTsRange(minTs: Long, maxTs: Long): TripEntity? = null
+        override suspend fun getSameTripByTime(startTs: Long, windowMs: Long): TripEntity? = null
         override suspend fun getAllSnapshot(): List<TripEntity> = emptyList()
+        override suspend fun unlinkBydId(id: Long, bydId: Long): Int = 0
         override suspend fun getWithEnergyInRange(from: Long, to: Long): List<TripEntity> = emptyList()
         override suspend fun deleteById(id: Long) {}
         override suspend fun deleteZeroKmTrips(): Int = 0
@@ -231,7 +244,14 @@ class SettingsViewModelTest {
 
     // Tariff fixture: fields rather than factory parameters, the factory is long enough.
     private var exportCostCalculator: com.bydmate.app.domain.cost.CostCalculator? = null
+
+    // Car type handed to the next built VM; null keeps the relaxed monitor.
+    private var vehicleKind: com.bydmate.app.data.nativestack.VehicleKind? = null
     private var tariffPeriodDaoOverride: TariffPeriodDao? = null
+    // The log sender of the last built VM, to play the automatic upload (#324).
+    private lateinit var logTelegramSender: com.bydmate.app.diagnostics.LogTelegramSender
+    // Recorder state handed to the next built VM; null keeps the real recorder that never records.
+    private var logRecorderState: kotlinx.coroutines.flow.MutableStateFlow<com.bydmate.app.diagnostics.LogRecorder.State>? = null
 
     /** In-memory stand-in for the Room DAO, including the unique `start_ts` constraint. */
     private class FakeTariffPeriodDao(initial: List<TariffPeriodEntity>) : TariffPeriodDao {
@@ -298,6 +318,8 @@ class SettingsViewModelTest {
             settingsRepo, com.bydmate.app.data.repository.LastSessionRepository(ctx),
             mockk<TripTombstoneDao>(relaxed = true), mockk(relaxed = true),
             com.bydmate.app.data.repository.OdometerMarks(ctx),
+            com.bydmate.app.data.nativestack.kindMonitor(), mockk(relaxed = true),
+            mockk(relaxed = true), mockk(relaxed = true),
         )
 
         val openRouterClient = OpenRouterClient(httpClient)
@@ -310,6 +332,15 @@ class SettingsViewModelTest {
         val continuousAsr = mockk<com.bydmate.app.voice.ContinuousAsr>(relaxed = true)
         val voiceController = mockk<com.bydmate.app.voice.VoiceController>(relaxed = true)
 
+        // Real recorder with an exec seam that would blow up: these tests never record.
+        val logRecorder = logRecorderState?.let { flow ->
+            mockk<com.bydmate.app.diagnostics.LogRecorder>(relaxed = true) { every { state } returns flow }
+        } ?: com.bydmate.app.diagnostics.LogRecorder(ctx) {
+            throw UnsupportedOperationException("no logcat in tests")
+        }
+        logTelegramSender = com.bydmate.app.diagnostics.LogTelegramSender(
+            logRecorder, settingsRepo, telegramBackupSink, com.bydmate.app.util.AppStrings(ctx),
+        )
         return SettingsViewModel(
             appContext = ctx,
             settingsRepository = settingsRepo,
@@ -341,10 +372,7 @@ class SettingsViewModelTest {
             placeRepository = mockk(relaxed = true),
             energyDataDeadDetector = energyDataDeadDetector,
             hudController = mockk(relaxed = true),
-            // Real recorder with an exec seam that would blow up: these tests never record.
-            logRecorder = com.bydmate.app.diagnostics.LogRecorder(ctx) {
-                throw UnsupportedOperationException("no logcat in tests")
-            },
+            logRecorder = logRecorder,
             fidPushChannel = mockk(relaxed = true),
             splitPreferences = mockk(relaxed = true),
             splitSessionManager = mockk(relaxed = true),
@@ -360,6 +388,7 @@ class SettingsViewModelTest {
                 mockk(relaxed = true),
                 kotlinx.coroutines.test.TestScope(),
             ),
+            cloudOverWifiManager = mockk(relaxed = true),
             fidCatalogManager = mockk(relaxed = true),
             writeAllowlist = com.bydmate.app.data.vehicle.WriteAllowlist.EMPTY,
             ruleDao = mockk(relaxed = true),
@@ -375,7 +404,12 @@ class SettingsViewModelTest {
             telegramBackupSink = telegramBackupSink,
             autoBackupScheduler = mockk(relaxed = true),
             appStrings = com.bydmate.app.util.AppStrings(ctx),
+            logTelegramSender = logTelegramSender,
             telegramReporter = mockk(relaxed = true),
+            clusterMusicBridge = mockk(relaxed = true),
+            vehicleWriteLogDao = mockk(relaxed = true),
+            vehicleKindMonitor = vehicleKind?.let { com.bydmate.app.data.nativestack.kindMonitor(it) }
+                ?: mockk(relaxed = true),
         )
     }
 
@@ -408,6 +442,20 @@ class SettingsViewModelTest {
         testDispatcher.scheduler.advanceUntilIdle()
 
         assertEquals(SettingsRepository.DEFAULT_HOME_TARIFF, vm.uiState.value.homeTariff)
+    }
+
+    // «Разъём для зарядки»: GB/T until the driver picks another, the pick is saved.
+    @Test
+    fun `charge connector starts as GB-T and a pick is saved`() = runTest {
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(ChargeConnector.GBT, vm.uiState.value.chargeConnector)
+
+        vm.saveChargeConnector(ChargeConnector.CHADEMO)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(ChargeConnector.CHADEMO, vm.uiState.value.chargeConnector)
+        assertEquals("chademo", settingsDao.map[SettingsRepository.KEY_CHARGE_CONNECTOR])
     }
 
     // Issue #23: pressing "Close" while an update is downloading must cancel the
@@ -458,6 +506,147 @@ class SettingsViewModelTest {
 
         assertTrue(vm.uiState.value.disableNativeAssistant)
         coVerify { helperClient.setAppHidden("com.byd.autovoice", true) }
+    }
+
+    @Test fun `switching the native assistant toggle on asks first and touches nothing yet`() = runTest {
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.toggleDisableNativeAssistant(true)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.showDisableNativeAssistantDialog)
+        assertFalse(vm.uiState.value.disableNativeAssistant)
+        coVerify(exactly = 0) { helperClient.setAppHidden(any(), any()) }
+        assertNull(settingsDao.map[SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT])
+    }
+
+    @Test fun `confirming the native assistant warning disables it`() = runTest {
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.toggleDisableNativeAssistant(true)
+        vm.confirmDisableNativeAssistant()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.showDisableNativeAssistantDialog)
+        assertTrue(vm.uiState.value.disableNativeAssistant)
+        assertEquals("true", settingsDao.map[SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT])
+        coVerify { helperClient.setAppHidden("com.byd.autovoice", true) }
+    }
+
+    @Test fun `cancelling the native assistant warning leaves the toggle off and calls nothing`() = runTest {
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.toggleDisableNativeAssistant(true)
+        vm.dismissDisableNativeAssistantDialog()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.showDisableNativeAssistantDialog)
+        assertFalse(vm.uiState.value.disableNativeAssistant)
+        coVerify(exactly = 0) { helperClient.setAppHidden(any(), any()) }
+        assertNull(settingsDao.map[SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT])
+    }
+
+    // --- No saved choice (a reinstall after an uninstall that left the assistant disabled): the
+    // toggle shows what the system has; a saved choice keeps ruling as before. ---
+
+    private fun installAssistantPackage(pkg: String, state: Int) {
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        org.robolectric.Shadows.shadowOf(ctx.packageManager).installPackage(
+            android.content.pm.PackageInfo().apply {
+                packageName = pkg
+                applicationInfo = android.content.pm.ApplicationInfo().apply { packageName = pkg }
+            },
+        )
+        ctx.packageManager.setApplicationEnabledSetting(pkg, state, 0)
+    }
+
+    @Test fun `no saved choice and a user-disabled autovoice show the toggle on`() = runTest {
+        installAssistantPackage("com.byd.autovoice", PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER)
+        installAssistantPackage("com.byd.vrassistant", PackageManager.COMPONENT_ENABLED_STATE_DEFAULT)
+
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.disableNativeAssistant)
+        coVerify(exactly = 0) { helperClient.setAppHidden(any(), any()) }
+        assertNull(settingsDao.map[SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT])
+    }
+
+    @Test fun `no saved choice and only a user-disabled vrassistant show the toggle on`() = runTest {
+        installAssistantPackage("com.byd.autovoice", PackageManager.COMPONENT_ENABLED_STATE_DEFAULT)
+        installAssistantPackage("com.byd.vrassistant", PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER)
+
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.disableNativeAssistant)
+    }
+
+    @Test fun `no saved choice and only a user-disabled autovoice engine show the toggle on`() = runTest {
+        installAssistantPackage("com.byd.autovoice", PackageManager.COMPONENT_ENABLED_STATE_DEFAULT)
+        installAssistantPackage("com.byd.autovoice.engine", PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER)
+        installAssistantPackage("com.byd.vrassistant", PackageManager.COMPONENT_ENABLED_STATE_DEFAULT)
+
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.disableNativeAssistant)
+    }
+
+    @Test fun `no saved choice and both packages enabled show the toggle off`() = runTest {
+        installAssistantPackage("com.byd.autovoice", PackageManager.COMPONENT_ENABLED_STATE_DEFAULT)
+        installAssistantPackage("com.byd.vrassistant", PackageManager.COMPONENT_ENABLED_STATE_ENABLED)
+
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.disableNativeAssistant)
+    }
+
+    @Test fun `a saved choice rules over the system state`() = runTest {
+        installAssistantPackage("com.byd.autovoice", PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER)
+
+        val vm = buildViewModel()
+        settingsDao.map[SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT] = "false"
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.disableNativeAssistant)
+        assertTrue(trace.events().none { "native-assistant-from-system" in it })
+    }
+
+    @Test fun `switching off a toggle shown on from the system enables the assistant without the warning`() = runTest {
+        installAssistantPackage("com.byd.autovoice", PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER)
+        installAssistantPackage("com.byd.vrassistant", PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER)
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertTrue(vm.uiState.value.disableNativeAssistant)
+
+        vm.toggleDisableNativeAssistant(false)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.showDisableNativeAssistantDialog)
+        assertFalse(vm.uiState.value.disableNativeAssistant)
+        assertEquals("false", settingsDao.map[SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT])
+        coVerify(exactly = 1) { helperClient.setAppHidden("com.byd.autovoice", false) }
+        coVerify(exactly = 1) { helperClient.setAppHidden("com.byd.vrassistant", false) }
+    }
+
+    @Test fun `switching the native assistant toggle off goes without the warning`() = runTest {
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+        vm.setDisableNativeAssistant(true)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.toggleDisableNativeAssistant(false)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.showDisableNativeAssistantDialog)
+        assertFalse(vm.uiState.value.disableNativeAssistant)
+        assertEquals("false", settingsDao.map[SettingsRepository.KEY_DISABLE_NATIVE_ASSISTANT])
+        coVerify { helperClient.setAppHidden("com.byd.autovoice", false) }
     }
 
     @Test fun `setVoiceEnabled persists and mirrors into voice prefs`() = runTest {
@@ -1256,6 +1445,119 @@ class SettingsViewModelTest {
         )
     }
 
+    /** #305: Waze persists and a fresh view model reads it back. */
+    @Test fun `route navigator waze persists and reads back`() = runTest {
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+        vm.setRouteNavigator("waze")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals("waze", vm.uiState.value.routeNavigator)
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        assertEquals(
+            "waze",
+            ctx.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, "")
+        )
+        val reread = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals("waze", reread.uiState.value.routeNavigator)
+    }
+
+    /** A manual package belongs to the app it was typed for (fork cac1ceab). */
+    @Test fun `switching navigator clears a manual package that belonged to the previous provider`() = runTest {
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.setRouteNavigator("waze")
+        vm.setRouteNavigatorPackage("com.vendor.waze")
+        assertEquals("com.vendor.waze", vm.uiState.value.routeNavigatorResolvedPackage)
+        vm.setRouteNavigator(RouteNavigatorUris.DGIS)
+
+        assertEquals(RouteNavigatorUris.DGIS, vm.uiState.value.routeNavigator)
+        assertEquals("", vm.uiState.value.routeNavigatorPackage)
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        assertEquals(
+            null,
+            ctx.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, null)
+        )
+    }
+
+    /** Settings offer the apps the car has; a saved one that is gone moves to an installed one. */
+    @Test fun `only installed navigators are offered and a stale choice moves to an installed one`() = runTest {
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        org.robolectric.Shadows.shadowOf(ctx.packageManager)
+            .installPackage(android.content.pm.PackageInfo().apply { packageName = "com.waze" })
+        ctx.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, RouteNavigatorUris.DGIS).commit()
+
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf(RouteNavigatorUris.WAZE), vm.uiState.value.routeNavigatorOptions)
+        assertEquals(RouteNavigatorUris.WAZE, vm.uiState.value.routeNavigator)
+        assertEquals("com.waze", vm.uiState.value.routeNavigatorResolvedPackage)
+        assertEquals(
+            RouteNavigatorUris.WAZE,
+            ctx.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null)
+        )
+    }
+
+    /** A manual package keeps its app on offer and is what the settings say routes use. */
+    @Test fun `a manual package keeps its navigator and is shown as the package in use`() = runTest {
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        org.robolectric.Shadows.shadowOf(ctx.packageManager)
+            .installPackage(android.content.pm.PackageInfo().apply { packageName = "ru.yandex.yandexnavi" })
+        ctx.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .putString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, RouteNavigatorUris.WAZE)
+            .putString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, "com.vendor.waze")
+            .commit()
+
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf(RouteNavigatorUris.YANDEX, RouteNavigatorUris.WAZE), vm.uiState.value.routeNavigatorOptions)
+        assertEquals(RouteNavigatorUris.WAZE, vm.uiState.value.routeNavigator)
+        assertEquals("com.vendor.waze", vm.uiState.value.routeNavigatorPackage)
+        assertEquals("com.vendor.waze", vm.uiState.value.routeNavigatorResolvedPackage)
+
+        vm.setRouteNavigatorPackage("  ")
+        assertEquals("", vm.uiState.value.routeNavigatorResolvedPackage)
+        assertEquals(
+            null,
+            ctx.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, null)
+        )
+    }
+
+    /** Fork 166c2cb0: the choice is in the trace, with the package routes will use. */
+    @Test fun `choosing a navigator is traced`() = runTest {
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        org.robolectric.Shadows.shadowOf(ctx.packageManager)
+            .installPackage(android.content.pm.PackageInfo().apply { packageName = "com.waze" })
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.setRouteNavigator(RouteNavigatorUris.WAZE)
+
+        val event = trace.events().single { "navigator-select" in it }
+        assertTrue(event, "value=waze" in event && "pkg=com.waze" in event)
+    }
+
+    @Test fun `every navigator is offered when none was detected`() {
+        assertEquals(RouteNavigatorUris.ALL, routeNavigatorOptions(emptyMap(), RouteNavigatorUris.YANDEX, ""))
+        assertEquals(
+            RouteNavigatorUris.ALL,
+            routeNavigatorOptions(RouteNavigatorUris.ALL.associateWith { emptyList<String>() }, RouteNavigatorUris.WAZE, "x"),
+        )
+        assertEquals(
+            listOf(RouteNavigatorUris.DGIS),
+            routeNavigatorOptions(mapOf(RouteNavigatorUris.DGIS to listOf("ru.dublgis.dgismobile")), RouteNavigatorUris.WAZE, ""),
+        )
+    }
+
     /** The dump header must carry the choice: it is the only place a user log shows it. */
     @Test fun `the diagnostic header reports the chosen route navigator`() = runTest {
         val vm = buildViewModel()
@@ -1333,8 +1635,26 @@ class SettingsViewModelTest {
         assertTrue(header, header.contains("parts: auto=tables,keys manual=tables,settings"))
     }
 
-    /** The header lands on the real Dispatchers.IO, which the test scheduler cannot advance. */
-    private fun awaitDiagnosticHeader(timeoutMs: Long = 10_000): String {
+    /** The trace closes the header: what the app did before the recording, newest event last. */
+    @Test fun `the diagnostic header ends with the trace, newest event last`() = runTest {
+        val ptt = Trace.event(TraceArea.USER, "ptt", "listening" to false)
+        Trace.event(TraceArea.VOICE, "session-start", by = ptt)
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.startLogRecording()
+        testDispatcher.scheduler.advanceUntilIdle()
+        val header = awaitDiagnosticHeader(until = "voice  session-start #2 by=#1")
+
+        val section = header.substringAfter("--- trace ---\n").substringBefore("===============================")
+        val events = section.lines().filter { it.isNotBlank() && !it.startsWith("-- ") }.map { it.substringAfter(' ') }
+        assertEquals(listOf("user   ptt listening=false #1", "voice  session-start #2 by=#1"), events)
+        assertTrue(header, header.indexOf("--- last crash ---") < header.indexOf("--- trace ---"))
+    }
+
+    /** The header lands on the real Dispatchers.IO, which the test scheduler cannot advance.
+     *  [until] is a text the finished header contains. */
+    private fun awaitDiagnosticHeader(timeoutMs: Long = 10_000, until: String = "--- settings ---"): String {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             val file = listOf(publicDumpDir(), fallbackDumpDir())
@@ -1342,7 +1662,7 @@ class SettingsViewModelTest {
                 .filter { it.name.startsWith("bydmate_logs_") }
                 .maxByOrNull { it.lastModified() }
             val text = file?.readText().orEmpty()
-            if (text.contains("--- settings ---")) return text
+            if (text.contains(until)) return text
             Thread.sleep(10)
         }
         throw AssertionError("no diagnostic header was written within $timeoutMs ms")
@@ -1429,6 +1749,32 @@ class SettingsViewModelTest {
         assertEquals(
             "offline",
             ctx.getSharedPreferences("voice", Context.MODE_PRIVATE).getString("tts_source", null)
+        )
+    }
+
+    @Test
+    fun `resetTripSourceDetection also clears the energydata import watermark (#348)`() = runTest {
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+        // A watermark poisoned by a future-dated energydata row, and a source fingerprint that
+        // would make the next sync skip the unchanged file.
+        settingsDao.map[SettingsRepository.KEY_LAST_ENERGYDATA_IMPORT_TS] = "4102444800" // 2100-01-01
+        ctx.getSharedPreferences("energydata_sync", Context.MODE_PRIVATE).edit()
+            .putLong("lastModified", 1L).putLong("fileSize", 2L).putString("filePath", "/x").commit()
+
+        vm.resetTripSourceDetection()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        verify(exactly = 1) { energyDataDeadDetector.reset() }
+        assertEquals(
+            "reset must clear the import watermark",
+            0L,
+            SettingsRepository(settingsDao, mockk(relaxed = true)).getLastEnergyImportTs(),
+        )
+        assertFalse(
+            "reset must also forget the source fingerprint so the next sync re-reads the file",
+            ctx.getSharedPreferences("energydata_sync", Context.MODE_PRIVATE).contains("lastModified"),
         )
     }
 
@@ -1790,6 +2136,29 @@ class SettingsViewModelTest {
         coVerify { calculator.recalculate(septemberStart, Long.MAX_VALUE) }
     }
 
+    // DM-i (#184): the litre price is part of a period, so a new price re-prices from its date only.
+    @Test
+    fun `a new period with a litre price recalculates only from its own date`() = runTest {
+        val dao = twoPeriods()
+        tariffPeriodDaoOverride = dao
+        val calculator = mockk<com.bydmate.app.domain.cost.CostCalculator>(relaxed = true)
+        exportCostCalculator = calculator
+        vehicleKind = com.bydmate.app.data.nativestack.VehicleKind.HYBRID
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+        val octoberStart = 1_759_276_800_000L // 01.10.2026
+
+        vm.saveTariffPeriod(
+            TariffPeriodEntity(startTs = octoberStart, homeRate = 0.20, dcRate = 0.60, fuelPricePerLiter = 2.5)
+        )
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        coVerify(exactly = 1) { calculator.recalculate(octoberStart, Long.MAX_VALUE) }
+        coVerify(exactly = 0) { calculator.recalculate(0L, any()) }
+        assertEquals(2.5, dao.rows.single { it.startTs == octoberStart }.fuelPricePerLiter!!, 0.0)
+        assertNull(dao.rows.single { it.startTs == septemberStart }.fuelPricePerLiter)
+    }
+
     // --- Telegram backup bot «Проверить» (#237) ---
 
     private fun tgSinkFake(): com.bydmate.app.data.backup.TelegramBackupSink = mockk<com.bydmate.app.data.backup.TelegramBackupSink>().also {
@@ -1820,7 +2189,7 @@ class SettingsViewModelTest {
         val reason = ctx.getString(com.bydmate.app.R.string.settings_tg_error_bad_token)
         assertTrue(state.tgBackupStatus!!, state.tgBackupStatus!!.contains(reason))
         assertNull(settingsDao.map[SettingsRepository.KEY_TG_BACKUP_TOKEN])
-        coVerify(exactly = 0) { sink.findPrivateChat(any(), any()) }
+        coVerify(exactly = 0) { sink.findLinkChat(any(), any()) }
     }
 
     private val ctxForTg: Context get() = ApplicationProvider.getApplicationContext()
@@ -1840,14 +2209,14 @@ class SettingsViewModelTest {
         assertNull(vm.uiState.value.tgBackupStatus)
         assertNull(vm.uiState.value.tgBackupBinding)
         assertNull(settingsDao.map[SettingsRepository.KEY_TG_BACKUP_TOKEN])
-        coVerify(exactly = 0) { sink.findPrivateChat(any(), any()) }
+        coVerify(exactly = 0) { sink.findLinkChat(any(), any()) }
     }
 
     @Test
     fun `check before the code was sent keeps the same code and stores nothing`() = runTest {
         val sink = tgSinkFake()
         coEvery { sink.getMe("123:abc") } returns Result.success("my_car_bot")
-        coEvery { sink.findPrivateChat("123:abc", any()) } returns Result.success(null)
+        coEvery { sink.findLinkChat("123:abc", any()) } returns Result.success(null)
         val vm = buildViewModel()
         testDispatcher.scheduler.advanceUntilIdle()
         checkToken(vm, "123:abc")
@@ -1873,7 +2242,7 @@ class SettingsViewModelTest {
         testDispatcher.scheduler.advanceUntilIdle()
         checkToken(vm, "123:abc")
         val code = vm.uiState.value.tgBackupCode!!
-        coEvery { sink.findPrivateChat("123:abc", code) } returns
+        coEvery { sink.findLinkChat("123:abc", code) } returns
             Result.success(com.bydmate.app.data.backup.TelegramChat(777L, "Andy @andy_s"))
 
         checkToken(vm, "123:abc")
@@ -1894,7 +2263,7 @@ class SettingsViewModelTest {
     fun `failed greeting stores nothing and shows the reason`() = runTest {
         val sink = tgSinkFake()
         coEvery { sink.getMe("123:abc") } returns Result.success("my_car_bot")
-        coEvery { sink.findPrivateChat("123:abc", any()) } returns
+        coEvery { sink.findLinkChat("123:abc", any()) } returns
             Result.success(com.bydmate.app.data.backup.TelegramChat(777L, "Andy"))
         coEvery { sink.sendMessage(any(), any(), any()) } returns Result.failure(
             com.bydmate.app.data.backup.TelegramSinkException(com.bydmate.app.data.backup.TelegramError.HTTP, 403)
@@ -1927,7 +2296,7 @@ class SettingsViewModelTest {
         assertNull(vm.uiState.value.tgBackupCode)
         assertEquals("777", settingsDao.map[SettingsRepository.KEY_TG_BACKUP_CHAT_ID])
         assertEquals("Andy", settingsDao.map[SettingsRepository.KEY_TG_BACKUP_CHAT_NAME])
-        coVerify(exactly = 0) { sink.findPrivateChat(any(), any()) }
+        coVerify(exactly = 0) { sink.findLinkChat(any(), any()) }
         coVerify(exactly = 1) { sink.sendMessage("123:abc", 777L, any()) }
     }
 
@@ -1935,7 +2304,7 @@ class SettingsViewModelTest {
     fun `failed chat lookup keeps the previously connected bot untouched`() = runTest {
         val sink = tgSinkFake()
         coEvery { sink.getMe("456:new") } returns Result.success("new_bot")
-        coEvery { sink.findPrivateChat("456:new", any()) } returns Result.failure(
+        coEvery { sink.findLinkChat("456:new", any()) } returns Result.failure(
             com.bydmate.app.data.backup.TelegramSinkException(com.bydmate.app.data.backup.TelegramError.WEBHOOK, 409)
         )
         val vm = buildViewModel()
@@ -1959,7 +2328,7 @@ class SettingsViewModelTest {
         val sink = tgSinkFake()
         lateinit var vm: SettingsViewModel
         coEvery { sink.getMe("123:abc") } returns Result.success("my_car_bot")
-        coEvery { sink.findPrivateChat("123:abc", any()) } returns
+        coEvery { sink.findLinkChat("123:abc", any()) } returns
             Result.success(com.bydmate.app.data.backup.TelegramChat(777L, "Andy"))
         coEvery { sink.sendMessage(any(), any(), any()) } coAnswers {
             vm.updateTgBackupToken("999:other")
@@ -2017,7 +2386,7 @@ class SettingsViewModelTest {
         assertFalse(vm.uiState.value.tgBackupChecking)
         assertNull(vm.uiState.value.tgBackupStatus)
         assertEquals("", settingsDao.map[SettingsRepository.KEY_TG_BACKUP_TOKEN])
-        coVerify(exactly = 0) { sink.findPrivateChat(any(), any()) }
+        coVerify(exactly = 0) { sink.findLinkChat(any(), any()) }
     }
 
     @Test
@@ -2039,6 +2408,156 @@ class SettingsViewModelTest {
         assertEquals("", vm.uiState.value.tgBackupToken)
         assertNull(vm.uiState.value.tgBackupBinding)
     }
+
+    // --- «Отправить в Telegram» for a saved log (#324) ---
+
+    private fun savedLog(bytes: Long = 10): File =
+        File.createTempFile("bydmate_logs_", ".txt").apply {
+            deleteOnExit()
+            java.io.RandomAccessFile(this, "rw").use { it.setLength(bytes) }
+        }
+
+    /** A VM whose recorder goes idle -> recording -> stopped at [log]; [connected] stores a bound bot. */
+    private fun vmWithStoppedLog(log: File, connected: Boolean = true): SettingsViewModel {
+        val recorder = kotlinx.coroutines.flow.MutableStateFlow(com.bydmate.app.diagnostics.LogRecorder.State())
+        logRecorderState = recorder
+        val vm = buildViewModel()
+        if (connected) {
+            settingsDao.map[SettingsRepository.KEY_TG_BACKUP_TOKEN] = "123:abc"
+            settingsDao.map[SettingsRepository.KEY_TG_BACKUP_CHAT_ID] = "777"
+            settingsDao.map[SettingsRepository.KEY_TG_BACKUP_BOT_NAME] = "my_car_bot"
+            settingsDao.map[SettingsRepository.KEY_TG_BACKUP_CHAT_NAME] = "Andy"
+        }
+        testDispatcher.scheduler.advanceUntilIdle()
+        recorder.value = com.bydmate.app.diagnostics.LogRecorder.State(isRecording = true, filePath = log.absolutePath)
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertFalse(vm.uiState.value.canSendLogToTelegram)
+        recorder.value = com.bydmate.app.diagnostics.LogRecorder.State(
+            lastStopped = com.bydmate.app.diagnostics.LogRecorder.Stopped(log.absolutePath, 0),
+        )
+        testDispatcher.scheduler.advanceUntilIdle()
+        return vm
+    }
+
+    @Test
+    fun `the send button shows only for a saved log with a connected bot`() = runTest {
+        val log = savedLog()
+        assertTrue(vmWithStoppedLog(log).uiState.value.canSendLogToTelegram)
+        assertFalse(vmWithStoppedLog(log, connected = false).uiState.value.canSendLogToTelegram)
+
+        logRecorderState = null
+        val idle = buildViewModel()
+        settingsDao.map[SettingsRepository.KEY_TG_BACKUP_TOKEN] = "123:abc"
+        settingsDao.map[SettingsRepository.KEY_TG_BACKUP_CHAT_ID] = "777"
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertFalse(idle.uiState.value.canSendLogToTelegram)
+    }
+
+    @Test
+    fun `sending a saved log uploads it once with the file name as caption`() = runTest {
+        val log = savedLog()
+        val sink = tgSinkFake()
+        coEvery { sink.sendDocument(any(), any(), any(), any()) } returns Result.success(Unit)
+        val vm = vmWithStoppedLog(log)
+
+        vm.sendLogToTelegram()
+        vm.sendLogToTelegram()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        coVerify(exactly = 1) { sink.sendDocument("123:abc", 777L, log, log.name) }
+        assertFalse(vm.uiState.value.logSending)
+        assertEquals(
+            ctxForTg.getString(com.bydmate.app.R.string.settings_log_tg_sent),
+            vm.uiState.value.logSaveStatus,
+        )
+    }
+
+    @Test
+    fun `a failed log upload names the reason`() = runTest {
+        val log = savedLog()
+        val sink = tgSinkFake()
+        coEvery { sink.sendDocument(any(), any(), any(), any()) } returns Result.failure(
+            com.bydmate.app.data.backup.TelegramSinkException(com.bydmate.app.data.backup.TelegramError.NO_NETWORK)
+        )
+        val vm = vmWithStoppedLog(log)
+
+        vm.sendLogToTelegram()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.logSending)
+        val reason = ctxForTg.getString(com.bydmate.app.R.string.settings_tg_error_no_network)
+        assertEquals(
+            ctxForTg.getString(com.bydmate.app.R.string.settings_log_tg_failed, reason),
+            vm.uiState.value.logSaveStatus,
+        )
+    }
+
+    @Test
+    fun `a log over the Telegram limit is not uploaded`() = runTest {
+        val log = savedLog(com.bydmate.app.data.backup.TelegramBackupSink.MAX_UPLOAD_BYTES + 1)
+        val sink = tgSinkFake()
+        val vm = vmWithStoppedLog(log)
+
+        vm.sendLogToTelegram()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        coVerify(exactly = 0) { sink.sendDocument(any(), any(), any(), any()) }
+        assertEquals(
+            ctxForTg.getString(com.bydmate.app.R.string.settings_log_tg_too_big),
+            vm.uiState.value.logSaveStatus,
+        )
+    }
+
+    @Test
+    fun `an automatic log upload shows its result under the log row`() = runTest {
+        val log = savedLog()
+        val sink = tgSinkFake()
+        coEvery { sink.sendDocument(any(), any(), any(), any()) } returns Result.success(Unit)
+        val vm = vmWithStoppedLog(log)
+
+        logTelegramSender.send(log)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.logSending)
+        assertEquals(
+            ctxForTg.getString(com.bydmate.app.R.string.settings_log_tg_sent),
+            vm.uiState.value.logSaveStatus,
+        )
+    }
+
+    @Test
+    fun `the log auto-send switch is stored and read back`() = runTest {
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertFalse(vm.uiState.value.tgLogAutoSendEnabled)
+
+        vm.setTgLogAutoSendEnabled(true)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals("true", settingsDao.map[SettingsRepository.KEY_TG_LOG_AUTO_SEND])
+        assertTrue(vm.uiState.value.tgLogAutoSendEnabled)
+    }
+
+    @Test fun `Alice permissions start off and persist independently`() = runTest {
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertFalse(vm.uiState.value.aliceVehicleControl)
+        assertFalse(vm.uiState.value.aliceNavigation)
+
+        vm.toggleAliceNavigation(true)
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals("true", settingsDao.map[SettingsRepository.KEY_ALICE_NAVIGATION])
+        assertNull(settingsDao.map[SettingsRepository.KEY_ALICE_VEHICLE_CONTROL])
+
+        vm.toggleAliceVehicleControl(true)
+        vm.toggleAliceNavigation(false)
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals("true", settingsDao.map[SettingsRepository.KEY_ALICE_VEHICLE_CONTROL])
+        assertEquals("false", settingsDao.map[SettingsRepository.KEY_ALICE_NAVIGATION])
+        assertTrue(vm.uiState.value.aliceVehicleControl)
+        assertFalse(vm.uiState.value.aliceNavigation)
+    }
+
     @Test fun `voice buttons persist independently and clearing Alice retains Local`() = runTest {
         val vm = buildViewModel()
         testDispatcher.scheduler.advanceUntilIdle()

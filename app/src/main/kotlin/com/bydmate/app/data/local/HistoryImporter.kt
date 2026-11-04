@@ -2,16 +2,22 @@ package com.bydmate.app.data.local
 
 import android.content.Context
 import android.util.Log
+import com.bydmate.app.data.local.dao.CounterSnapshotDao
 import com.bydmate.app.data.local.dao.IdleDrainDao
+import com.bydmate.app.data.local.dao.LastStateDao
 import com.bydmate.app.data.local.dao.TripDao
 import com.bydmate.app.data.local.dao.TripPointDao
 import com.bydmate.app.data.local.dao.TripTombstoneDao
 import com.bydmate.app.data.local.entity.IdleDrainEntity
 import com.bydmate.app.data.local.entity.TripEntity
+import com.bydmate.app.data.nativestack.VehicleKind
+import com.bydmate.app.data.nativestack.VehicleKindMonitor
 import com.bydmate.app.data.repository.LastSessionRepository
 import com.bydmate.app.data.repository.OdometerMarks
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.data.repository.TripRepository
+import com.bydmate.app.data.trips.CounterSnapshotWriter
+import com.bydmate.app.data.trips.TripFuel
 import com.bydmate.app.domain.cost.CostCalculator
 import com.bydmate.app.service.TrackingService
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -34,6 +40,10 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
     private val tripTombstoneDao: TripTombstoneDao,
     private val costCalculator: CostCalculator,
     private val odometerMarks: OdometerMarks,
+    private val vehicleKind: VehicleKindMonitor,
+    private val counterSnapshotDao: CounterSnapshotDao,
+    private val counterSnapshotWriter: CounterSnapshotWriter,
+    private val lastStateDao: LastStateDao,
 ) {
     companion object {
         private const val TAG = "HistoryImporter"
@@ -42,6 +52,36 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
         // Mirror of TrackingService.SESSION_IDLE_CLOSE_MS — the idle gap after which an
         // open SOC session is considered finished and promotable to a completed bookmark.
         private const val PENDING_SESSION_IDLE_CLOSE_MS = 10_000L
+
+        /**
+         * An energydata row starting later than now + this is from the future (head unit clock
+         * jumped forward, #348). It must never become the import watermark: every real trip
+         * after it would start "before" the watermark and be skipped forever. Kept small, since
+         * an accepted row at now + skew hides every trip that starts within that skew. A skipped
+         * row is not lost: the watermark stays below it, so it is read again once the clock
+         * passes it.
+         */
+        internal const val FUTURE_SKEW_SEC = 60L
+
+        internal fun isFromFuture(startTimestampSec: Long, nowSec: Long): Boolean =
+            startTimestampSec > nowSec + FUTURE_SKEW_SEC
+
+        /** The importer line of the log dump: watermark and the energydata rows it reads (#348). */
+        internal fun importStateLine(watermarkSec: Long, rows: List<BydTripRecord>, nowSec: Long): String {
+            val latest = rows.maxOfOrNull { it.startTimestamp }
+            val future = rows.count { isFromFuture(it.startTimestamp, nowSec) }
+            return "import: watermark=$watermarkSec (${dumpDate(watermarkSec)}) rows=${rows.size} " +
+                "latest_start=${latest ?: "-"} (${latest?.let(::dumpDate) ?: "-"}) future_rows=$future"
+        }
+
+        private fun dumpDate(sec: Long): String =
+            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date(sec * 1000L))
+
+        /** A counter snapshot belongs to a trip edge only this close to it (DM-i, #184). */
+        internal const val COUNTER_EDGE_WINDOW_MS = 90_000L
+
+        /** Only trips this recent are offered counters; snapshots are kept 90 days, so it is safe. */
+        internal const val COUNTER_ATTACH_LOOKBACK_MS = 7L * 24 * 60 * 60 * 1000
 
         /** A just-finished trip may borrow the live outside temperature; an older one may not. */
         internal const val FRESH_TEMP_WINDOW_MS = 10 * 60 * 1000L
@@ -69,6 +109,9 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
 
     private val syncMutex = Mutex()
 
+    /** Set by doSync when it skipped a row from the future; guarded by [syncMutex]. */
+    private var skippedFutureRow = false
+
     data class ImportResult(
         val trips: Int,
         val idleDrains: Int = 0,
@@ -90,14 +133,25 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
             return ImportResult(trips = 0, details = "Синхронизация уже идёт")
         }
         return try {
-            if (!energyDataReader.peekSourceChanged(context)) {
+            // A watermark already in the future (set before #348 was fixed) heals here, before the
+            // unchanged-file shortcut: the file may stay untouched until the next drive ends.
+            // The full re-read is safe: imported rows stop at bydId, deleted ones at the tombstone.
+            val watermark = settingsRepository.getLastEnergyImportTs()
+            val healed = isFromFuture(watermark, System.currentTimeMillis() / 1000L)
+            if (healed) {
+                Log.w(TAG, "syncFromEnergyData: watermark $watermark is in the future, resetting")
+                clearImportWatermark()
+            }
+            if (!healed && !energyDataReader.peekSourceChanged(context)) {
                 Log.d(TAG, "syncFromEnergyData: source unchanged, skipping")
                 return ImportResult(trips = 0, details = "Без изменений")
             }
+            skippedFutureRow = false
             val result = doSync()
             // Mark only on success — a thrown EnergyDataException leaves the
-            // watermark untouched so the next event retries this file.
-            if (!result.isError) energyDataReader.markSourceProcessed(context)
+            // watermark untouched so the next event retries this file. A skipped future row
+            // (#348) leaves it unmarked too: the next sync re-reads the file once the clock is right.
+            if (!result.isError && !skippedFutureRow) energyDataReader.markSourceProcessed(context)
             result
         } catch (e: EnergyDataException) {
             Log.w(TAG, "syncFromEnergyData failed: ${e.message}", e)
@@ -124,7 +178,25 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
             System.currentTimeMillis(), PENDING_SESSION_IDLE_CLOSE_MS)
 
         val lastImportTs = settingsRepository.getLastEnergyImportTs()
-        val bydRecords = energyDataReader.readTripsSince(lastImportTs)
+        // Until recycling is known the whole source is read: the records it hid already sit below
+        // the watermark, and the next ids may never collide again (#348). The batch is cut from it.
+        val remembered = settingsRepository.isEnergyIdsRecycled()
+        val fullSource = if (remembered) null else energyDataReader.readTripsSince(0L)
+        val nowSec = System.currentTimeMillis() / 1000L
+        val firstDetected = fullSource != null && sourceRecycled(
+            fullSource.filterNot { isFromFuture(it.startTimestamp, nowSec) }, lastImportTs,
+        ) { clearImportWatermark() }
+        val sourceRecycled = remembered || firstDetected
+        val bydRecords = when {
+            // One-time catch-up: this sync imports every record of the recreated source. Imported
+            // rows stop at bydId, deleted ones at a tombstone with their start.
+            firstDetected && fullSource != null -> fullSource.also {
+                Log.w(TAG, "energydata source recycled, first detection: watermark $lastImportTs reset, " +
+                    "re-reading all ${it.size} rows")
+            }
+            fullSource != null -> fullSource.filter { it.startTimestamp > lastImportTs }
+            else -> energyDataReader.readTripsSince(lastImportTs)
+        }
         // SOC enrichment uses per-trip session bookmarks (lastSessionRepository.takeMatch
         // below). Each imported trip consumes at most one bookmark, so a batch import matches
         // each trip to its own driving session instead of sharing one snapshot.
@@ -136,9 +208,10 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
         var tripsImported = 0
         var idleDrainsImported = 0
         var skippedDuplicate = 0
+        var recycledIds = 0
         var implausibleKwh = 0
         var tempFromSession = 0
-        var maxTs = lastImportTs
+        var maxTs = if (firstDetected) 0L else lastImportTs
         val capacity = settingsRepository.getBatteryCapacity()
         // One read of the live snapshot for the whole batch: the drive that just ended is the
         // only one close enough in time for this temperature to belong to it.
@@ -147,6 +220,12 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
         val marks = odometerMarks.snapshot()
 
         for (byd in bydRecords) {
+            // Before maxTs and before any filter: a future row must not move the watermark (#348)
+            if (isFromFuture(byd.startTimestamp, nowMs / 1000L)) {
+                Log.w(TAG, "energydata row from the future skipped: id=${byd.id} start=${byd.startTimestamp}")
+                skippedFutureRow = true
+                continue
+            }
             val startTsMs = byd.startTimestamp * 1000L
             val endTsMs = byd.endTimestamp * 1000L
 
@@ -156,24 +235,25 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
             // Skip very short sessions
             if (byd.duration < MIN_TRIP_DURATION_SEC) continue
 
-            // Check duplicate by byd_id
+            // Check duplicate by byd_id; a recycled id falls through to the checks below
             val existingById = tripDao.getByBydId(byd.id)
-            if (existingById != null) {
+            if (existingById != null && !isRecycledId(existingById, byd)) {
                 skippedDuplicate++
                 continue
             }
+            if (existingById != null) {
+                releaseRecycledId(existingById, byd)
+                recycledIds++
+            }
 
             // Manually deleted by the user — never re-import (issue #81)
-            if (tripTombstoneDao.exists(byd.id)) {
+            if (isTombstoned(byd, sourceRecycled)) {
                 skippedDuplicate++
                 continue
             }
 
             // Check duplicate by time overlap (catches v1.x live trips without byd_id)
-            val existingByTime = tripDao.getByStartTsRange(
-                startTsMs - DEDUP_WINDOW_MS,
-                startTsMs + DEDUP_WINDOW_MS
-            )
+            val existingByTime = tripDao.getSameTripByTime(startTsMs, DEDUP_WINDOW_MS)
             if (existingByTime != null) {
                 // Update existing trip with byd_id so future syncs skip it instantly.
                 // The copy keeps its odometer: the km changes, the readings do not.
@@ -274,7 +354,7 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
         settingsRepository.setLastEnergyImportTs(maxTs)
 
         Log.d(TAG, "Sync done: $tripsImported trips, $idleDrainsImported idle, $skippedDuplicate dups, " +
-            "$implausibleKwh implausible kwh")
+            "$recycledIds recycled ids (source recycled=$sourceRecycled), $implausibleKwh implausible kwh")
         Log.i(TAG, "import temp: from_session=$tempFromSession/$tripsImported " +
             "live=${liveExteriorTemp ?: "-"} window=${FRESH_TEMP_WINDOW_MS / 60_000}min")
         return ImportResult(
@@ -282,6 +362,94 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
             idleDrains = idleDrainsImported,
             details = "+$tripsImported поездок, +$idleDrainsImported стоянок, $skippedDuplicate дублей"
         )
+    }
+
+    /**
+     * energydata `_id` restarts from 1 when the car recreates its DB (reset, firmware update, a
+     * backup restored onto it), while the trips table keeps the old ids (#348). A real match
+     * starts within [DEDUP_WINDOW_MS] of the record (energydata trips store its start, live trips
+     * were linked inside that window); a far-off start means the id was recycled.
+     */
+    private fun isRecycledId(existing: TripEntity, byd: BydTripRecord): Boolean =
+        kotlin.math.abs(existing.startTs - byd.startTimestamp * 1000L) > DEDUP_WINDOW_MS
+
+    /** Unlinks the old trip from a recycled id, so later lookups and tombstones by id mean the new record. */
+    private suspend fun releaseRecycledId(existing: TripEntity, byd: BydTripRecord) {
+        Log.w(TAG, "energydata id recycled: id=${byd.id} start=${byd.startTimestamp * 1000L} " +
+            "held by trip=${existing.id} start=${existing.startTs} -> old trip unlinked, record not a duplicate")
+        tripDao.unlinkBydId(existing.id, byd.id)
+    }
+
+    /**
+     * Detected recycling is remembered: after old trips are unlinked no signal is left, yet a legacy
+     * tombstone must keep being ignored for the recreated DB. [records] is the whole source without
+     * future rows. [onDetected] runs once, before the flag is stored, so a crash in between repeats it.
+     */
+    private suspend fun sourceRecycled(
+        records: List<BydTripRecord>,
+        watermarkSec: Long,
+        onDetected: suspend () -> Unit = {},
+    ): Boolean {
+        if (settingsRepository.isEnergyIdsRecycled()) return true
+        val linked = tripDao.getAllSnapshot().filter { it.bydId != null }
+        if (!hasRecycledIds(records, linked) && !idsWentBack(records, linked, watermarkSec)) return false
+        onDetected()
+        settingsRepository.setEnergyIdsRecycled()
+        return true
+    }
+
+    /**
+     * Any recycled id proves the source DB was recreated: then a tombstone without a start time
+     * (written before schema 24) belongs to an old trip. Checked before the import loop releases
+     * the ids, so the order of records does not matter.
+     */
+    private fun hasRecycledIds(records: List<BydTripRecord>, linked: List<TripEntity>): Boolean {
+        val byId = linked.associateBy { it.bydId }
+        val recycled = records.count { byd -> byId[byd.id]?.let { isRecycledId(it, byd) } == true }
+        if (recycled > 0) Log.w(TAG, "energydata source recycled: $recycled/${records.size} ids held by older trips")
+        return recycled > 0
+    }
+
+    /**
+     * energydata ids only grow (rows are soft-deleted, never removed), so a record newer than every
+     * trip and tombstone we know, yet with an id not above the highest one we know, means the car
+     * recreated its DB (#348). Unlike a collision it needs no trip still holding the id: the reused
+     * id may belong only to a deleted trip. Records of an unchanged source are never newer than the
+     * trips they became, and one never imported (too short) has a higher id. A row the clock wrote
+     * in the future and read once the clock caught up can fire it: the source then still holds the
+     * trip with the highest id at its own start, and that keeps the verdict false.
+     *
+     * [watermarkSec] stands in for the latest known start when no known trip or tombstone has one.
+     */
+    private suspend fun idsWentBack(records: List<BydTripRecord>, linked: List<TripEntity>, watermarkSec: Long): Boolean {
+        val anchor = linked.maxByOrNull { it.bydId ?: Long.MIN_VALUE }
+        val maxId = listOfNotNull(anchor?.bydId, tripTombstoneDao.maxBydId()).maxOrNull() ?: return false
+        val latestStartMs = listOfNotNull(linked.maxOfOrNull { it.startTs }, tripTombstoneDao.maxStartTs()).maxOrNull()
+        // The window: a live trip linked by time overlap may start that far from its record
+        val newerThanSec = latestStartMs?.let { (it + DEDUP_WINDOW_MS) / 1000L }
+            ?: watermarkSec.takeIf { it > 0L }
+            ?: return false
+        val record = records.firstOrNull { it.id <= maxId && it.startTimestamp > newerThanSec } ?: return false
+        if (anchor != null && records.any { it.id == anchor.bydId && !isRecycledId(anchor, it) }) {
+            Log.w(TAG, "energydata id went back: id=${record.id} start=${record.startTimestamp} newer than " +
+                "$newerThanSec, but source still holds trip=${anchor.id} id=${anchor.bydId} -> not recycled")
+            return false
+        }
+        Log.w(TAG, "energydata source recycled: id=${record.id} start=${record.startTimestamp} newer than " +
+            "every known trip ($newerThanSec), ids known up to $maxId, source lost trip=${anchor?.id ?: "-"}")
+        return true
+    }
+
+    /** Deleted by the user (issue #81): a tombstone hides only the trip it was left for (#348). */
+    private suspend fun isTombstoned(byd: BydTripRecord, sourceRecycled: Boolean): Boolean {
+        if (!tripTombstoneDao.exists(byd.id)) return false
+        val startTsMs = byd.startTimestamp * 1000L
+        if (tripTombstoneDao.isForAnotherTrip(byd.id, startTsMs, DEDUP_WINDOW_MS, sourceRecycled)) {
+            Log.w(TAG, "tombstone for id=${byd.id} left by another trip, record start=$startTsMs " +
+                "imported (source recycled=$sourceRecycled)")
+            return false
+        }
+        return true
     }
 
     /**
@@ -297,7 +465,12 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
         socEnd: Int?,
         capacity: Double,
     ): Double? {
-        val sane = TripEnergySanity.kwhFor(raw, km, socStart, socEnd, capacity)
+        // DM-i: the engine charges the pack on the way, so a SOC delta is no trip figure.
+        val sane = if (vehicleKind.kind.value == VehicleKind.HYBRID) {
+            raw.takeIf { TripEnergySanity.isPlausible(it, km) }
+        } else {
+            TripEnergySanity.kwhFor(raw, km, socStart, socEnd, capacity)
+        }
         if (sane != raw) {
             Log.w(TAG, "energydata kwh implausible: id=$bydId kwh=$raw km=$km " +
                 "soc=$socStart->$socEnd -> ${sane ?: "null"}")
@@ -398,7 +571,9 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
      */
     suspend fun calculateMissingCosts() {
         try {
-            val calculated = costCalculator.priceUncostedTrips(tripDao.getTripsWithoutCost())
+            val hybrid = vehicleKind.kind.value == VehicleKind.HYBRID
+            val trips = if (hybrid) tripDao.getHybridTripsWithoutCost() else tripDao.getTripsWithoutCost()
+            val calculated = costCalculator.priceUncostedTrips(trips)
             Log.d(TAG, "calculateMissingCosts: $calculated trips")
         } catch (e: Exception) {
             Log.e(TAG, "calculateMissingCosts failed", e)
@@ -424,16 +599,54 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
     }
 
     /**
+     * DM-i only: gives energydata trips the fuel counters of a snapshot pair taken at their own
+     * start and end (within ±[COUNTER_EDGE_WINDOW_MS]). No pair, no litres: a snapshot further
+     * away is never used and litres are never spread between trips.
+     */
+    suspend fun attachCounters() {
+        if (vehicleKind.kind.value != VehicleKind.HYBRID) return
+        try {
+            var attached = 0
+            val since = System.currentTimeMillis() - COUNTER_ATTACH_LOOKBACK_MS
+            for (trip in tripDao.getEnergyDataTripsWithoutCounters(since)) {
+                val endTs = trip.endTs ?: continue
+                val start = counterSnapshotDao.nearest(trip.startTs, COUNTER_EDGE_WINDOW_MS) ?: continue
+                val end = counterSnapshotDao.nearest(endTs, COUNTER_EDGE_WINDOW_MS) ?: continue
+                if (end.ts <= start.ts) continue
+                tripDao.update(
+                    trip.copy(
+                        fuelLiters = TripFuel.liters(start.fuelTotal, end.fuelTotal),
+                        hevKm = TripFuel.hevKm(start.mileageHev, end.mileageHev, trip.distanceKm),
+                        fuelTotalStart = start.fuelTotal,
+                        fuelTotalEnd = end.fuelTotal,
+                        mileageHevStart = start.mileageHev,
+                        mileageHevEnd = end.mileageHev,
+                    )
+                )
+                attached++
+            }
+            Log.d(TAG, "attachCounters: $attached trips")
+        } catch (e: Exception) {
+            Log.e(TAG, "attachCounters failed", e)
+        }
+    }
+
+    /**
      * Deduplicate existing v1.x live-tracked trips with energydata records.
      * Used during v1.x → v2.0 upgrade.
      */
     suspend fun deduplicateWithExisting() {
         try {
-            val bydRecords = energyDataReader.readTrips()
+            // Future rows neither import nor set the watermark below (#348)
+            val nowSec = System.currentTimeMillis() / 1000L
+            val bydRecords = energyDataReader.readTrips().filterNot { isFromFuture(it.startTimestamp, nowSec) }
             val liveTrips = tripDao.getLiveTrips()
             val capacity = settingsRepository.getBatteryCapacity()
             var updated = 0
             var inserted = 0
+            // A full read already, but it may not finish: the first detection resets the watermark
+            // before the flag is stored, so the next sync still re-reads everything (#348)
+            val sourceRecycled = sourceRecycled(bydRecords, 0L) { clearImportWatermark() }
 
             for (byd in bydRecords) {
                 if (byd.duration < MIN_TRIP_DURATION_SEC) continue
@@ -441,11 +654,13 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
                 val startTsMs = byd.startTimestamp * 1000L
                 val endTsMs = byd.endTimestamp * 1000L
 
-                // Already imported?
-                if (tripDao.getByBydId(byd.id) != null) continue
+                // Already imported? A recycled id is not (#348)
+                val existingById = tripDao.getByBydId(byd.id)
+                if (existingById != null && !isRecycledId(existingById, byd)) continue
+                if (existingById != null) releaseRecycledId(existingById, byd)
 
                 // Manually deleted by the user — never re-import (issue #81)
-                if (tripTombstoneDao.exists(byd.id)) continue
+                if (isTombstoned(byd, sourceRecycled)) continue
 
                 // Find matching live trip (startTs within ±5 min)
                 val match = liveTrips.firstOrNull { live ->
@@ -558,6 +773,12 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
      */
     suspend fun recalculateConsumptionFromEnergyData(): Int {
         if (settingsRepository.isConsumptionRecalcDone()) return 0
+        // No folder (Song, Atto: #301): nothing to recalculate, not a failure. The flag stays unset,
+        // so a Leopard 3 whose folder is only missing right now still gets its recalculation.
+        if (!energyDataReader.energyDataDir().exists()) {
+            Log.d(TAG, "recalculateConsumption: no energydata directory, skipped")
+            return 0
+        }
 
         return try {
             val bydRecords = energyDataReader.readTrips()
@@ -572,9 +793,9 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
             var updated = 0
 
             for (trip in allTrips) {
-                // Match by bydId first
+                // Match by bydId first; a recycled id carries another trip's kWh (#348)
                 val match = if (trip.bydId != null) {
-                    bydRecords.firstOrNull { it.id == trip.bydId }
+                    bydRecords.firstOrNull { it.id == trip.bydId && !isRecycledId(trip, it) }
                 } else {
                     // Fallback: match by start_timestamp ±5 min
                     val startTsSec = trip.startTs / 1000L
@@ -607,6 +828,27 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
             Log.e(TAG, "recalculateConsumption failed", e)
             0
         }
+    }
+
+    /**
+     * Re-read energydata from the start on the next sync (Settings reset, #348). Rows already
+     * imported stop at bydId, deleted ones at the tombstone.
+     */
+    suspend fun resetImportWatermark() = syncMutex.withLock { clearImportWatermark() }
+
+    /** Import watermark to 0 and the source fingerprint forgotten, so the unchanged-file gate passes. */
+    private suspend fun clearImportWatermark() {
+        settingsRepository.setLastEnergyImportTs(0L)
+        energyDataReader.resetWatermark(context)
+    }
+
+    /** One line for the log dump: watermark and the energydata rows behind it (#348). */
+    suspend fun importStateLine(): String = syncMutex.withLock {
+        importStateLine(
+            settingsRepository.getLastEnergyImportTs(),
+            energyDataReader.readTrips(),
+            System.currentTimeMillis() / 1000L,
+        )
     }
 
     /**
@@ -645,11 +887,23 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
      * Unified sync entry point — always uses energydata pipeline.
      */
     suspend fun runSync(): ImportResult {
+        // runSync starts at app and service start, before the poll loop has loaded the cached car
+        // type: an UNKNOWN kind would SOC-repair a hybrid trip's kWh for good. Then (DM-i) the end
+        // edge of the trip that ended at power-off, before attachCounters() looks for it.
+        runCatching { vehicleKind.awaitCache() }
+            .onFailure { Log.w(TAG, "vehicle kind cache load failed", it) }
+        val kind = vehicleKind.kind.value
+        if (kind == VehicleKind.HYBRID) {
+            runCatching { counterSnapshotWriter.onColdStart(lastStateDao.getCurrent(), kind) }
+                .onFailure { Log.w(TAG, "CounterSnapshotWriter.onColdStart failed", it) }
+        }
         cleanupIdleDrainV2()
         val r = syncFromEnergyData()
         recalculateConsumptionFromEnergyData()
         repairImplausibleKwh()
         fillOdometerFromMarks()
+        // Before the costs: a trip priced without its litres is never priced again.
+        attachCounters()
         calculateMissingCosts()
         attachGpsPoints()
         return r

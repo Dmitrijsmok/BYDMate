@@ -34,6 +34,8 @@ import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.autoservice.SentinelDecoder
 import com.bydmate.app.data.vehicle.BatchReadItem
 import com.bydmate.app.data.vehicle.HelperClient
+import com.bydmate.app.diagnostics.Trace
+import com.bydmate.app.diagnostics.TraceArea
 import com.bydmate.app.ui.widget.WidgetController
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -107,9 +109,11 @@ fun blindSpotClusterDisplay(context: Context): Display? {
  *
  * The main poll (1 s) only arms the pipeline: once the car is near the speed threshold a fast
  * loop takes over and reads blink/speed/gear through the daemon every 150 ms, because a turn
- * signal that shows up a second late is useless. The camera is opened warm (both previews
- * bound, both windows parked off screen) while the car is moving, so a show is one
- * updateViewLayout rather than a vendor-stack open. Hiding moves the window off screen rather
+ * signal that shows up a second late is useless. The camera is opened on demand, when a turn
+ * signal asks for a view (both previews bound at once, the other window parked off screen), and
+ * closed once no signal has wanted it for [COOL_DOWN_MS]: a blinker pulled again inside that
+ * reuses the open camera, and a show is then one updateViewLayout. Holding it open at every
+ * speed above the threshold loaded the head unit. Hiding moves the window off screen rather
  * than dropping its alpha, so the vendor keeps filling a live surface.
  *
  * Left goes on the cluster (that is where the driver looks before a left lane change), in the
@@ -117,7 +121,8 @@ fun blindSpotClusterDisplay(context: Context): Display? {
  * screen. Without a projection display the left view falls back to a second main-screen window,
  * mirrored across the right one. Two opt-ins move them: both on the main screen (#183), or both
  * on the cluster (#240), where the right camera gets a second cluster window of the same geometry.
- * Reverse gear closes everything: the factory rear view owns the screens there.
+ * Reverse gear closes everything: the factory rear view owns the screens there. So does the
+ * factory 360 view for as long as it is in the foreground.
  *
  * Threading: window work runs on Main, every vendor-stack call runs on a private
  * single camera thread ([cameraDispatcher]) because open/close block for hundreds of
@@ -208,6 +213,9 @@ class BlindSpotController @Inject constructor(
 
     private var windowsAttachedAt = 0L
     private var cameraOpenedAt = 0L
+    /** Whether the last tick's decision wanted the camera; its rising edge is a show request. */
+    private var cameraWanted = false
+    private val showLog = BlindSpotShowLog()
     private var coolingSince = 0L
     private var tearingDown = false
 
@@ -251,6 +259,7 @@ class BlindSpotController @Inject constructor(
         val reason = blindSpotArmedReason(prefs.enabled, data.gear, data.speed, prefs.thresholdKmh)
         if (armed != lastArmed) {
             Log.i(TAG, "armed=$armed reason=$reason speed=${data.speed} gear=${data.gear}")
+            Trace.event(TraceArea.CAMERA, "armed", "on" to armed, "reason" to reason, "speed" to data.speed, "gear" to data.gear)
             lastArmed = armed
         }
         lastArmedReason = reason
@@ -390,10 +399,11 @@ class BlindSpotController @Inject constructor(
         val nativeCameraForeground = cameraStateMonitor.active.value
         if (nativeCameraForeground != lastNativeCameraForeground) {
             lastNativeCameraForeground = nativeCameraForeground
-            val verb = if (nativeCameraForeground) "hidden" else "released"
+            val verb = if (nativeCameraForeground) "closed" else "may warm again"
             Log.i(TAG, "native camera foreground=$nativeCameraForeground: blind-spot $verb")
+            Trace.event(TraceArea.CAMERA, "native-360", "on" to nativeCameraForeground)
             clusterJournal.append(
-                "camera: native 360 ${if (nativeCameraForeground) "up, hide" else "down, release"}"
+                "camera: native 360 ${if (nativeCameraForeground) "up, close" else "down, may warm again"}"
             )
         }
         val decision = decideBlindSpot(
@@ -411,10 +421,24 @@ class BlindSpotController @Inject constructor(
             if (anythingUp()) awaitTeardown("reverse")
             return
         }
+        // The factory 360 owns the screen like reverse does, and a camera kept warm under it
+        // streams two previews nobody sees: the 360 stuttered (tester dump 2026-10-03).
+        if (nativeCameraForeground) {
+            if (anythingUp()) awaitTeardown("native 360")
+            return
+        }
 
         // A fresh signal cancels the error backoff once: the driver is asking for the view now.
         // Edge, not level — otherwise a held blinker would retry the camera every tick.
         backoff.request(decision.show)
+
+        // Looked up once the loop is armed rather than on the first blinker, so the first show
+        // of the drive does not wait for the vendor lookup on top of the open.
+        if (!discovered) discoverCamera()
+
+        val askedSide = blindSpotSignalSide(sample?.blink)
+        if (decision.cameraWarm && !cameraWanted) showLog.requested(askedSide, cameraOpen, now)
+        cameraWanted = decision.cameraWarm
 
         if (decision.cameraWarm) {
             coolingSince = 0L
@@ -422,7 +446,8 @@ class BlindSpotController @Inject constructor(
         } else {
             if (coolingSince == 0L) coolingSince = now
             if (now - coolingSince >= COOL_DOWN_MS && anythingUp()) {
-                awaitTeardown("cold for ${COOL_DOWN_MS / 1000} s")
+                val why = if (askedSide == BlindSpotSide.NONE) "signal off" else "below speed"
+                awaitTeardown("$why for ${COOL_DOWN_MS / 1000} s")
             }
         }
 
@@ -444,9 +469,7 @@ class BlindSpotController @Inject constructor(
         // DiLink 4.0, 2026-09-18 — BmmCameraInfo missing) must not get windows that nothing will
         // ever draw into, flashing on every blinker tick.
         if (!discovered || (probe.cameraId < 0 && now - probe.lastDiscoverAt >= REDISCOVER_MS)) {
-            discovered = true
-            withContext(cameraDispatcher()) { probe.discover() }
-            Log.i(TAG, "camera discover: id=${probe.cameraId} " + probe.discoverJournal.joinToString(" | "))
+            discoverCamera()
         }
         if (probe.cameraId < 0) {
             // Wait out the rest of the lookup interval, not a fresh one: a blinker pulled again
@@ -482,7 +505,7 @@ class BlindSpotController @Inject constructor(
             // The windows can have gone away while the vendor stack was opening (a teardown from
             // the poll thread, a destroyed surface): do not keep a camera nobody can see.
             if (clusterWindow == null && pipWindow == null) {
-                withContext(cameraDispatcher()) { probe.close() }
+                withContext(cameraDispatcher()) { probe.close("windows gone") }
                 return
             }
             cameraOpen = true
@@ -497,6 +520,11 @@ class BlindSpotController @Inject constructor(
         if (!gotFrame) {
             if (now - cameraOpenedAt >= FIRST_FRAME_TIMEOUT_MS) failCamera("no frame", now)
             return
+        }
+        if (showLog.awaitingFrame) {
+            val window = if (showLog.side == BlindSpotSide.RIGHT) pipWindow else clusterWindow
+            // Only a frame of the side asked for ends the measurement; the other window's does not.
+            window?.validFrameAt?.takeIf { it > 0L }?.let { showLog.firstFrame(it, cameraOpenedAt) }
         }
 
         // The vendor stream can go quiet while the camera stays open (field 2026-08-25): the
@@ -515,8 +543,15 @@ class BlindSpotController @Inject constructor(
         if (clusterStalled || pipStalled) failCamera("frame stall", now)
     }
 
+    private suspend fun discoverCamera() {
+        discovered = true
+        withContext(cameraDispatcher()) { probe.discover() }
+        Log.i(TAG, "camera discover: id=${probe.cameraId} " + probe.discoverJournal.joinToString(" | "))
+    }
+
     private suspend fun failCamera(reason: String, now: Long) {
         Log.w(TAG, "camera error: $reason; retry in ${RETRY_DELAY_MS / 1000} s")
+        Trace.event(TraceArea.CAMERA, "fail", "reason" to reason)
         clusterJournal.append("camera: error $reason, retry in ${RETRY_DELAY_MS / 1000} s")
         awaitTeardown(reason)
         backoff.fail(now, RETRY_DELAY_MS)
@@ -847,12 +882,17 @@ class BlindSpotController @Inject constructor(
         if (!anythingUp()) return
         if (tearingDown) return
         tearingDown = true
-        Log.i(TAG, "teardown: $reason")
+        val openFor = if (cameraOpen) {
+            " (camera open ${(SystemClock.elapsedRealtime() - cameraOpenedAt) / 1000.0} s)"
+        } else {
+            ""
+        }
+        Log.i(TAG, "teardown: $reason$openFor")
         try {
             // Camera first: nothing may write into a surface that is about to be released.
             if (cameraOpen) {
                 clusterJournal.append("camera: teardown $reason")
-                withContext(cameraDispatcher()) { probe.close() }
+                withContext(cameraDispatcher()) { probe.close(reason) }
                 cameraOpen = false
             }
             applyShow(BlindSpotSide.NONE)
@@ -881,6 +921,9 @@ class BlindSpotController @Inject constructor(
             windowsAttachedAt = 0L
             cameraOpenedAt = 0L
             coolingSince = 0L
+            // The next signal is a fresh request, whatever closed this one.
+            cameraWanted = false
+            showLog.reset()
             tearingDown = false
         }
     }
@@ -924,6 +967,10 @@ class BlindSpotController @Inject constructor(
 
         /** elapsedRealtime of the last surface update; read from the fast loop, written on Main. */
         @Volatile var lastFrameAt = 0L
+            private set
+
+        /** elapsedRealtime of the first honest frame ([hasValidFrame]); 0 until there is one. */
+        @Volatile var validFrameAt = 0L
             private set
 
         private var shownX = 0
@@ -1068,6 +1115,7 @@ class BlindSpotController @Inject constructor(
             wm = null
             frames = 0
             lastFrameAt = 0L
+            validFrameAt = 0L
             shown = false
             Log.i(TAG, "$label window removed")
             return true
@@ -1078,7 +1126,10 @@ class BlindSpotController @Inject constructor(
             surface = Surface(texture)
             frames = 0
             lastFrameAt = 0L
+            validFrameAt = 0L
             applyCrop(width, height)
+            // The camera is opened on demand, and this surface is what the open waits for.
+            wake.trySend(Unit)
         }
 
         override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
@@ -1096,8 +1147,9 @@ class BlindSpotController @Inject constructor(
         }
 
         override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {
-            if (frames < 2) frames++
-            lastFrameAt = SystemClock.elapsedRealtime()
+            val now = SystemClock.elapsedRealtime()
+            if (frames < 2 && ++frames == 2) validFrameAt = now
+            lastFrameAt = now
         }
 
         /** True while this window shows the picture turned a quarter-turn (#207). */

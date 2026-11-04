@@ -48,12 +48,18 @@ object VoiceCatalog {
         VoiceCommandSpec(HALF, WINDOW_PASSENGER) { "副驾半开" },
         VoiceCommandSpec(HALF, WINDOW_REAR_LEFT) { "后左半开" },
         VoiceCommandSpec(HALF, WINDOW_REAR_RIGHT) { "后右半开" },
+        // Windows — individual exact share (1..99; 0 and 100 are the close / open above)
+        VoiceCommandSpec(SET, WINDOW_DRIVER, ValueSpec(1, 99)) { n -> "主驾打开$n" },
+        VoiceCommandSpec(SET, WINDOW_PASSENGER, ValueSpec(1, 99)) { n -> "副驾打开$n" },
+        VoiceCommandSpec(SET, WINDOW_REAR_LEFT, ValueSpec(1, 99)) { n -> "后左打开$n" },
+        VoiceCommandSpec(SET, WINDOW_REAR_RIGHT, ValueSpec(1, 99)) { n -> "后右打开$n" },
         // Climate
         VoiceCommandSpec(ON, AC_AUTO) { "自动空调" },
         VoiceCommandSpec(OFF, AC_AUTO) { "关闭空调" },
+        VoiceCommandSpec(ON, AC_AUTO_MODE) { "空调自动" },
         VoiceCommandSpec(ON, AC_FLOW) { "打开空调通风" },
         VoiceCommandSpec(SET, AC_FAN, ValueSpec(1, 7)) { n -> "风量${n}" },
-        VoiceCommandSpec(SET, AC_TEMP, ValueSpec(16, 30)) { n -> "设置温度${n}" },
+        VoiceCommandSpec(SET, AC_TEMP, ValueSpec(16, 33)) { n -> "设置温度${n}" },
         VoiceCommandSpec(ON, AC_RECIRC_INNER) { "内循环" },
         VoiceCommandSpec(ON, AC_RECIRC_OUTER) { "外循环" },
         VoiceCommandSpec(ON, DEFROST_FRONT) { "吹前挡" },
@@ -89,6 +95,9 @@ object VoiceCatalog {
         VoiceCommandSpec(OFF, LIGHT_DRL) { "关闭日行灯" },
         VoiceCommandSpec(ON, LIGHT_INTERIOR) { "打开车内灯" },
         VoiceCommandSpec(OFF, LIGHT_INTERIOR) { "关闭车内灯" },
+        // HUD master switch
+        VoiceCommandSpec(ON, HUD) { "打开抬头显示" },
+        VoiceCommandSpec(OFF, HUD) { "关闭抬头显示" },
         // Locks — "запри"/"отопри" via the door/lock synonyms ("замок", "двери").
         VoiceCommandSpec(ON, LOCK) { "车门上锁" },
         VoiceCommandSpec(OFF, LOCK) { "车门解锁" },

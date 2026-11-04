@@ -141,6 +141,33 @@ class AgentOrchestratorDetachedTest {
         assertEquals("сводка (время 07:47)", (second.requests.single().last() as AgentMessage.User).content)
     }
 
+    // An Alice question with a permission off: the denied tools are neither offered nor run, and a
+    // call the model makes anyway goes through the refusing execute overload.
+    @Test
+    fun `a denied set filters the schemas and reaches execute`() = runTest {
+        val denied = setOf("vehicle_control", "navigate_to")
+        val tools = mockk<AgentTools>()
+        coEvery { tools.schemas(includeAutomationTools = false, deniedTools = denied) } returns JSONArray()
+        coEvery { tools.execute(any(), false, denied) } returns """{"error":"запрещён"}"""
+        val call = AgentToolCall("c1", "vehicle_control", """{"command":"window_open_all"}""")
+        val replies = ArrayDeque(listOf(Result.success(AgentReply(null, listOf(call))), answer("Не могу, запрещено")))
+        val backend = object : AgentBackend {
+            override suspend fun isConfigured() = true
+            override suspend fun chat(
+                messages: List<AgentMessage>,
+                tools: JSONArray?,
+                onDelta: ((String) -> Unit)?,
+            ): Result<AgentReply> = replies.removeFirst()
+        }
+        val repo = mockk<SettingsRepository>()
+        coEvery { repo.isAgentEnabled() } returns true
+        val r = AgentOrchestrator(backend, tools, repo, isMoving = { false }).askDetached("открой окно", denied)
+        assertEquals("Не могу, запрещено", (r as AgentResult.Answer).text)
+        io.mockk.coVerify(exactly = 1) { tools.schemas(includeAutomationTools = false, deniedTools = denied) }
+        io.mockk.coVerify(exactly = 1) { tools.execute(call, false, denied) }
+        io.mockk.coVerify(exactly = 0) { tools.execute(any(), any()) }
+    }
+
     @Test
     fun `schemas are requested without automation tools`() = runTest {
         // verify tools.schemas(includeAutomationTools = false) was called (mockk coVerify)

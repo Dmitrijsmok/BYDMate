@@ -88,3 +88,32 @@ jobs:
             ${{ runner.temp }}/bydmate-verified-apk/verification.json
           if-no-files-found: error
           retention-days: 30
+
+  telegram:
+    # Separate job: the Telegram bot token never shares a runner with the signing key.
+    needs: release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Dmitrijsmok/BYDMate'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: BYDMate-dilink3-release-${{ github.sha }}-${{ github.run_number }}-${{ github.run_attempt }}
+          path: apk
+
+      - name: Send the verified signed APK to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set: skipping the Telegram upload"
+            exit 0
+          fi
+          apk=$(ls apk/BYDMate-dilink3-v*.apk)
+          sha=$(sha256sum "$apk" | cut -d' ' -f1)
+          caption="$(basename "$apk") · ${GITHUB_SHA::8} · SHA-256 ${sha}"
+          curl -sS --fail-with-body -o /dev/null \
+            -F chat_id="$TELEGRAM_CHAT_ID" -F caption="$caption" -F document=@"$apk" \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument"
+          echo "Sent $(basename "$apk") to Telegram"

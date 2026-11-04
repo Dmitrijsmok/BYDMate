@@ -8,8 +8,13 @@ import com.bydmate.app.data.local.entity.TariffPeriodEntity
 import com.bydmate.app.data.local.entity.TripEntity
 import com.bydmate.app.data.local.entity.TariffPeriodEntity.Companion.TRIP_RULE_CHARGES
 import com.bydmate.app.data.repository.SettingsRepository
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.roundToLong
 
 /** What one [CostCalculator.recalculate] pass touched. */
 data class RecalcResult(
@@ -17,6 +22,13 @@ data class RecalcResult(
     val trips: Int = 0,
     val skippedManual: Int = 0,
 )
+
+/**
+ * A trip [CostCalculator.priceUncostedTrips] prices: one with no cost yet, or (DM-i) one priced
+ * before its litres arrived, given [fuelCost] for those litres.
+ */
+private fun TripEntity.needsPrice(fuelCost: Double?): Boolean =
+    if (cost == null) kwhConsumed != null || fuelCost != null else this.fuelCost == null && fuelCost != null
 
 /** Measured AC/DC losses derived from the charges where a meter reading was typed in. */
 data class MeasuredLosses(
@@ -40,6 +52,11 @@ class CostCalculator @Inject constructor(
     private val tripDao: TripDao,
     private val settingsRepository: SettingsRepository,
 ) {
+
+    private val _pricingVersion = MutableStateFlow(0L)
+
+    /** Bumped after every [recalculate], so a screen holding a rate knows to read it again. */
+    val pricingVersion: StateFlow<Long> = _pricingVersion.asStateFlow()
 
     /**
      * Current periods. A fresh install has none (the seeding migration only runs on an
@@ -97,6 +114,7 @@ class CostCalculator @Inject constructor(
 
         Log.i(TAG, "recalc from=$fromTs to=$toTs charges=${chargePass.charges} trips=$tripsUpdated " +
             "skippedManual=${chargePass.skippedManual}")
+        _pricingVersion.update { it + 1 }
         return chargePass.copy(trips = tripsUpdated)
     }
 
@@ -133,12 +151,13 @@ class CostCalculator @Inject constructor(
     ): Int {
         var updated = 0
         for (trip in tripDao.getWithEnergyInRange(fromTs, toTs)) {
-            val kwh = trip.kwhConsumed
-            val period = schedule.periodAt(trip.startTs)
-            if (kwh == null || period == null) continue
-            val cost = kwh * tripRate(period, trip.startTs, timeline)
-            if (trip.cost != cost) {
-                tripDao.update(trip.copy(cost = cost))
+            val period = schedule.periodAt(trip.startTs) ?: continue
+            val electricityCost = trip.kwhConsumed?.let { it * tripRate(period, trip.startTs, timeline) }
+            // DM-i: the fuel part follows the litre price of the trip's own period.
+            val fuelCost = fuelCost(trip, period.fuelPricePerLiter)
+            val cost = if (fuelCost == null) electricityCost else (electricityCost ?: 0.0) + fuelCost
+            if (trip.cost != cost || trip.fuelCost != fuelCost) {
+                tripDao.update(trip.copy(cost = cost, fuelCost = fuelCost))
                 updated++
             }
         }
@@ -148,12 +167,19 @@ class CostCalculator @Inject constructor(
     /**
      * Prices trips that carry energy but no cost yet, each by its own period. Trips that
      * already have a cost are left untouched — this is the import path, not a recalculation.
+     * On a DM-i a trip that burned fuel also gets [TripEntity.fuelCost] at the litre price of its
+     * period and a [TripEntity.cost] of electricity plus fuel; a period without a litre price
+     * leaves the cost electricity only. A priced trip whose litres arrived later gets only the
+     * fuel part added to its cost.
      */
     suspend fun priceUncostedTrips(trips: List<TripEntity>): Int {
-        val priceable = trips.filter { it.kwhConsumed != null && it.cost == null }
-        if (priceable.isEmpty()) return 0
+        if (trips.isEmpty()) return 0
         val schedule = schedule()
         if (schedule.isEmpty) return 0
+        val priceable = trips.filter {
+            it.needsPrice(fuelCost(it, schedule.periodAt(it.startTs)?.fuelPricePerLiter))
+        }
+        if (priceable.isEmpty()) return 0
         val timeline = BatteryPriceTimeline(
             chargeDao.getCompletedForPricing(priceable.maxOf { it.startTs }),
             settingsRepository.getBatteryCapacity(),
@@ -162,12 +188,37 @@ class CostCalculator @Inject constructor(
         for (trip in priceable) {
             val kwh = trip.kwhConsumed
             val period = schedule.periodAt(trip.startTs)
-            if (kwh == null || period == null) continue
-            tripDao.update(trip.copy(cost = kwh * tripRate(period, trip.startTs, timeline)))
+            // A trip priced before its litres arrived keeps its cost as the electricity part.
+            val electricityCost = trip.cost
+                ?: if (kwh != null && period != null) kwh * tripRate(period, trip.startTs, timeline) else null
+            val fuelCost = fuelCost(trip, period?.fuelPricePerLiter)
+            when {
+                fuelCost != null -> tripDao.update(trip.copy(cost = (electricityCost ?: 0.0) + fuelCost, fuelCost = fuelCost))
+                electricityCost != null -> tripDao.update(trip.copy(cost = electricityCost))
+                else -> continue
+            }
             priced++
         }
         Log.i(TAG, "priced uncosted trips=$priced")
         return priced
+    }
+
+    /** DM-i fuel part of a trip's cost, rounded to 0.01; null without a price or without litres. */
+    private fun fuelCost(trip: TripEntity, pricePerLiter: Double?): Double? {
+        val liters = trip.fuelLiters
+        if (pricePerLiter == null || liters == null || liters <= 0.0) return null
+        return (liters * pricePerLiter * 100.0).roundToLong() / 100.0
+    }
+
+    /**
+     * Price per kWh for a trip starting at [ts], by the same rule a saved trip is priced with:
+     * the dashboard counters and the Telegram report put it on the trip under way.
+     */
+    suspend fun tripRateAt(ts: Long): Double {
+        val period = schedule().periodAt(ts) ?: return settingsRepository.getHomeTariff()
+        TariffSchedule.fixedTripRate(period)?.let { return it }
+        val timeline = BatteryPriceTimeline(chargeDao.getCompletedForPricing(ts), settingsRepository.getBatteryCapacity())
+        return tripRate(period, ts, timeline)
     }
 
     /** Price per kWh for one trip under [period]; logs the `charges` rule decision. */

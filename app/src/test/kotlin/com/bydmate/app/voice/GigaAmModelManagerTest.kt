@@ -67,6 +67,41 @@ class GigaAmModelManagerTest {
             }
             .build()
 
+    // Like clientFor, but honors `Range: bytes=N-` on MODEL_URL the way the GitHub release
+    // CDN does: 206 with the tail, or 416 with "bytes */<size>" once N reaches the end.
+    // Every model request's Range header (null = none) is recorded into `ranges`.
+    private fun rangeClientFor(
+        archive: File,
+        vadBytes: ByteArray,
+        ranges: MutableList<String?> = mutableListOf(),
+    ): OkHttpClient =
+        OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val request = chain.request()
+                val isVad = request.url.toString() == GigaAmModelManager.VAD_URL
+                val full = if (isVad) vadBytes else archive.readBytes()
+                val range = request.header("Range")
+                if (!isVad) ranges += range
+                val start = range?.removePrefix("bytes=")?.removeSuffix("-")?.toIntOrNull()
+                val octet = "application/octet-stream".toMediaType()
+                val builder = okhttp3.Response.Builder()
+                    .request(request)
+                    .protocol(okhttp3.Protocol.HTTP_1_1)
+                when {
+                    start == null -> builder.code(200).message("OK").body(full.toResponseBody(octet))
+                    start >= full.size -> builder.code(416).message("Range Not Satisfiable")
+                        .header("Content-Range", "bytes */${full.size}")
+                        .body(ByteArray(0).toResponseBody(octet))
+                    else -> builder.code(206).message("Partial Content")
+                        .header("Content-Range", "bytes $start-${full.size - 1}/${full.size}")
+                        .body(full.copyOfRange(start, full.size).toResponseBody(octet))
+                }.build()
+            }
+            .build()
+
+    /** Where download() keeps the model archive between runs (cacheDir == filesDir here). */
+    private fun cachedArchive(filesDir: File) = File(filesDir, "gigaam-v3-ru.tar.bz2")
+
     private fun managerWith(
         filesDir: File,
         http: OkHttpClient,
@@ -213,6 +248,8 @@ class GigaAmModelManagerTest {
         assertFalse(m.isReady())
         assertFalse(File(filesDir, "asr/gigaam-v3-ru").exists())
         assertFalse(File(filesDir, "asr/.staging-gigaam-v3-ru").exists())
+        // A graceful unpack failure means the archive itself is bad: never resume it.
+        assertFalse(cachedArchive(filesDir).exists())
     }
 
     @Test
@@ -272,6 +309,8 @@ class GigaAmModelManagerTest {
         assertTrue(job.isCancelled)
         assertFalse(File(filesDir, "asr/gigaam-v3-ru").exists())   // unpack never ran
         assertFalse(File(filesDir, "asr/silero_vad.onnx").exists())   // vad phase never ran
+        // The bytes already pulled stay in cacheDir for the next run's Range resume.
+        assertTrue(cachedArchive(filesDir).length() > 0)
     }
 
     // --- v2 -> v3 migration: legacy dir is swept, never resurrected ---
@@ -334,6 +373,7 @@ class GigaAmModelManagerTest {
         File(legacy, "model.int8.onnx").writeText("old")
         val staging = File(filesDir, "asr/.staging-gigaam-v3-ru").apply { mkdirs() }
         val legacyStaging = File(filesDir, "asr/.staging-gigaam-v2-ru").apply { mkdirs() }
+        val partialArchive = cachedArchive(filesDir).apply { writeText("partial") }
         val m = manager(filesDir)
 
         m.delete()
@@ -342,6 +382,7 @@ class GigaAmModelManagerTest {
         assertFalse(legacy.exists())
         assertFalse(staging.exists())
         assertFalse(legacyStaging.exists())
+        assertFalse("delete also drops a kept partial archive", partialArchive.exists())
     }
 
     @Test
@@ -354,6 +395,28 @@ class GigaAmModelManagerTest {
         File(filesDir, "asr/silero_vad.onnx").writeText("vad")
 
         assertFalse("after the APK update the model must read as not downloaded", manager(filesDir).isReady())
+    }
+
+    @Test
+    fun `resumable archive reduces additional free-space requirement`() {
+        val half = GigaAmModelManager.MODEL_ARCHIVE_BYTES / 2
+        assertEquals(
+            GigaAmModelManager.REQUIRED_FREE_BYTES - half,
+            GigaAmModelManager.additionalRequiredFreeBytes(half),
+        )
+        assertEquals(
+            GigaAmModelManager.REQUIRED_FREE_BYTES - GigaAmModelManager.MODEL_ARCHIVE_BYTES,
+            GigaAmModelManager.additionalRequiredFreeBytes(GigaAmModelManager.MODEL_ARCHIVE_BYTES),
+        )
+        assertEquals(GigaAmModelManager.REQUIRED_FREE_BYTES, GigaAmModelManager.additionalRequiredFreeBytes(0L))
+    }
+
+    @Test
+    fun `range 416 at exact file length treats cached archive as complete`() {
+        assertTrue(GigaAmModelManager.rangeAlreadyComplete(1234L, "bytes */1234"))
+        assertFalse(GigaAmModelManager.rangeAlreadyComplete(1200L, "bytes */1234"))
+        assertFalse(GigaAmModelManager.rangeAlreadyComplete(1234L, null))
+        assertFalse(GigaAmModelManager.rangeAlreadyComplete(0L, "bytes */0"))
     }
 
     // --- Phased progress: the unpack of a ~226 MiB archive must not look like a hang ---
@@ -495,11 +558,9 @@ class GigaAmModelManagerTest {
     }
 
     @Test
-    fun `leftovers of an interrupted run are cleared before the storage precheck`() = runBlocking {
+    fun `staging leftovers of an interrupted run are cleared before the storage precheck`() = runBlocking {
         val filesDir = tmp.newFolder("files22")
-        // What a power-off mid-unpack leaves behind: the archive in cacheDir (== filesDir in
-        // these tests) and a half-written staging dir.
-        val staleArchive = File(filesDir, "gigaam-v3-ru.tar.bz2").apply { writeText("stale-archive") }
+        // What a power-off mid-unpack leaves behind besides the archive: a half-written staging dir.
         val staleStaging = File(filesDir, "asr/.staging-gigaam-v3-ru").apply { mkdirs() }
         File(staleStaging, "model.int8.onnx").writeText("half")
         val archive = makeArchive(mapOf("top/model.int8.onnx" to "new", "top/tokens.txt" to "new"))
@@ -509,7 +570,7 @@ class GigaAmModelManagerTest {
         every { ctx.filesDir } returns filesDir
         every { ctx.cacheDir } returns filesDir
         val m = GigaAmModelManager(ctx, clientFor(archive, "v".toByteArray())) {
-            if (staleArchive.exists() || staleStaging.exists()) {
+            if (staleStaging.exists()) {
                 GigaAmModelManager.REQUIRED_FREE_BYTES - 1
             } else {
                 GigaAmModelManager.REQUIRED_FREE_BYTES
@@ -533,5 +594,115 @@ class GigaAmModelManagerTest {
         assertTrue(m.download { _, _ -> }.isFailure)
         assertTrue(m.isReady())
         assertEquals("existing-onnx", File(dir, "model.int8.onnx").readText())
+    }
+
+    // --- Resume: an interrupted 226 MiB transfer continues with HTTP Range ---
+
+    @Test
+    fun `interrupted archive resumes with a Range request and appends the rest`() = runBlocking {
+        val filesDir = tmp.newFolder("files23")
+        val archive = makeArchive(mapOf("top/model.int8.onnx" to "onnx-bytes", "top/tokens.txt" to "tokens"))
+        val bytes = archive.readBytes()
+        val half = bytes.size / 2
+        val partial = cachedArchive(filesDir).apply { writeBytes(bytes.copyOfRange(0, half)) }
+        val ranges = mutableListOf<String?>()
+        val m = managerWith(filesDir, rangeClientFor(archive, "vad-bytes".toByteArray(), ranges))
+
+        val ticks = mutableListOf<Int>()
+        val result = m.download { _, pct -> ticks += pct }
+
+        assertTrue(result.isSuccess)
+        assertEquals(listOf<String?>("bytes=$half-"), ranges)
+        assertEquals("onnx-bytes", File(m.modelPath()).readText())
+        assertEquals("tokens", File(m.tokensPath()).readText())
+        assertEquals(ticks, ticks.sorted())
+        assertFalse("a published model drops its archive", partial.exists())
+    }
+
+    @Test
+    fun `complete cached archive answered with 416 is unpacked without a new transfer`() = runBlocking {
+        val filesDir = tmp.newFolder("files24")
+        val archive = makeArchive(mapOf("top/model.int8.onnx" to "onnx-bytes", "top/tokens.txt" to "tokens"))
+        // A power-off mid-unpack leaves the fully downloaded archive behind.
+        cachedArchive(filesDir).writeBytes(archive.readBytes())
+        val ranges = mutableListOf<String?>()
+        val m = managerWith(filesDir, rangeClientFor(archive, "vad-bytes".toByteArray(), ranges))
+
+        val result = m.download { _, _ -> }
+
+        assertTrue(result.isSuccess)
+        assertEquals(listOf<String?>("bytes=${archive.length()}-"), ranges)
+        assertTrue(m.isReady())
+        assertEquals("onnx-bytes", File(m.modelPath()).readText())
+    }
+
+    @Test
+    fun `416 for a cached archive of the wrong size restarts the transfer from zero`() = runBlocking {
+        val filesDir = tmp.newFolder("files25")
+        val archive = makeArchive(mapOf("top/model.int8.onnx" to "onnx-bytes", "top/tokens.txt" to "tokens"))
+        val oversized = archive.readBytes() + "garbage".toByteArray()
+        cachedArchive(filesDir).writeBytes(oversized)
+        val ranges = mutableListOf<String?>()
+        val m = managerWith(filesDir, rangeClientFor(archive, "vad-bytes".toByteArray(), ranges))
+
+        val result = m.download { _, _ -> }
+
+        assertTrue(result.isSuccess)
+        assertEquals(listOf("bytes=${oversized.size}-", null), ranges)
+        assertEquals("onnx-bytes", File(m.modelPath()).readText())
+    }
+
+    @Test
+    fun `server answering 200 to a Range request restarts the archive instead of appending`() = runBlocking {
+        val filesDir = tmp.newFolder("files26")
+        cachedArchive(filesDir).writeText("stale-archive")
+        val archive = makeArchive(mapOf("top/model.int8.onnx" to "new", "top/tokens.txt" to "new"))
+        // clientFor ignores Range and always serves the whole body with 200.
+        val m = managerWith(filesDir, clientFor(archive, "v".toByteArray()))
+
+        assertTrue(m.download { _, _ -> }.isSuccess)
+        assertTrue(m.isReady())
+        assertEquals("new", File(m.modelPath()).readText())
+    }
+
+    @Test
+    fun `storage precheck does not ask again for archive bytes already on disk`() = runBlocking {
+        val filesDir = tmp.newFolder("files27")
+        val archive = makeArchive(mapOf("top/model.int8.onnx" to "onnx-bytes", "top/tokens.txt" to "tokens"))
+        val bytes = archive.readBytes()
+        val half = bytes.size / 2
+        cachedArchive(filesDir).writeBytes(bytes.copyOfRange(0, half))
+        val needed = GigaAmModelManager.REQUIRED_FREE_BYTES - half
+
+        val short = managerWith(filesDir, rangeClientFor(archive, "v".toByteArray()), usableSpace = needed - 1)
+        val error = short.download { _, _ -> }.exceptionOrNull()
+        assertTrue("expected InsufficientStorageException, got $error", error is GigaAmModelManager.InsufficientStorageException)
+        error as GigaAmModelManager.InsufficientStorageException
+        assertEquals(needed, error.requiredBytes)
+        assertEquals("a refused precheck keeps the partial archive", half.toLong(), cachedArchive(filesDir).length())
+
+        val enough = managerWith(filesDir, rangeClientFor(archive, "v".toByteArray()), usableSpace = needed)
+        assertTrue(enough.download { _, _ -> }.isSuccess)
+        assertTrue(enough.isReady())
+    }
+
+    @Test
+    fun `failed network transfer keeps the partial archive for the next resume`() = runBlocking {
+        val filesDir = tmp.newFolder("files28")
+        val partial = cachedArchive(filesDir).apply { writeText("partial-bytes") }
+        val failing = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                okhttp3.Response.Builder()
+                    .request(chain.request())
+                    .protocol(okhttp3.Protocol.HTTP_1_1)
+                    .code(503).message("unavailable")
+                    .body("".toResponseBody("text/plain".toMediaType()))
+                    .build()
+            }
+            .build()
+        val m = managerWith(filesDir, failing)
+
+        assertTrue(m.download { _, _ -> }.isFailure)
+        assertEquals("partial-bytes", partial.readText())
     }
 }

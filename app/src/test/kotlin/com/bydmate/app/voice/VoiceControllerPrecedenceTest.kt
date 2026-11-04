@@ -10,11 +10,16 @@ import com.bydmate.app.data.automation.VoiceFireResult
 import com.bydmate.app.data.local.dao.RuleDao
 import com.bydmate.app.data.local.entity.ActionDef
 import com.bydmate.app.data.local.entity.RuleEntity
+import com.bydmate.app.data.remote.AliceAppCatalog
+import com.bydmate.app.data.remote.AliceAppResolver
+import com.bydmate.app.data.remote.AliceAppTarget
 import com.bydmate.app.util.appStringsOver
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
+import org.json.JSONObject
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,6 +52,7 @@ class VoiceControllerPrecedenceTest {
         val journal: VoiceJournal,
     ) {
         val dispatched: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        val actions: MutableList<ActionDef> = Collections.synchronizedList(mutableListOf())
     }
 
     private fun awaitTrue(timeoutMs: Long = 2_000L, condition: () -> Boolean) {
@@ -59,14 +65,14 @@ class VoiceControllerPrecedenceTest {
     }
 
     /** A real VoiceAutomationResolver over one enabled rule (id 9, name «Моё») with [automationPhrase]. */
-    private fun rig(automationPhrase: String?, userPhrases: VoiceUserPhrases): Rig {
+    private fun rig(automationPhrase: String?, userPhrases: VoiceUserPhrases, appResolver: AliceAppResolver? = null): Rig {
         val gate = mockk<VoiceGate> {
             every { isEnabled() } returns true
             every { vehicleSnapshot() } returns null
             every { ttsEnabled() } returns false
         }
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any(), any<() -> Any?>()) } returns flow { }
+        every { audioCapture.captureSession(any(), any<(ShortArray) -> Any?>()) } returns flow { }
         val rules = listOfNotNull(automationPhrase?.let { voiceRule(it) })
         val resolver = VoiceAutomationResolver(mockk<RuleDao> { coEvery { getEnabled() } returns rules })
         val engine = mockk<AutomationEngine>(relaxed = true)
@@ -89,10 +95,12 @@ class VoiceControllerPrecedenceTest {
             selectedTtsVoice = { TtsVoiceCatalog.byId("dmitri") },
             appStrings = appStringsOver(ctx),
             userPhrases = userPhrases,
+            appResolver = appResolver,
         )
         return Rig(controller, asr, dispatcher, engine, journal).also { r ->
             coEvery { dispatcher.dispatch(any<ActionDef>(), any()) } answers {
                 r.dispatched += firstArg<ActionDef>().command
+                r.actions += firstArg<ActionDef>()
                 DispatchResult(true)
             }
         }
@@ -264,6 +272,92 @@ class VoiceControllerPrecedenceTest {
 
         assertEquals(VoiceJournalEntry.Route.NLU, entry.route)
         assertEquals(listOf("车窗关闭"), r.dispatched.toList())
+    }
+
+    /** Fork b1701042: «открой навигатор» opens the app from settings locally, with no agent. */
+    @Test fun `the generic navigator phrase opens the chosen app locally`() {
+        val r = rig(null, VoiceUserPhrases())
+        coEvery { r.dispatcher.openNavigatorApp(any()) } returns DispatchResult(true)
+        val entry = r.say("открой навигатор")
+
+        assertEquals(VoiceJournalEntry.Route.NLU, entry.route)
+        assertEquals("navigator:open", entry.command)
+        coVerify(exactly = 1) { r.dispatcher.openNavigatorApp(null) }
+    }
+
+    /** A named app is opened as itself, whatever is chosen in settings. */
+    @Test fun `a named navigation app opens that app locally`() {
+        val r = rig(null, VoiceUserPhrases())
+        coEvery { r.dispatcher.openNavigatorApp(any()) } returns DispatchResult(true)
+        val entry = r.say("открой гугл карты")
+
+        assertEquals("navigator:open:google_maps", entry.command)
+        coVerify(exactly = 1) { r.dispatcher.openNavigatorApp("google_maps") }
+    }
+
+    // --- the offline «открой <приложение>» (fork 7b417718, d648abc9): after a dictionary miss ---
+
+    private val tiktok = AliceAppCatalog.forAction("app.tiktok.open")!!
+
+    /** A head unit with TikTok installed and nothing else the table knows. */
+    private fun withTiktok() = mockk<AliceAppResolver> {
+        every { packageFor(any()) } answers {
+            if (firstArg<AliceAppTarget>() == tiktok) "com.zhiliaoapp.musically" else null
+        }
+    }
+
+    @Test fun `a name of the shared app table opens that app offline`() {
+        val r = rig(null, VoiceUserPhrases(), withTiktok())
+        val entry = r.say("открой тикток")
+
+        assertEquals(VoiceJournalEntry.Route.NLU, entry.route)
+        assertEquals(VoiceJournalEntry.Outcome.OK, entry.outcome)
+        assertEquals("app:open:тикток", entry.command)
+        val action = r.actions.single()
+        assertEquals("app_launch", action.kind)
+        assertEquals("com.zhiliaoapp.musically", JSONObject(action.payload!!).getString("packageName"))
+    }
+
+    @Test fun `a settings screen by name opens offline`() {
+        val r = rig(null, VoiceUserPhrases(), withTiktok())
+        val entry = r.say("открой настройки вайфай")
+
+        assertEquals("app:settings:wifi", entry.command)
+        val action = r.actions.single()
+        assertEquals("system_settings", action.kind)
+        assertEquals("wifi", JSONObject(action.payload!!).getString("section"))
+    }
+
+    @Test fun `the app step never shadows a dictionary command`() {
+        val resolver = withTiktok()
+        val r = rig(null, VoiceUserPhrases(), resolver)
+
+        assertEquals(parserLabel("открой окно"), r.say("открой окно").command)
+        verify(exactly = 0) { resolver.packageFor(any()) }
+    }
+
+    @Test fun `the app step never shadows the navigator built-in`() {
+        val resolver = withTiktok()
+        val r = rig(null, VoiceUserPhrases(), resolver)
+        coEvery { r.dispatcher.openNavigatorApp(any()) } returns DispatchResult(true)
+
+        assertEquals("navigator:open", r.say("открой навигатор").command)
+        coVerify(exactly = 1) { r.dispatcher.openNavigatorApp(null) }
+        verify(exactly = 0) { resolver.packageFor(any()) }
+        assertTrue(r.actions.none { it.kind == "app_launch" })
+    }
+
+    @Test fun `an unknown app goes to the agent`() {
+        val r = rig(null, VoiceUserPhrases(), withTiktok())
+        assertEquals(VoiceJournalEntry.Route.REFUSED, r.say("открой калькулятор").route)
+        assertTrue(r.actions.isEmpty())
+    }
+
+    // YouTube is a name of the table but not installed here: the agent may still find a build.
+    @Test fun `a known app that is not installed goes to the agent`() {
+        val r = rig(null, VoiceUserPhrases(), withTiktok())
+        assertEquals(VoiceJournalEntry.Route.REFUSED, r.say("открой ютуб").route)
+        assertTrue(r.actions.isEmpty())
     }
 
     @Test fun `nothing matched goes to the agent with the unrecognized reason`() {

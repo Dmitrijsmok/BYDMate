@@ -2,8 +2,14 @@
 package com.bydmate.app.helper
 
 import com.bydmate.app.BuildConfig
+import com.bydmate.app.data.autoservice.SentinelDecoder
+import com.bydmate.app.data.vehicle.NativeAssistant
+import com.bydmate.app.helper.push.FID_PUSH_DEVICE_CLASSES
 import com.bydmate.app.helper.push.FidPushRegistry
 import com.bydmate.app.helper.push.FidRecorder
+import com.bydmate.app.helper.push.deviceInstance
+import com.bydmate.app.helper.dtc.DtcDaemon
+import com.bydmate.app.helper.dtc.writeDtcScanStatus
 import com.bydmate.app.helper.offreport.OffReport
 import com.bydmate.app.helper.offreport.readOffReportArm
 import com.bydmate.app.helper.offreport.writeOffReportStatus
@@ -13,6 +19,7 @@ import com.bydmate.app.helper.push.readSubscribeRequest
 import com.bydmate.app.helper.push.writeRecStatus
 import com.bydmate.app.helper.push.writeResultTable
 import com.bydmate.app.helper.push.writeStatusTable
+import com.bydmate.app.split.readSystemProperty
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -336,18 +343,32 @@ fun main(args: Array<String>) {
                     true
                 }.getOrElse { reply?.writeInt(-1); reply?.writeInt(0); true }
 
-                HelperBinderProtocol.TX_CREATE_VIRTUAL_DISPLAY -> runCatching {
-                    val name = data.readString() ?: "BYDMate_VD"
-                    val width = data.readInt(); val height = data.readInt()
-                    val density = data.readInt(); val flags = data.readInt()
-                    val surface = Surface.CREATOR.createFromParcel(data)
-                    val ctx = systemContext
-                    val id = if (ctx == null || !surface.isValid) -1
-                            else createVirtualDisplay(ctx, virtualDisplays, name, width, height, density, surface, flags)
-                    if (id > 0) { reply?.writeInt(0); reply?.writeInt(id) }
-                    else { surface.release(); reply?.writeInt(-1); reply?.writeInt(0) }
-                    true
-                }.getOrElse { reply?.writeInt(-1); reply?.writeInt(0); true }
+                HelperBinderProtocol.TX_CREATE_VIRTUAL_DISPLAY -> {
+                    var logFlags = 0; var logWidth = 0; var logHeight = 0
+                    runCatching {
+                        val name = data.readString() ?: "BYDMate_VD"
+                        val width = data.readInt(); val height = data.readInt()
+                        val density = data.readInt(); val flags = data.readInt()
+                        logFlags = flags; logWidth = width; logHeight = height
+                        val surface = Surface.CREATOR.createFromParcel(data)
+                        val ctx = systemContext
+                        val id = if (ctx == null || !surface.isValid) -1
+                                else createVirtualDisplay(ctx, virtualDisplays, name, width, height, density, surface, flags)
+                        if (id > 0) { reply?.writeInt(0); reply?.writeInt(id) }
+                        else { surface.release(); reply?.writeInt(-1); reply?.writeInt(0) }
+                        true
+                    }.getOrElse { t ->
+                        // The app asks for a PUBLIC display first and falls back to private flags on
+                        // refusal: that SecurityException is expected, one line instead of a stack.
+                        if (t is SecurityException) {
+                            android.util.Log.w("bydmate_helper", "TX_CREATE_VIRTUAL_DISPLAY: SecurityException " +
+                                "flags=$logFlags ${logWidth}x$logHeight (expected for PUBLIC; app falls back to private flags)")
+                        } else {
+                            android.util.Log.w("bydmate_helper", "TX_CREATE_VIRTUAL_DISPLAY failed flags=$logFlags ${logWidth}x$logHeight", t)
+                        }
+                        reply?.writeInt(-1); reply?.writeInt(0); true
+                    }
+                }
 
                 HelperBinderProtocol.TX_RELEASE_VIRTUAL_DISPLAY -> runCatching {
                     val displayId = data.readInt()
@@ -393,6 +414,23 @@ fun main(args: Array<String>) {
                     reply?.writeInt(if (ok) 0 else -1); reply?.writeInt(0)
                     true
                 }.getOrElse { reply?.writeInt(-1); reply?.writeInt(0); true }
+
+                HelperBinderProtocol.TX_SET_SCREEN_BACKLIGHT -> {
+                    val on = runCatching { data.readInt() != 0 }.getOrDefault(true)
+                    val result = setScreenBacklight(on, android.os.SystemClock.uptimeMillis()) {
+                        systemContext?.getSystemService(Context.POWER_SERVICE) ?: error("no system Context")
+                    }
+                    reply?.writeInt(result.outcome); reply?.writeInt(result.status)
+                    reply?.writeString(result.detail)
+                    true
+                }
+
+                HelperBinderProtocol.TX_SET_AUTO_VOICE -> {
+                    val active = runCatching { data.readInt() != 0 }.getOrDefault(false)
+                    val result = setAutoVoiceActive(active, { readSystemProperty(EXT_AMP_TYPE_PROP) }, ::audioServiceProxy)
+                    reply?.writeInt(result.outcome); reply?.writeString(result.detail)
+                    true
+                }
 
                 HelperBinderProtocol.TX_LAUNCH_AND_FORCE -> runCatching {
                     val pkg = data.readString() ?: ""
@@ -532,21 +570,31 @@ fun main(args: Array<String>) {
                     true
                 }.getOrElse { reply?.writeInt(-1); reply?.writeInt(0); true }
 
+                HelperBinderProtocol.TX_DISALLOW_NOTIFICATION_LISTENER -> runCatching {
+                    // Our own listener only: the component is the protocol constant, nothing from
+                    // the caller. Revokes the approval so the following allow makes NMS bind anew.
+                    val result = shExec("cmd notification disallow_listener \"\$1\"",
+                        HelperBinderProtocol.NOTIFICATION_LISTENER_COMPONENT)
+                    android.util.Log.i("bydmate_helper", "TX_DISALLOW_NOTIFICATION_LISTENER code=${result.code}")
+                    reply?.writeInt(if (result.code == 0) 0 else -1)
+                    true
+                }.getOrElse { reply?.writeInt(-1); true }
+
                 HelperBinderProtocol.TX_SET_APP_HIDDEN -> runCatching {
                     val pkg = data.readString() ?: ""
                     val hidden = data.readInt()    // 1 = disable, 0 = enable
                     // Hardcoded — ONLY the native BYD voice assistant family. Fully reversible
                     // (pm enable) and touches no firmware. NOT a generic package-disable passthrough;
-                    // the caller may only name the launcher package.
+                    // the caller may only name the launcher package or com.byd.vrassistant.
                     // Validate the flag daemon-side too — a privileged shell-uid op must not
                     // trust the caller. Only 0/1 are a defined state; reject anything else.
                     val ok = if (pkg == "com.byd.vrassistant" && hidden in 0..1) {
-                        // DiLink 3 ships the real native voice UI as com.byd.vrassistant.
-                        // Keep the privileged surface exact and reversible: this is NOT a generic
-                        // package-disable passthrough.
+                        // The stock voice UI of Android 10 head units (DiLink 3.0), a single
+                        // package; the app asks for it only there and only when it is installed.
+                        // Same disable-user / enable pair as below, reversible.
                         val cmd = if (hidden == 1) "pm disable-user --user 0" else "pm enable"
                         shExec("$cmd \"\$1\"", pkg).code == 0
-                    } else if (pkg == "com.byd.autovoice" && hidden in 0..1) {
+                    } else if (pkg == NativeAssistant.AUTOVOICE && hidden in 0..1) {
                         // `pm disable-user --user 0` force-stops the package and disables its
                         // components so the framework stops routing the steering voice button to it.
                         // `pm hide` left the already-running system assistant alive — the wheel
@@ -557,11 +605,12 @@ fun main(args: Array<String>) {
                         // (com.byd.autovoice), the wake/recognition engine (.engine) that actually
                         // services the wheel mic button, and TTS output (.tts). Disabling only the
                         // launcher leaves the wheel button live, so we disable the whole family.
-                        // Siblings are hardcoded literals, never caller input. Success is gated on
-                        // BOTH the launcher and the wake engine; TTS is output-only and best-effort.
+                        // Siblings come from NativeAssistant.AUTOVOICE_FAMILY, never caller input.
+                        // Success is gated on BOTH the launcher and the wake engine; TTS is
+                        // output-only and best-effort.
                         val primaryOk = shExec("$cmd \"\$1\"", pkg).code == 0
-                        val engineOk = shExec("$cmd \"\$1\"", "com.byd.autovoice.engine").code == 0
-                        shExec("$cmd \"\$1\"", "com.byd.autovoice.tts")
+                        val engineOk = shExec("$cmd \"\$1\"", NativeAssistant.AUTOVOICE_ENGINE).code == 0
+                        shExec("$cmd \"\$1\"", NativeAssistant.AUTOVOICE_TTS)
                         primaryOk && engineOk
                     } else false
                     reply?.writeInt(if (ok) 0 else -1); reply?.writeInt(0)
@@ -846,6 +895,25 @@ fun main(args: Array<String>) {
                     reply?.writeInt(HelperBinderProtocol.SPLIT37_FAILED); reply?.writeInt(-1); true
                 }
 
+                HelperBinderProtocol.TX_SPLIT37_ROOT_STATE -> runCatching {
+                    val rootTaskId = data.readInt(); val taskId = data.readInt()
+                    val iAtm = activityTaskManager()
+                    val infos = rootTaskInfosSnapshot(iAtm)
+                    if (infos == null) {
+                        android.util.Log.w("bydmate_helper", "TX_SPLIT37_ROOT_STATE: getAllRootTaskInfos absent")
+                        reply?.writeInt(HelperBinderProtocol.SPLIT37_UNSUPPORTED)
+                    } else {
+                        // Read before the first write — see TX_SPLIT37_ENTER.
+                        val reading = split37RootStateReading(infos, rootTaskId, atmGetTasks(iAtm, 100), taskId)
+                        reply?.writeInt(HelperBinderProtocol.SPLIT37_OK)
+                        reply?.let { writeSplit37RootState(it, reading) }
+                    }
+                    true
+                }.getOrElse { e ->
+                    android.util.Log.w("bydmate_helper", "TX_SPLIT37_ROOT_STATE failed", e)
+                    reply?.writeInt(HelperBinderProtocol.SPLIT37_FAILED); true
+                }
+
                 HelperBinderProtocol.TX_REGISTER_CLIENT -> runCatching {
                     registerHelperClient(data.readStrongBinder())
                     reply?.writeInt(0)
@@ -883,6 +951,14 @@ fun main(args: Array<String>) {
                 HelperBinderProtocol.TX_OFFREPORT_ARM,
                 HelperBinderProtocol.TX_OFFREPORT_DISARM,
                 HelperBinderProtocol.TX_OFFREPORT_STATUS -> handleOffReportTransact(code, data, reply)
+
+                HelperBinderProtocol.TX_HUD_NAVI_STATUS,
+                HelperBinderProtocol.TX_HUD_SDK,
+                HelperBinderProtocol.TX_WRITE_BUFFER -> handleHudTransact(code, data, reply, svc, autoIface)
+
+                HelperBinderProtocol.TX_DTC_SCAN_START,
+                HelperBinderProtocol.TX_DTC_SCAN_STATUS,
+                HelperBinderProtocol.TX_DTC_ERASE_START -> handleDtcScanTransact(code, data, reply, svc, autoIface)
 
                 else -> super.onTransact(code, data, reply, flags)
             }
@@ -1115,6 +1191,150 @@ private fun autoserviceTransact(
         reply2.recycle()
     }
 }
+
+/**
+ * Buffer sibling of [autoserviceTransact]: autoservice setBuffer (tx 14), whose parcel carries a
+ * byte array instead of an int. [bytes] goes out exactly as given; the instrument's road-name
+ * field wants UTF-16LE without a BOM, and that encoding is the caller's business.
+ *
+ * Same (status, retInt) semantics as [autoserviceTransact].
+ */
+private fun autoserviceTransactBuffer(
+    svc: IBinder,
+    autoIface: String,
+    dev: Int,
+    fid: Int,
+    bytes: ByteArray
+): Pair<Int, Int> {
+    val data2 = Parcel.obtain()
+    val reply2 = Parcel.obtain()
+    return try {
+        data2.writeInterfaceToken(autoIface)
+        data2.writeInt(dev)
+        data2.writeInt(fid)
+        data2.writeByteArray(bytes)
+        svc.transact(14, data2, reply2, 0)
+        val avail = reply2.dataAvail()
+        val status = if (avail >= 4) reply2.readInt() else -999
+        val retInt = if (avail >= 8) reply2.readInt() else 0
+        status to retInt
+    } finally {
+        data2.recycle()
+        reply2.recycle()
+    }
+}
+
+/**
+ * The HUD verbs, out of line like the recorder's: the SDK navigation status call, way 3's SDK
+ * calls and the setBuffer write. Every reply starts with a status int; a failure costs this call only.
+ */
+private fun handleHudTransact(code: Int, data: Parcel, reply: Parcel?, svc: IBinder, autoIface: String): Boolean {
+    if (code == HelperBinderProtocol.TX_HUD_NAVI_STATUS) {
+        val status = runCatching { data.readInt() }.getOrDefault(HelperBinderProtocol.HUD_NAVI_PROBE)
+        val (outcome, sdkReturn) = sendAutoNaviStatusOutcome(status) {
+            deviceInstance(FID_PUSH_DEVICE_CLASSES.getValue(HUD_NAVI_DEVICE))
+        }
+        reply?.writeInt(outcome)
+        reply?.writeInt(sdkReturn)
+        return true
+    }
+    if (code == HelperBinderProtocol.TX_HUD_SDK) {
+        val (outcome, sdkReturn) = runCatching { readHudSdkInvocation(data) }.fold(
+            onSuccess = { call ->
+                call?.let { hudSdkOutcome(it) { deviceInstance(FID_PUSH_DEVICE_CLASSES.getValue(HUD_NAVI_DEVICE)) } }
+                    ?: (HelperBinderProtocol.HUD_NAVI_ABSENT to 0)
+            },
+            onFailure = { HelperBinderProtocol.HUD_NAVI_THREW to 0 },
+        )
+        reply?.writeInt(outcome)
+        reply?.writeInt(sdkReturn)
+        return true
+    }
+    runCatching {
+        val dev = data.readInt()
+        val fid = data.readInt()
+        val bytes = data.createByteArray() ?: ByteArray(0)
+        val (status, _) = autoserviceTransactBuffer(svc, autoIface, dev, fid, bytes)
+        reply?.writeInt(status)
+        reply?.writeInt(0)
+    }.onFailure {
+        reply?.setDataSize(0)
+        reply?.writeInt(-1); reply?.writeInt(0)
+    }
+    return true
+}
+
+/** The instrument device, owner of sendAutoNaviStatus. */
+private const val HUD_NAVI_DEVICE = 1007
+
+/**
+ * TX_HUD_NAVI_STATUS body: `sendAutoNaviStatus(int)` on the device [device] hands back, looked up
+ * by reflection because the SDK class exists only on the head unit. Returns (outcome, sdkReturn):
+ * [HelperBinderProtocol.HUD_NAVI_PROBE] only reports whether the method exists. A throw (no
+ * system Context, the device refusing, the SDK's own SecurityException) is logged by class name
+ * and reported, never propagated: the app then writes the fid raw.
+ */
+internal fun sendAutoNaviStatusOutcome(status: Int, device: () -> Any): Pair<Int, Int> {
+    val target = runCatching(device).getOrElse { e ->
+        android.util.Log.w(HUD_NAVI_TAG, "sendAutoNaviStatus: no device: ${unwrapReflectionCause(e).javaClass.simpleName}")
+        return HelperBinderProtocol.HUD_NAVI_THREW to 0
+    }
+    val method = runCatching {
+        target.javaClass.getMethod("sendAutoNaviStatus", Int::class.javaPrimitiveType)
+    }.getOrNull() ?: return HelperBinderProtocol.HUD_NAVI_ABSENT to 0
+    if (status == HelperBinderProtocol.HUD_NAVI_PROBE) return HelperBinderProtocol.HUD_NAVI_CALLED to 0
+    return runCatching { HelperBinderProtocol.HUD_NAVI_CALLED to (method.invoke(target, status) as? Int ?: 0) }
+        .getOrElse { e ->
+            // The SDK's message is its own verdict ("[setInt] permission deny!"), no user data.
+            val root = unwrapReflectionCause(e)
+            android.util.Log.w(HUD_NAVI_TAG, "sendAutoNaviStatus($status) threw ${root.javaClass.simpleName}: ${root.message}")
+            HelperBinderProtocol.HUD_NAVI_THREW to 0
+        }
+}
+
+private const val HUD_NAVI_TAG = "HudArming"
+
+/** One TX_HUD_SDK call: the instrument method's name, its parameter types and the arguments. */
+internal class HudSdkInvocation(val method: String, val types: Array<Class<*>>, val args: Array<Any>) {
+    companion object {
+        private val INT = Int::class.javaPrimitiveType!!
+        fun guidance(icon: Int, distance: Int) = HudSdkInvocation("sendSimpleGuidanceInfo", arrayOf(INT, INT), arrayOf(icon, distance))
+        fun pathName(name: String) = HudSdkInvocation("sendNextPathName", arrayOf(String::class.java), arrayOf(name))
+        fun restRoute(hours: Int, minutes: Int, mileage: Long) = HudSdkInvocation(
+            "sendRestRouteInfo", arrayOf(INT, INT, Long::class.javaPrimitiveType!!), arrayOf(hours, minutes, mileage),
+        )
+    }
+}
+
+/** TX_HUD_SDK request (see HudSdkCall.writeTo); null for a method this daemon does not know. */
+internal fun readHudSdkInvocation(data: Parcel): HudSdkInvocation? = when (data.readInt()) {
+    HelperBinderProtocol.HUD_SDK_GUIDANCE -> HudSdkInvocation.guidance(data.readInt(), data.readInt())
+    HelperBinderProtocol.HUD_SDK_PATH_NAME -> HudSdkInvocation.pathName(data.readString().orEmpty())
+    HelperBinderProtocol.HUD_SDK_REST_ROUTE -> HudSdkInvocation.restRoute(data.readInt(), data.readInt(), data.readLong())
+    else -> null
+}
+
+/**
+ * TX_HUD_SDK body: [call] on the device [device] hands back, looked up by reflection like
+ * [sendAutoNaviStatusOutcome]. Returns (outcome, sdkReturn); a throw is logged by class name only
+ * (the road name is user data, the SDK may echo it) and reported, never propagated.
+ */
+@Suppress("SpreadOperator") // two or three arguments per call
+internal fun hudSdkOutcome(call: HudSdkInvocation, device: () -> Any): Pair<Int, Int> {
+    val target = runCatching(device).getOrElse { e ->
+        android.util.Log.w(HUD_SDK_TAG, "${call.method}: no device: ${unwrapReflectionCause(e).javaClass.simpleName}")
+        return HelperBinderProtocol.HUD_NAVI_THREW to 0
+    }
+    val method = runCatching { target.javaClass.getMethod(call.method, *call.types) }.getOrNull()
+        ?: return HelperBinderProtocol.HUD_NAVI_ABSENT to 0
+    return runCatching { HelperBinderProtocol.HUD_NAVI_CALLED to (method.invoke(target, *call.args) as? Int ?: 0) }
+        .getOrElse { e ->
+            android.util.Log.w(HUD_SDK_TAG, "${call.method} threw ${unwrapReflectionCause(e).javaClass.simpleName}")
+            HelperBinderProtocol.HUD_NAVI_THREW to 0
+        }
+}
+
+private const val HUD_SDK_TAG = "HudWayChannels"
 
 /**
  * TX_READ_BATCH body. Reads `count` then count × (tx, dev, fid) triples from [data],
@@ -1676,6 +1896,80 @@ private fun writeAreaInfoFailure(reply: Parcel?, status: Int) {
 }
 
 /**
+ * One TX_SPLIT37_ROOT_STATE reading. Unknown values: "" for a component, -1 for a visibility
+ * flag, null [children] when the root is not listed (or lists no children array).
+ */
+internal data class Split37RootStateReading(
+    val rootTop: String,
+    val rootVisible: Int,
+    val children: List<Pair<Int, String>>?,
+    val taskVisible: Int,
+    val taskTop: String,
+)
+
+/**
+ * Testable core of TX_SPLIT37_ROOT_STATE: picks the RootTaskInfo of [rootTaskId] out of
+ * [rootInfos] and the RunningTaskInfo of [taskId] out of [tasks], and reads the few fields the
+ * journal line needs. Every field is read on its own, so a ROM missing one still reports the rest.
+ */
+internal fun split37RootStateReading(
+    rootInfos: List<Any>,
+    rootTaskId: Int,
+    tasks: List<*>?,
+    taskId: Int,
+): Split37RootStateReading {
+    val root = rootInfos.firstOrNull { readField(it, "taskId") == rootTaskId }
+    val task = tasks?.filterNotNull()?.firstOrNull {
+        (readField(it, "taskId") ?: readField(it, "id")) == taskId
+    }
+    return Split37RootStateReading(
+        rootTop = root?.let { componentText(readField(it, "topActivity")) } ?: "",
+        rootVisible = root?.let { flagInt(readField(it, "visible")) } ?: -1,
+        children = root?.let { rootChildren(it) },
+        taskVisible = task?.let { flagInt(readField(it, "isVisible")) } ?: -1,
+        taskTop = task?.let { componentText(readField(it, "topActivity")) } ?: "",
+    )
+}
+
+/** Writes [r] after the status, in the TX_SPLIT37_ROOT_STATE reply layout. */
+internal fun writeSplit37RootState(reply: Parcel, r: Split37RootStateReading) {
+    reply.writeString(r.rootTop)
+    reply.writeInt(r.rootVisible)
+    val children = r.children
+    reply.writeInt(children?.size ?: -1)
+    children?.forEach { (id, name) -> reply.writeInt(id); reply.writeString(name) }
+    reply.writeInt(r.taskVisible)
+    reply.writeString(r.taskTop)
+}
+
+private fun readField(target: Any, name: String): Any? = runCatching {
+    fieldByName(target, name)?.let { f -> f.isAccessible = true; f.get(target) }
+}.getOrNull()
+
+private fun flagInt(value: Any?): Int = when (value as? Boolean) {
+    true -> 1
+    false -> 0
+    null -> -1
+}
+
+private fun componentText(value: Any?): String =
+    (value as? android.content.ComponentName)?.flattenToShortString() ?: ""
+
+/**
+ * RootTaskInfo.childTaskIds paired with childTaskNames (flattened components, shortened here so
+ * the journal line stays readable); null when the ids array is unreadable.
+ */
+private fun rootChildren(root: Any): List<Pair<Int, String>>? {
+    val ids = readField(root, "childTaskIds") as? IntArray ?: return null
+    val names = readField(root, "childTaskNames") as? Array<*>
+    return ids.mapIndexed { i, id ->
+        val raw = names?.getOrNull(i) as? String
+        val short = raw?.let { android.content.ComponentName.unflattenFromString(it)?.flattenToShortString() }
+        id to (short ?: raw ?: "")
+    }
+}
+
+/**
  * Testable core of TX_SPLIT37_MOVE_TASK: reparents [taskId] into the native split root
  * [rootTaskId] with `am stack move-task` (= activity_task tx 54 moveTaskToRootTask; shell uid
  * holds MANAGE_ACTIVITY_TASKS), then resizes it to the pane rect when that rect is non-empty.
@@ -2038,12 +2332,15 @@ private fun recoverAccessibilityService(): Boolean {
     // TrackingService is not exported, so shell uid cannot start it directly; BootReceiver is
     // (BOOT_COMPLETED needs it) and its WorkManager chain starts the service. Explicit component +
     // include-stopped-packages: the force-stop just put the package into the stopped state.
+    // --receiver-foreground: a plain shell broadcast goes to the background queue, behind other
+    // apps' BOOT_COMPLETED receivers after a quick boot; Atto 3 logs showed 11-44 s from the
+    // force-stop to BootReceiver, with the widget and key service gone for that long.
     var am = ""
     var restarted = false
     for (attempt in 1..2) {
         am = runCatching {
             amShell(
-                "am broadcast --include-stopped-packages -a com.bydmate.dilink3.app.action.RECOVER_START -n \"\$1\"",
+                "am broadcast --include-stopped-packages --receiver-foreground -a com.bydmate.dilink3.app.action.RECOVER_START -n \"\$1\"",
                 listOf("$pkg/com.bydmate.app.service.BootReceiver"),
             )
         }.getOrElse { "broadcast failed: ${it.javaClass.simpleName}: ${it.message}" }
@@ -2215,16 +2512,17 @@ private fun setHotspot(ctx: Context, enable: Boolean): Boolean {
 }
 
 /**
- * Settings.Global whitelist for TX_PUT_GLOBAL_SETTING: the sentry-mode master switch and the
- * freeform windowing flag (direct cluster projection; the framework reads it once at boot).
+ * Settings.Global whitelist for TX_PUT_GLOBAL_SETTING: the sentry-mode master switch, the
+ * freeform windowing flag (direct cluster projection; the framework reads it once at boot) and
+ * the automatic time zone switch (the user's time zone lock, #379: 0 = network zone ignored).
  * Values are bounded to 0/1. Anything else is rejected before any shell command runs.
  */
 internal fun globalSettingAllowed(key: String, value: Int): Boolean =
-    key in setOf("sentrymode_enabled_switch", "enable_freeform_support") && value in 0..1
+    key in setOf("sentrymode_enabled_switch", "enable_freeform_support", "auto_time_zone") && value in 0..1
 
 /** Keys [HelperBinderProtocol.TX_GET_GLOBAL_SETTING] may read back: the write whitelist's keys. */
 internal fun globalSettingReadable(key: String): Boolean =
-    key in setOf("sentrymode_enabled_switch", "enable_freeform_support")
+    key in setOf("sentrymode_enabled_switch", "enable_freeform_support", "auto_time_zone")
 
 /** How long the read below waits for `settings get global` before it gives up on it. */
 internal const val GLOBAL_SETTING_READ_TIMEOUT_MS = 2000L
@@ -2652,6 +2950,57 @@ private fun handleOffReportTransact(code: Int, data: Parcel, reply: Parcel?): Bo
 }
 
 /**
+ * The manual fault-code scan and erase verbs. START only hands the job to its own thread and
+ * answers; the gear (getInt, tx 5) and, for the erase, the speed (getFloat, tx 7) are read live at
+ * the addresses the app resolved, before every request. A failure here costs this call only.
+ */
+private fun handleDtcScanTransact(code: Int, data: Parcel, reply: Parcel?, svc: IBinder, autoIface: String): Boolean {
+    runCatching {
+        when (code) {
+            HelperBinderProtocol.TX_DTC_SCAN_START -> {
+                val gearDev = data.readInt()
+                val gearFid = data.readInt()
+                val status = DtcDaemon.scanner.start { readDtcGear(svc, autoIface, gearDev, gearFid) }
+                android.util.Log.i("DtcScan", "start request gear=$gearDev/$gearFid reply=$status")
+                reply?.writeInt(status)
+            }
+            HelperBinderProtocol.TX_DTC_ERASE_START -> {
+                val gearDev = data.readInt()
+                val gearFid = data.readInt()
+                val speedDev = data.readInt()
+                val speedFid = data.readInt()
+                val addrs = data.createIntArray() ?: IntArray(0)
+                DtcDaemon.speed = { readDtcSpeed(svc, autoIface, speedDev, speedFid) }
+                val status = DtcDaemon.scanner.startErase(addrs) { readDtcGear(svc, autoIface, gearDev, gearFid) }
+                android.util.Log.i(
+                    "DtcScan",
+                    "erase request gear=$gearDev/$gearFid speed=$speedDev/$speedFid " +
+                        "addrs=${addrs.joinToString(",") { "0x%X".format(it) }} reply=$status",
+                )
+                reply?.writeInt(status)
+            }
+            else -> reply?.let { writeDtcScanStatus(it, DtcDaemon.scanner.status()) }
+        }
+    }.onFailure { e ->
+        android.util.Log.w("DtcScan", "tx=$code failed: ${e.javaClass.simpleName}")
+        reply?.setDataSize(0)
+        reply?.writeInt(-1)
+    }
+    return true
+}
+
+private fun readDtcGear(svc: IBinder, autoIface: String, dev: Int, fid: Int): Int? =
+    autoserviceTransact(svc, autoIface, 5, dev, fid, 0, writeValue = false)
+        .takeIf { (status, _) -> status == 0 }?.second
+
+/** Speed in whole km/h rounded away from 0 (any movement reads >= 1); null when unreadable or a sentinel. */
+private fun readDtcSpeed(svc: IBinder, autoIface: String, dev: Int, fid: Int): Int? =
+    autoserviceTransact(svc, autoIface, 7, dev, fid, 0, writeValue = false)
+        .takeIf { (status, _) -> status == 0 }
+        ?.let { (_, bits) -> SentinelDecoder.parseFloatFromShellInt(bits) }
+        ?.let { kotlin.math.ceil(kotlin.math.abs(it)).toInt() }
+
+/**
  * Finds [packageName]'s task id, launching the app and polling (16 x 500ms + settle pause)
  * when it is not running yet. Shared by launchAndForce and launchFreeform. Blocking.
  * [windowingMode] non-null (freeform path only) passes the mode and [activityType] to the launch
@@ -2693,6 +3042,9 @@ private fun launchAndForce(packageName: String, displayId: Int, width: Int, heig
         packageName, windowingMode = null, displayId = displayId, activityType = ACTIVITY_TYPE_STANDARD,
     )
     if (taskId <= 0) return false
+    // #288: a task inside a native split pane may not follow the root-task move; remember where
+    // it started so [splitFallbackCore] can check it.
+    val before = taskModeState(taskId)
     // Each redirect op is best-effort, mirroring CarControlImpl (every reflective call there returns
     // a status string and swallows its own exception). resizeTask in particular throws "not allowed"
     // on a fullscreen task — that must NOT abort the move/focus or bubble up as a launchAndForce
@@ -2718,6 +3070,14 @@ private fun launchAndForce(packageName: String, displayId: Int, width: Int, heig
     // whose process is dying can still be listed by getTasks with a stale baseActivity and hide the
     // death from the check below.
     Thread.sleep(500L)
+    val placed = splitFallbackCore(
+        taskId, displayId, before,
+        stateOf = { ti -> taskModeState(ti) },
+        resolveComponent = { resolveLaunchComponent(packageName) },
+        shell = amShell,
+        sleep = { Thread.sleep(it) },
+    )
+    if (!placed) return false
     // App died during the move (2GIS/Qt) → relaunch ONCE born on the display; no retry loop.
     if (findTaskId(packageName) <= 0) {
         val rebornId = resolveOrLaunchTask(
@@ -2730,6 +3090,68 @@ private fun launchAndForce(packageName: String, displayId: Int, width: Int, heig
     return true
 }
 
+/**
+ * True when a task that sat in a native split pane ([before]) is still alive off [displayId] after
+ * the move ([after]). Fullscreen or unknown [before] is never a fallback case; a null [after]
+ * (task gone) is left to the liveness check.
+ */
+internal fun needsSplitFallback(before: TaskModeState?, after: TaskModeState?, displayId: Int): Boolean =
+    before != null && before.windowingMode in SPLIT_WINDOWING_MODES &&
+        after != null && after.displayId != displayId
+
+/**
+ * #288: a navigator pulled back into the native 50/50 split lives in a split pane (mode 3/4), and
+ * moveRootTaskToDisplay leaves it there without a word, so the cluster stayed dark while the
+ * launch reported success. When [before] is a split pane and the task is still off [displayId],
+ * the light pullback's `am start` (mode+display on the EXISTING task, task id kept) is aimed at
+ * the target display and the task is read back with the same settle budget. Returns false only
+ * when that fallback ran and the task did not arrive; any other start returns true untouched.
+ */
+@Suppress("LongParameterList") // every system touch is injected so tests pin the sequence
+internal fun splitFallbackCore(
+    taskId: Int,
+    displayId: Int,
+    before: TaskModeState?,
+    stateOf: (Int) -> TaskModeState?,
+    resolveComponent: () -> String?,
+    shell: (String, List<String>) -> String,
+    sleep: (Long) -> Unit,
+): Boolean {
+    if (before == null || before.windowingMode !in SPLIT_WINDOWING_MODES) return true
+    val after = stateOf(taskId)
+    if (!needsSplitFallback(before, after, displayId)) {
+        android.util.Log.i("bydmate_helper", "launchAndForce split: task=$taskId from=$before moved state=$after")
+        return true
+    }
+    val component = resolveComponent()
+    if (component == null) {
+        android.util.Log.w("bydmate_helper", "launchAndForce split: task=$taskId state=$after no launcher component")
+        return false
+    }
+    android.util.Log.i(
+        "bydmate_helper",
+        "launchAndForce split: task=$taskId from=$before still state=$after → am start display=$displayId",
+    )
+    val out = runCatching {
+        shell("am start --windowingMode $WINDOWING_MODE_FULLSCREEN --display $displayId -n \"\$1\"", listOf(component))
+    }.getOrElse { "Exception ${it.message}" }
+    if (out.contains("Error") || out.contains("Exception")) {
+        android.util.Log.w("bydmate_helper", "launchAndForce split: task=$taskId am failed: ${out.take(120)}")
+        return false
+    }
+    var last: TaskModeState? = null
+    repeat(PULLBACK_READS) {
+        sleep(PULLBACK_POLL_MS)
+        last = stateOf(taskId)
+        if (last?.displayId == displayId) {
+            android.util.Log.i("bydmate_helper", "launchAndForce split: task=$taskId fallback ok state=$last")
+            return true
+        }
+    }
+    android.util.Log.w("bydmate_helper", "launchAndForce split: task=$taskId fallback failed state=$last")
+    return false
+}
+
 /** Status codes for [launchFreeformCore] / TX_LAUNCH_FREEFORM. */
 internal object FreeformResultCodes {
     const val OK = 0
@@ -2740,6 +3162,8 @@ internal object FreeformResultCodes {
 // WindowConfiguration windowing modes (android.app; hidden constants, stable since API 28).
 internal const val WINDOWING_MODE_FULLSCREEN = 1
 internal const val WINDOWING_MODE_FREEFORM = 5
+// Native split panes (SPLIT_SCREEN_PRIMARY / SECONDARY).
+internal val SPLIT_WINDOWING_MODES = setOf(3, 4)
 
 /** Settle budget of the light fullscreen pull-back: [PULLBACK_READS] reads, one per pause. */
 internal const val PULLBACK_POLL_MS = 300L
@@ -2921,7 +3345,10 @@ internal fun setWindowingModeCompat(
             throw IllegalStateException("am stack remove failed: ${removed.take(200)}")
         }
         sleep(500L)
-        val out = shell("am start --display 0 -n \"\$1\"", listOf(component))
+        // Explicit mode (#288): with no --windowingMode the platform resolves the fresh task's
+        // mode from display 0, and a native split still active there takes it into its secondary
+        // pane (wm=4), so the next projection starts from a split pane again.
+        val out = shell("am start --windowingMode $WINDOWING_MODE_FULLSCREEN --display 0 -n \"\$1\"", listOf(component))
         if (out.contains("Error")) throw IllegalStateException("am start fullscreen failed: ${out.take(200)}")
     }
 }

@@ -16,6 +16,7 @@ import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -48,12 +49,23 @@ class TelegramSinkException(val error: TelegramError, val httpCode: Int? = null,
     }
 }
 
-/** The private chat the bot will send to, with a display name so the owner sees who gets the backups. */
+/** The chat (private or group) the bot will send to, with a display name so the owner sees who gets the backups. */
 data class TelegramChat(val id: Long, val name: String)
 
 /** The stored bot binding (#237); [configured] = there is a chat to send to. */
 data class TgBackupConfig(val token: String, val chatId: Long?, val botName: String, val chatName: String) {
     val configured: Boolean get() = token.isNotBlank() && chatId != null
+}
+
+/**
+ * The code a message carries: the text itself, or the argument of `/start` or `/start@bot`.
+ * A bot in a group with privacy mode on sees only commands, so there the code comes as `/start`.
+ */
+private fun linkCode(text: String): String {
+    val trimmed = text.trim()
+    val command = trimmed.substringBefore(' ')
+    if (command != "/start" && !command.startsWith("/start@")) return trimmed
+    return trimmed.substringAfter(' ', "").trim()
 }
 
 /**
@@ -77,7 +89,12 @@ class TelegramBackupSink internal constructor(
         private const val HTTP_CONFLICT = 409
         /** `["message"]`, pre-encoded: other update kinds only crowd the page. */
         private const val ALLOWED_UPDATES = "%5B%22message%22%5D"
+        /** Chats a bot can be linked to; a channel is not one of them. */
+        private val LINK_CHAT_TYPES = setOf("private", "group", "supergroup")
+        /** `link_preview_options` for a message whose links get no preview card. */
+        const val NO_LINK_PREVIEW = """{"is_disabled":true}"""
         private val ZIP_MEDIA = "application/zip".toMediaType()
+        private val TEXT_MEDIA = "text/plain".toMediaType()
     }
 
     // Uploads of a multi-MB zip over a car modem need far more than the shared 15 s write timeout.
@@ -92,33 +109,53 @@ class TelegramBackupSink internal constructor(
         call(token, "getMe", null) { it.getJSONObject("result").getString("username") }
 
     /**
-     * The private chat whose latest message is [code]; null when no chat sent it. Binding by a
-     * one-time code, not by "whoever wrote last", keeps a stranger who found the bot from getting
-     * the backups. A negative offset reads the last page of the queue instead of the oldest one.
+     * The private chat or group (#307) that sent [code], newest match first; null when no chat sent
+     * it. Any message counts, not only the chat's latest: in a group, service messages may follow
+     * the code. Binding by a one-time code, not by "whoever wrote last", keeps a stranger who found
+     * the bot from getting the backups. A negative offset reads the last page of the queue instead
+     * of the oldest one.
      */
-    suspend fun findPrivateChat(token: String, code: String): Result<TelegramChat?> =
+    suspend fun findLinkChat(token: String, code: String): Result<TelegramChat?> =
         call(token, "getUpdates?offset=-$UPDATES_PAGE&limit=$UPDATES_PAGE&allowed_updates=$ALLOWED_UPDATES", null) { json ->
             val updates = json.getJSONArray("result")
-            val seenChats = mutableSetOf<Long>()
             (updates.length() - 1 downTo 0)
                 .asSequence()
                 .mapNotNull { updates.getJSONObject(it).optJSONObject("message") }
-                .filter { it.optJSONObject("chat")?.optString("type") == "private" }
-                // Newest first: only the first message seen per chat is its latest one.
-                .filter { seenChats.add(it.getJSONObject("chat").getLong("id")) }
-                .firstOrNull { it.optString("text").trim() == code }
+                .filter { it.optJSONObject("chat")?.optString("type") in LINK_CHAT_TYPES }
+                .firstOrNull { linkCode(it.optString("text")) == code }
                 ?.getJSONObject("chat")
                 ?.let { TelegramChat(it.getLong("id"), chatName(it)) }
         }
 
-    /** [parseMode] "HTML" makes Telegram render the markup in [text]; null sends it as plain text. */
-    suspend fun sendMessage(token: String, chatId: Long, text: String, parseMode: String? = null): Result<Unit> {
+    /**
+     * [parseMode] "HTML" makes Telegram render the markup in [text]; null sends it as plain text.
+     * [linkPreview] false keeps Telegram from adding a card for the first link (Bot API 7.0+).
+     */
+    suspend fun sendMessage(
+        token: String,
+        chatId: Long,
+        text: String,
+        parseMode: String? = null,
+        linkPreview: Boolean = true,
+    ): Result<Unit> {
         val body = FormBody.Builder()
             .add("chat_id", chatId.toString())
             .add("text", text)
             .apply { if (parseMode != null) add("parse_mode", parseMode) }
+            .apply { if (!linkPreview) add("link_preview_options", NO_LINK_PREVIEW) }
             .build()
         return call(token, "sendMessage", body) { }
+    }
+
+    /** A native location pin, silent (`disable_notification`): it follows a message already announced. */
+    suspend fun sendLocation(token: String, chatId: Long, latitude: Double, longitude: Double): Result<Unit> {
+        val body = FormBody.Builder()
+            .add("chat_id", chatId.toString())
+            .add("latitude", String.format(Locale.US, "%.6f", latitude))
+            .add("longitude", String.format(Locale.US, "%.6f", longitude))
+            .add("disable_notification", "true")
+            .build()
+        return call(token, "sendLocation", body) { }
     }
 
     suspend fun sendDocument(token: String, chatId: Long, file: File, caption: String): Result<Unit> {
@@ -126,13 +163,13 @@ class TelegramBackupSink internal constructor(
             .setType(MultipartBody.FORM)
             .addFormDataPart("chat_id", chatId.toString())
             .addFormDataPart("caption", caption)
-            .addFormDataPart("document", file.name, file.asRequestBody(ZIP_MEDIA))
+            .addFormDataPart("document", file.name, file.asRequestBody(if (file.extension == "txt") TEXT_MEDIA else ZIP_MEDIA))
             .build()
         return call(token, "sendDocument", body) { }
     }
 
-    /** "Имя @username", either part may be missing. */
-    private fun chatName(chat: JSONObject): String = listOfNotNull(
+    /** A group by its title; a private chat as "Имя @username", either part may be missing. */
+    private fun chatName(chat: JSONObject): String = chat.optString("title").takeIf { it.isNotEmpty() } ?: listOfNotNull(
         chat.optString("first_name").takeIf { it.isNotEmpty() },
         chat.optString("username").takeIf { it.isNotEmpty() }?.let { "@$it" },
     ).joinToString(" ")

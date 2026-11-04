@@ -7,6 +7,9 @@ import android.util.Log
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.workDataOf
+import com.bydmate.app.diagnostics.Trace
+import com.bydmate.app.diagnostics.TraceArea
 
 /**
  * Auto-start on boot — uses WorkManager (like BydConnect).
@@ -30,11 +33,19 @@ class BootReceiver : BroadcastReceiver() {
         const val KEY_CHAIN_LOG = "chain_log"
         /** Explicit restart request from the helper daemon after the Android 10 a11y recovery. */
         const val ACTION_RECOVER_START = "com.bydmate.dilink3.app.action.RECOVER_START"
+
+        // Unlock arrives only while the service is down (see onReceive), so whatever job is
+        // queued or running has not started it: replace it rather than be dropped behind a
+        // parked-restart job that skipped because the screen still read as off at car-on.
+        fun workPolicyFor(action: String?): ExistingWorkPolicy =
+            if (action == Intent.ACTION_USER_PRESENT) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP
     }
 
     override fun onReceive(context: Context, intent: Intent) {
         val validActions = setOf(
             Intent.ACTION_BOOT_COMPLETED,
+            // An APK update kills the app and sends only this: without it the service stayed down
+            // until the next boot or unlock.
             Intent.ACTION_MY_PACKAGE_REPLACED,
             "android.intent.action.QUICKBOOT_POWERON",
             "android.intent.action.LOCKED_BOOT_COMPLETED",
@@ -45,6 +56,8 @@ class BootReceiver : BroadcastReceiver() {
 
         Log.i(TAG, "Boot/user event: ${intent.action}")
         ChainLog.append(context, "BootReceiver: ${intent.action}")
+        val action = AutostartTrace.actionName(intent.action)
+        Trace.event(TraceArea.APP, "boot-receiver", "action" to action, "service_running" to TrackingService.isRunning.value)
 
         // Skip USER_PRESENT if service is already running
         if (intent.action == Intent.ACTION_USER_PRESENT && TrackingService.isRunning.value) {
@@ -57,10 +70,12 @@ class BootReceiver : BroadcastReceiver() {
 
         // Use WorkManager — guaranteed execution (like BydConnect)
         try {
-            val request = OneTimeWorkRequestBuilder<ServiceStartWorker>().build()
+            val request = OneTimeWorkRequestBuilder<ServiceStartWorker>()
+                .setInputData(workDataOf(AutostartTrace.KEY_WORKER_SOURCE to action))
+                .build()
             WorkManager.getInstance(context).enqueueUniqueWork(
                 ServiceStartWorker.WORK_NAME,
-                ExistingWorkPolicy.KEEP,
+                workPolicyFor(intent.action),
                 request
             )
             updateBootMethod(context, "WorkManager")
@@ -73,7 +88,7 @@ class BootReceiver : BroadcastReceiver() {
 
             // Last resort fallback: direct start
             try {
-                TrackingService.start(context)
+                TrackingService.start(context, AutostartTrace.directFallbackTrigger(intent.action))
                 updateBootMethod(context, "DirectFallback")
                 ChainLog.append(context, "DirectFallback OK")
                 Log.i(TAG, "Direct startForegroundService fallback OK")

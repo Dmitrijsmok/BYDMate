@@ -70,7 +70,7 @@ class FidPushApplierTest {
         // chargingStatus, rain, avgBatTemp and the sticky drive mode are all computed from
         // several fids at once; patching one of them alone would contradict the snapshot.
         listOf("chargeGunState", "bmsState", "wiperRelay", "autoWipers", "maxBatTemp", "minBatTemp",
-            "driveMode", "windowRRGen3").forEach {
+            "driveMode", "windowRRGen3", "insideTempAlt").forEach {
             assertNull("$it must not be patched from push", apply(it, intValue = 1, doubleValue = 1.0))
         }
     }

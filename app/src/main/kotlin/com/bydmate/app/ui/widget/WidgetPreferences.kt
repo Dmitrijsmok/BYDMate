@@ -100,8 +100,10 @@ class WidgetPreferences(private val prefs: SharedPreferences) {
     fun isLeftTapZoningEnabled(): Boolean =
         prefs.getBoolean(KEY_LEFT_TAP_ZONING, false)
 
+    /** Widget section: a change made here also drops the split switch's snapshot (see [setSplitTapOn]). */
     fun setLeftTapZoningEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_LEFT_TAP_ZONING, enabled).apply()
+        prefs.edit().putBoolean(KEY_LEFT_TAP_ZONING, enabled)
+            .remove(KEY_SPLIT_TAP_PREV_ZONING).remove(KEY_SPLIT_TAP_PREV_MODE).apply()
     }
 
     fun getLeftTapAppPackage(): String =
@@ -122,8 +124,40 @@ class WidgetPreferences(private val prefs: SharedPreferences) {
             ?.let { runCatching { LeftTapMode.valueOf(it) }.getOrNull() }
             ?: LeftTapMode.APP
 
+    /** Widget section: a change made here also drops the split switch's snapshot (see [setSplitTapOn]). */
     fun setLeftTapMode(mode: LeftTapMode) {
-        prefs.edit().putString(KEY_LEFT_TAP_MODE, mode.name).apply()
+        prefs.edit().putString(KEY_LEFT_TAP_MODE, mode.name)
+            .remove(KEY_SPLIT_TAP_PREV_ZONING).remove(KEY_SPLIT_TAP_PREV_MODE).apply()
+    }
+
+    /** Left tap currently opens an app (zoning on, APP mode): turning the split tap on replaces it. */
+    fun leftTapOpensApp(): Boolean = isLeftTapZoningEnabled() && getLeftTapMode() == LeftTapMode.APP
+
+    /** The split section's «Тап по левой трети» switch: on = zoning on + SPLIT. */
+    fun isSplitTapOn(): Boolean = isLeftTapZoningEnabled() && getLeftTapMode() == LeftTapMode.SPLIT
+
+    /**
+     * On: remembers the current zoning/mode, then sets zoning on + SPLIT. Off: puts back what was
+     * remembered and forgets it; with nothing remembered (the Widget section changed the tap since,
+     * which drops the snapshot) zoning stays as is and the mode goes back to APP. Writes the keys
+     * directly: the public setters would drop the snapshot this switch just took.
+     */
+    fun setSplitTapOn(on: Boolean) {
+        if (on == isSplitTapOn()) return
+        val editor = prefs.edit()
+        if (on) {
+            editor.putBoolean(KEY_SPLIT_TAP_PREV_ZONING, isLeftTapZoningEnabled())
+                .putString(KEY_SPLIT_TAP_PREV_MODE, getLeftTapMode().name)
+                .putBoolean(KEY_LEFT_TAP_ZONING, true)
+                .putString(KEY_LEFT_TAP_MODE, LeftTapMode.SPLIT.name)
+        } else {
+            val mode = prefs.getString(KEY_SPLIT_TAP_PREV_MODE, null)
+                ?.let { runCatching { LeftTapMode.valueOf(it) }.getOrNull() } ?: LeftTapMode.APP
+            editor.putBoolean(KEY_LEFT_TAP_ZONING, prefs.getBoolean(KEY_SPLIT_TAP_PREV_ZONING, isLeftTapZoningEnabled()))
+                .putString(KEY_LEFT_TAP_MODE, mode.name)
+                .remove(KEY_SPLIT_TAP_PREV_ZONING).remove(KEY_SPLIT_TAP_PREV_MODE)
+        }
+        editor.apply()
     }
 
     data class LeftTapAppState(
@@ -203,6 +237,22 @@ class WidgetPreferences(private val prefs: SharedPreferences) {
         awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
 
+    /** Show the widget only over the home screen (launcher); hide it in every other app. */
+    fun isHomeOnly(): Boolean = prefs.getBoolean(KEY_HOME_ONLY, false)
+
+    fun setHomeOnly(homeOnly: Boolean) {
+        prefs.edit().putBoolean(KEY_HOME_ONLY, homeOnly).apply()
+    }
+
+    fun homeOnlyFlow(): Flow<Boolean> = callbackFlow {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, changedKey ->
+            if (changedKey == KEY_HOME_ONLY) trySend(isHomeOnly())
+        }
+        trySend(isHomeOnly())
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
     /**
      * Packages the widget hides itself over, chosen by the user in Settings.
      * SharedPreferences hands out its own live Set instance — copy on read and
@@ -250,9 +300,12 @@ class WidgetPreferences(private val prefs: SharedPreferences) {
         const val KEY_LEFT_TAP_APP_PKG = "widget_left_tap_app_pkg"
         const val KEY_LEFT_TAP_APP_LABEL = "widget_left_tap_app_label"
         const val KEY_LEFT_TAP_MODE = "widget_left_tap_mode"
+        const val KEY_SPLIT_TAP_PREV_ZONING = "widget_split_tap_prev_zoning"
+        const val KEY_SPLIT_TAP_PREV_MODE = "widget_split_tap_prev_mode"
         const val KEY_BUTTONS_ENABLED = "widget_buttons_enabled"
         const val KEY_HIDE_ON_YOUTUBE = "widget_hide_on_youtube"
         const val KEY_HIDE_IN_APPS = "widget_hide_in_apps"
+        const val KEY_HOME_ONLY = "widget_home_only"
         const val KEY_BUTTON_ICON_PREFIX = "widget_button_icon_"
         fun buttonIconKey(number: Int): String = "$KEY_BUTTON_ICON_PREFIX$number"
         const val DEFAULT_LEFT_TAP_APP_PKG = "ru.yandex.yandexnavi"

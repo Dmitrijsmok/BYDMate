@@ -4,7 +4,7 @@
 
 # BYDMate
 
-### Trip Logger & Energy Analytics for BYD DiLink 5.0
+### Trip Logger & Energy Analytics & Touch of Magic for BYD DiLink
 
 [![Android](https://img.shields.io/badge/Android-10%2B-3DDC84?style=flat-square&logo=android&logoColor=white)](https://developer.android.com)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.1-7F52FF?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org)
@@ -19,9 +19,9 @@
 
 Split screen 1/3 and 2/3, navigation on the instrument cluster, Yandex Navigator guidance on the windshield, turn-signal blind-spot cameras, a Russian voice assistant, ABRP telemetry.
 
-Tested on Leopard 3 (Fangchengbao Tai 3), with support for Sea Lion 07, Song, Atto 3, Seal, Han. DiLink 3.0, 4.0, 5.0, 5.1, and firmware with the new UI7 interface (OTA V1.6).
+Tested on Leopard 3 (Fangchengbao Tai 3), with support for Sea Lion 07, Song, Atto 3, Seal, Han and the DM-i and DM-o hybrids (Song Pro DM-i, Leopard 5, Leopard 8, Sealion 06). DiLink 3.0, 4.0, 5.0, 5.1, and firmware with the new UI7 interface (OTA V1.6).
 
-[Features](#features) | [Screenshots](#screenshots) | [Automation](#automation) | [Projection to cluster](#projection-to-cluster) | [HUD](#hud) | [Split screen](#split-screen) | [Voice AI Agent](#voice-ai-agent) | [AI Insights](#ai-insights) | [ABRP](#abrp-live-telemetry) | [Install](#install) | [Build](#build-from-source) | [Releases](https://github.com/AndyShaman/BYDMate/releases) | [Sponsor](SUPPORT.md)
+[Features](#features) | [Screenshots](#screenshots) | [Automation](#automation) | [Projection to cluster](#projection-to-cluster) | [HUD](#hud) | [Split screen](#split-screen) | [Voice AI Agent](#voice-ai-agent) | [Tech](#the-tech-screen) | [Diagnostics](#diagnostics-module-faults) | [AI Insights](#ai-insights) | [ABRP](#abrp-live-telemetry) | [Install](#install) | [Build](#build-from-source) | [Releases](https://github.com/AndyShaman/BYDMate/releases) | [Sponsor](SUPPORT.md)
 
 </div>
 
@@ -37,33 +37,17 @@ All core features (trips, charges, automations, local insights, offline voice ag
 
 ## What's New
 
-The main changes in version 3.18.1.
+The main changes in version 4.1.0.
 
-**Redesigned trip window.** The header now shows the date, weekday, and a close button. New: odometer at the start and finish, time in motion, cost per 100 km, charge change in percent, and outside temperature at the start and end. The odometer is recorded only for trips after the update.
+**Module fault codes with descriptions.** The "Tech" screen has a new "Diagnostics" card. The "Scan" button reads fault codes from the car's modules, only in P and only when you press it, and changes nothing in the car. Codes are written the same way as in BYD manuals and service scanners, grouped by module, with a description from BYD diagnostic manuals next to each one, no internet needed. You can send the codes to yourself in Telegram. The same card shows cluster warnings and the time left until the next service. Tested on Leopard 3. Details in [Diagnostics: Module Faults](#diagnostics-module-faults).
 
-**Automation as a list or as cards.** A toggle in the tab header shows rules as a compact list or as cards in three columns; the choice is remembered. Each rule shows how many times and when it last fired.
+**"Car status" card.** Climate and tires now share one card. The tires are drawn on a picture of the car, each wheel with its own pressure and temperature. If the car has a PM2.5 sensor, the cabin and outside air quality shows there too.
 
-**Roomier Home screen.** Recent trips now always show six entries, and the bottom tab bar is shorter.
+**Rear seat heating in automation.** Left and right separately, off, 1 or 2. The actions show only on cars that report having rear seat heating.
 
-The main changes in version 3.18.0.
+**Fixes.** Two short trips in a row no longer merge into one. Yandex Navigator turn arrows are back on the cluster of the Han 2022 and similar cars. Pressing the volume wheel pauses music on DiLink 3 and 4 as well. With the "By charges" tariff, the current trip is priced at the cost of the energy in the battery, not at the home tariff.
 
-**Configuration in one place.** The "Save configuration" button replaces CSV export, settings export, and manual backup. You choose what to save: trips and charges, settings with tariffs, keys. On restore you can bring back only the parts you need. Details in [Configuration Backup and Telegram Bot](#configuration-backup-and-telegram-bot).
-
-**Auto-save with a copy in Telegram.** Once a day, week, or month the app saves a copy by itself when the car starts. Download keeps the 5 most recent copies, and each one is also sent to your Telegram bot.
-
-**Automations can be shared.** The "Share" button saves a rule to a file without your phone numbers, contacts, or places. The "Import" button adds a rule from such a file, off by default. Details in the "Automation" section.
-
-**Test run for a rule.** In the automation editor, the "Test run" button runs all the actions right away, without waiting for the condition.
-
-**Voice commands from a fixed phrase list.** The built-in offline commands are now a fixed list of common Russian phrases. A phrase from the list runs without internet; everything else goes to the agent. Windows and the sunroof can open by a fraction: "halfway", "50 percent", "just a bit", "all the way". Details in the "Voice AI Agent" section.
-
-**Text size.** Settings, App section, "Text size": normal, large, or extra large. This changes the app screens and the voice agent windows; the widget and the cluster stay the same.
-
-**TRIP resets after charging.** The TRIP 1 and TRIP 2 counters can reset themselves: after any charge, AC only, DC only, or only after charging to 100%. Each counter has its own setting, chosen in the counter's detail window.
-
-**Clear ADB status line.** On Home and in Settings, the status line says why vehicle control does not work: ADB is not enabled, it turned off after a reboot, there is no access, or the helper did not start. Tapping it opens a tip with an action. The first-run wizard now has an "ADB" step with a connection check.
-
-**Steering wheel heating and discharge power.** Steering wheel heating can be turned on and off from automation and by voice, on cars that have it. On the "Tech" screen, the BMS limits now show a "max discharge power" line, the same figure diagnostic scanners show.
+The full list of changes is in the [CHANGELOG](CHANGELOG.md).
 
 ---
 
@@ -77,6 +61,8 @@ The main changes in version 3.18.0.
 | **AI** | Insights | Driving analysis: on-device rules, no internet |
 | **TRIP** | TRIP 1/2 counters | Distance, consumption, time, and cost since the last reset (like in the car); long-press to reset, tap for details |
 | **Bat** | Battery health and "Tech" | Card: SoH (Leopard 3, DiLink 3.0), temperature, 12V, cell balance, insulation. Tap opens the "Tech" screen with live battery, motor, climate, and tire parameters, including the front/rear power split in percent |
+| **DTC** | Module faults | "Diagnostics" card on the "Tech" screen: fault codes from the car's modules with descriptions from BYD manuals, cluster warnings, time until the next service. Scanning only in P and only on a press, it changes nothing in the car |
+| **DM-i** | Hybrids | The app detects a hybrid from the car's own counters. Battery and fuel range from the car, a «Fuel» card (tank, range, rpm, engine and battery mileage), litres and engine kilometres per trip from the car's counter, litre price per tariff period. Nothing changes on EVs |
 | **Map** | Route map | osmdroid (OpenStreetMap) in trip details |
 | **Rules** | Automation | WHEN→THEN rules: parameter triggers → vehicle control commands |
 | **Cluster** | Projection to cluster | Mirrors the chosen app onto the instrument cluster with a steering-wheel button (right star by default) |
@@ -84,7 +70,7 @@ The main changes in version 3.18.0.
 | **Split** | Split screen | Two apps at once: BYDMate windows in a 1/3 and 2/3 layout, or the firmware's own split |
 | **Cam** | Blind-spot cameras | The camera of the matching side while the turn signal is on: on the cluster or in a small window on the screen |
 | **Voice** | Voice agent | Russian offline assistant: on-device speech recognition, AI agent (32 tools), neural TTS |
-| **Widget** | Floating widget | 7 fields over other apps: SOC, range, consumption + trend, time, cabin t°, battery t°, 12V |
+| **Widget** | Floating widget | 7 fields over other apps: SOC, range, consumption + trend, time, cabin t°, battery t°, 12V; on a hybrid the fuel range and tank level replace consumption |
 | **Auto** | Autostart | WorkManager, starts on boot |
 | **Backup** | Configuration backup | Trips, charges, settings, and keys in one archive in Download, restore by parts, scheduled auto-save with a copy in your Telegram bot |
 | **Share** | Automation sharing | A rule saved to a file without phone numbers, contacts, or your places; import someone else's rule with a preview |
@@ -98,7 +84,7 @@ The main changes in version 3.18.0.
 
 <img src="docs/screenshots/dashboard.jpg" alt="Dashboard" width="800">
 
-Around the SOC ring there are four fields laid out like the floating widget: at the top, trip duration, odometer, and temperature (cabin and outside temperature share one slot; if the car does not report outside temperature, the slot shows only cabin temperature, as before); at the bottom, the current trip's distance, the estimated range, and the current trip's consumption with a trend arrow. The colors and trend logic are the same as in the floating widget, so the information reads the same on the home screen and over other apps.
+Around the SOC ring there are four fields laid out like the floating widget: at the top, trip duration, odometer, and temperature (cabin and outside temperature share one slot; if the car does not report outside temperature, the slot shows only cabin temperature, as before); at the bottom, the current trip's distance, the estimated range, and the current trip's consumption with a trend arrow. The colors and trend logic are the same as in the floating widget, so the information reads the same on the home screen and over other apps. On a hybrid, the car's own battery range sits under the ring, with no calculation of ours, and below it is a “Fuel” card: the tank level and the fuel range; a tap shows engine rpm, engine and battery mileage, litres for all time and the litre price of the current period. Consumption for a period on a hybrid is shown as l/100 and kWh/100 over all kilometres, as on the instrument cluster.
 
 Below the ring: an AI insight, a small battery health card (SoH on Leopard 3 and DiLink 3.0, temperature, 12V), the two TRIP 1 and TRIP 2 counters, recent trips, a period filter. Each counter shows distance, consumption in kWh (including parked drain), time on the road, and cost since the last reset. A long press resets the counter, a tap opens the details. In the counter's window you can turn on reset after charging: after any charge, AC only, DC only, or only after charging to 100%.
 
@@ -108,11 +94,11 @@ Below the ring: an AI insight, a small battery health card (SoH on Leopard 3 and
 
 *Driving efficiency analysis: consumption, trends, battery, recommendations (computed on the device)*
 
-**Battery Health**
+**Tech**
 
-<img src="docs/screenshots/dashboard-battery.jpg" alt="Battery health" width="800">
+<img src="docs/screenshots/tech-screen-en.jpg" alt="The Tech screen" width="800">
 
-*Temperature, SoH (Leopard 3, DiLink 3.0), 12V battery, cell balance, voltage*
+*Battery, motors, BMS limits, cells, battery history, climate, tyres, diagnostics. Opens with a tap on the battery card on the Dashboard*
 
 **Trips**
 
@@ -123,6 +109,8 @@ Below the ring: an AI insight, a small battery health card (SoH on Leopard 3 and
 The **"Temperature"** chip above the list opens the "Consumption and Temperature" screen: a dot for every trip longer than 5 km, a median line over 5-degree bands, medians for cold (below 0 °C), mid-season (0 to 15 °C), and warm (above 15 °C), and a note on how many percent higher consumption is in the cold. Trips under 5 km never make it into the chart, warm-up eats up everything there. It takes 8 trips with temperature data and a spread of at least 15 °C, otherwise the screen honestly says what is missing.
 
 The trip window shows the odometer at the start and finish, time in motion, cost per 100 km, the charge change in percent, and the outside temperature at the start and end. The odometer is recorded only for trips after the update.
+
+On a hybrid the list has an “l” column. In the “/100” column a trip with petrol shows litres per 100 km with an “l” mark and no color, an electric trip shows kWh/100 with color as before. Litres are the difference of the car's fuel counter at the trip boundaries, in 0.1 l steps; if one of the boundaries has no snapshot, a dash is shown, and someone else's petrol is never put on the trip. In the trip window litres, engine and battery kilometres and fuel cost are separate rows.
 
 **Automation**
 
@@ -193,6 +181,17 @@ Rules created in earlier versions keep working and open for editing as before, n
 - **AND**: every condition must hold
 - **OR**: any one condition is enough
 - **Park only**: the rule fires only when the car is in Park
+
+### Checking a Condition Every Time the Car Is Turned On
+
+A rule fires at the moment a value crosses its threshold while the app is running. If you get into a car where the cabin is already at 32 degrees and the threshold is 29, nothing crossed the threshold, so the rule does not fire. To have the condition checked every time the car is turned on, add a second rule next to the first one:
+
+1. First condition: **"BYDMate startup"**.
+2. Second condition: **"Cabin Temp"** above 29.
+3. Choose **"All conditions"**.
+4. Same actions as in the first rule.
+
+Do not choose **"Any condition"**: the rule would then fire on every startup, whatever the temperature.
 
 ### Share and Import an Automation
 
@@ -303,7 +302,13 @@ The projection runs in one of the two modes described above. In "Factory" mode, 
 
 If the car has a factory head-up display, BYDMate draws Yandex Navigator guidance on the windshield: the maneuver icon, the distance to it, the street name and the arrival time. A separate toggle adds the speed limit sign, sent as a number. While the Navigator warns about a speed camera, the camera icon and the distance to it replace the maneuver arrow. Guidance keeps running even when the Navigator is minimized or projected to the cluster; Yandex Maps works as a guidance source alongside the Navigator.
 
-Enable it in **Settings → Display**, section "HUD (head-up display)": the "Navigation on HUD" toggle and, separately, "Speed sign under the arrow". Guidance travels over the HUD's own factory channel, so a car equipped with a head-up display is required. If the car has no such channel, the app says so in Settings and does not enable the feature.
+Enable it in **Settings → Display**, section "HUD (head-up display)": the "Navigation on HUD" toggle and, separately, "Speed sign under the arrow". The way of drawing on the glass is chosen there too: Way 1 is the default, Ways 2 and 3 are for cars where the glass is empty in Way 1. Guidance travels over the HUD's own factory channel, so a car equipped with a head-up display is required. If the car has no such channel, the app says so in Settings and does not enable the feature.
+
+**What the app changes in the car.** In Way 1, nothing: hints go over the HUD's own channel. In Ways 2 and 3, while "Navigation on HUD" is on and the navigator is guiding a route, BYDMate turns on the car's navigation mode and writes the arrow, the meters and the street to the navigation card on the cluster. In Way 3 the remaining time and distance to the end of the route and the arrival time go there too. Once the route ends, the way is changed or the toggle is off, everything returns to how it was. With the toggle off, the app does not touch anything in the car.
+
+**If nothing shows up on the glass.** Open **Settings → Service & Data**, "Data" section, and tap **"Start"** next to the "HUD check" line. The car needs to be parked, with no route running in the navigator. The check takes about two minutes and shows the numbers 111, 222, 333 and 444 on the glass one after another, each by its own way. At the end it asks which number you saw and sets the right way itself. If the glass showed nothing, record a log with the log recording button and send it in a GitHub issue along with your car model.
+
+**Which navigator.** The maneuver arrow comes from Yandex Navigator 31.0.2 or newer. Older versions (24.5.1) give only the distance and the street, without the arrow. Yandex Maps gives the arrow intermittently, so use Navigator for the HUD and the cluster.
 
 ---
 
@@ -351,7 +356,7 @@ The agent has 32 tools. Example phrases:
 
 **Car and climate**
 - "Сколько заряда?" (How much charge is left?), "Какая температура за бортом?" (What's the temperature outside?), "Какой запас хода?" (What's my range?) (live vehicle status)
-- "Открой окна" (Open the windows), "Включи подогрев сиденья" (Turn on seat heating), "Поставь климат на 22" (Set the climate to 22) (full catalog of 97 commands, see below)
+- "Открой окна" (Open the windows), "Включи подогрев сиденья" (Turn on seat heating), "Поставь климат на 22" (Set the climate to 22) (full catalog of 110 commands, see below)
 - "Сделай музыку громче" (Turn the music up), "Потише" (Quieter) (media volume)
 
 **Trips, charges, statistics**
@@ -363,7 +368,7 @@ The agent has 32 tools. Example phrases:
 **Navigation and places**
 - "Поехали домой" (Let's go home), "Поехали на работу" (Let's go to work), "Поехали на дачу" (Let's go to the dacha) (saved places). On "поехали" (let's go) the assistant taps "Go" in Yandex Navigator by itself, on "построй маршрут домой" (build a route home) it only builds the route
 - With split screen on, the assistant first collapses it, builds the route, and puts the panes back: otherwise the firmware recreates the Navigator and the route is lost. Requires the BYDMate accessibility service to be on
-- Say "в картах" (in Maps): "поехали домой в картах" (let's go home in Maps), "найди заправку в яндекс картах" (find a gas station in Yandex Maps); the route, search, or point display go to Yandex Maps, without these words the route goes to the navigator chosen in the "Navigator for routes" setting (Settings → Voice agent → Agent), Yandex Navigator by default
+- Say "в картах" (in Maps): "поехали домой в картах" (let's go home in Maps), "найди заправку в яндекс картах" (find a gas station in Yandex Maps); the route, search, or point display go to Yandex Maps, without these words the route goes to the navigator chosen in the "Navigator for routes" setting (Settings → Voice agent → Agent), Yandex Navigator by default; 2GIS, Yandex Maps and Waze are the other choices
 - "Найди зарядки рядом" (Find charging stations nearby)
 - "Хватит ли заряда до Казани?" (Is there enough charge to reach Kazan?), "Сколько ехать до аэропорта?" (How long to the airport?)
 - "Запомни это место как дача" (Remember this place as dacha), "Какие места сохранены?" (What places are saved?)
@@ -383,12 +388,12 @@ The agent has 32 tools. Example phrases:
 - "Какая погода?" (What's the weather?), "Какая погода в Москве завтра?" (What's the weather in Moscow tomorrow?)
 - "Поищи в интернете, когда выйдет обновление DiLink" (Search the web for when the DiLink update comes out)
 
-### Vehicle Control: A Catalog of 97 Commands
+### Vehicle Control: A Catalog of 110 Commands
 
 | Group | What's available |
 |--------|--------------|
 | Windows | all, front, rear, driver, passenger, rear left and rear right; open, close, halfway, vent, per group and per individual window |
-| Climate | on, off, temperature from 16 to 30 |
+| Climate | on, off, temperature from 16 to 33 |
 | Seat heating | driver and passenger, levels 1-5 and off |
 | Seat ventilation | driver and passenger, levels 1-5 and off |
 | Mirrors | heating on/off |
@@ -400,6 +405,9 @@ The agent has 32 tools. Example phrases:
 | Front trunk | open, close |
 | Fridge | cooling from -6 to +6, heating from 35 to 50, off |
 | Hazard lights | on, off |
+| Drive mode | ECO, Normal, Sport; Snow, Sand, Mud, Mountain, Rock and the smart mode only below 15 km/h |
+| HUD | windshield projection: on, off |
+| Battery preheating | on, off |
 
 Safety: window opening is blocked above 120 km/h, the sunroof above 80 km/h, door unlocking above 30 km/h; the front trunk only opens while the car is parked.
 
@@ -412,7 +420,7 @@ How it works:
 - A phrase runs offline only if said in full and exactly as in the list. A different wording of the same thing goes to the agent.
 - Polite words do not get in the way: "пожалуйста" (please), "можешь" (can you), "слушай" (listen), "спасибо" (thanks) are simply dropped.
 - "A and B" runs both commands if each one is in the list: "открой окно водителя и закрой люк" (open the driver's window and close the sunroof).
-- Windows and the sunroof open by a fraction: "наполовину" (halfway), "на 50 процентов" (at 50 percent), "чуть-чуть" (just a bit), "полностью" (all the way), "на треть" (a third). The percent is rounded down to the nearest supported position, the window never opens wider than asked.
+- Windows and the sunroof open by a fraction: "наполовину" (halfway), "на 30 процентов" (at 30 percent), "чуть-чуть" (just a bit), "полностью" (all the way), "на треть" (a third). A side window takes the named percent exactly (1 to 99); words without a number, and percents for the sunroof, are rounded down to the nearest supported position, so nothing opens wider than asked.
 - Everything else goes to the cloud AI agent, if it is on. Without the agent, such a phrase gets "didn't understand" as the answer, while the phrases from the list keep working.
 
 Examples from the list. Full list with wording variants: [docs/VOICE_COMMANDS.md](docs/VOICE_COMMANDS.md).
@@ -420,7 +428,7 @@ Examples from the list. Full list with wording variants: [docs/VOICE_COMMANDS.md
 | Phrase | What happens |
 |-------|----------------|
 | "Открой окна" (Open the windows) | all windows open all the way |
-| "Открой окно на 50 процентов" (Open the window 50 percent) | the driver's window opens halfway |
+| "Открой окно на 30 процентов" (Open the window 30 percent) | the driver's window opens to 30 % |
 | "Приоткрой окно водителя" (Crack the driver's window) | the driver's window opens to vent |
 | "Режим проветривания" (Airing mode) | all windows go to vent, the sunroof lifts |
 | "Выключи режим проветривания" (Turn off airing mode) | the windows and sunroof close |
@@ -429,6 +437,7 @@ Examples from the list. Full list with wording variants: [docs/VOICE_COMMANDS.md
 | "Включи подогрев руля" (Turn on the steering wheel heater) | steering wheel heating |
 | "Поставь температуру 22" (Set the temperature to 22) | climate set to 22 degrees |
 | "Громкость 20" (Volume 20) | media volume set to 20 |
+| "Включи Яндекс Музыку", "Яндекс Музыка" (Turn on Yandex Music, Yandex Music) | starts "My Wave" in Yandex Music |
 | "Запри машину" (Lock the car) | doors lock |
 
 The English offline commands were removed, the list is Russian only. The app's interface language does not affect this: the offline commands and the agent work regardless of the app's language.
@@ -489,6 +498,8 @@ In Settings you pick one of three response personalities (Navigator by default) 
 
 At the bottom of the "Voice agent" section there is a toggle that disables BYD's built-in voice assistant, so it does not wake up alongside the agent. Fully reversible, applies after the car restarts (both turning it on and off). Off by default.
 
+The stock assistant is disabled in the car's system, so turn this toggle off before uninstalling BYDMate, otherwise the stock assistant stays disabled. How to bring the stock assistant back if BYDMate is already uninstalled: install BYDMate again, turn the toggle off, and restart the head unit.
+
 ### Requirements
 
 - Disk space: the recognition model is 226 MB plus a TTS voice (a regular one is 18-21 MB, or the improved Mark/Sofia share a 145 MB download). Roughly 245 to 370 MB in total.
@@ -519,6 +530,7 @@ Seven fields across 3 rows. Colors: icons gray, values white. The frame and SOC%
 **Center row** (large, key values):
 - **SOC %** (18sp bold, colored): traction battery charge. Green above 50%, yellow 20-50%, red below 20%
 - **~N km** (28sp white): estimated range, `SOC × battery capacity ÷ baseline consumption × 100`. The tilde marks it as an estimate, not the onboard computer's reading. More on how baseline consumption is figured is below, in "Range"
+- **On a hybrid**: `~N km` is the car's own battery range, not our calculation; the fuel range from the car stands instead of consumption, and the tank level is shown in the top row.
 - **X.X ↓** (18sp, colored by trend): **current trip consumption**, kWh/100km, with a trend arrow (see below)
 
 **Bottom row** (small, 13sp):
@@ -640,13 +652,13 @@ If a record did not appear automatically, or the numbers look off:
 
 ## Tariffs and Cost
 
-BYDMate figures the cost of every charge and every trip itself. For the numbers to be honest, it needs two things: your price per kilowatt-hour, and the date that price started applying.
+BYDMate figures the cost of every charge and every trip itself. For the numbers to be honest, it needs two things: your price per kilowatt-hour, and the date that price started applying. On a hybrid, also the litre price.
 
 ### Where to Set the Tariff
 
 **Settings → Car and Battery → "Tariffs and periods" → "Open"**. A separate window opens with the list of periods, it does not clutter Settings.
 
-A period is "the date a price starts applying". A period has a start date, a home (AC) price, a fast-charging (DC) price, losses, and a trip cost rule. A period has no end: it applies until the next period, or until today if there is no next one. The very first period covers all the history before it, so old trips never end up without a price.
+A period is "the date a price starts applying". A period has a start date, a home (AC) price, a fast-charging (DC) price, on a hybrid the litre price, losses, and a trip cost rule. A period has no end: it applies until the next period, or until today if there is no next one. The very first period covers all the history before it, so old trips never end up without a price.
 
 When you set a tariff for the first time (or update from an older version), BYDMate creates one period "from the start of history" with your current numbers. Until you add a second period, everything works as before.
 
@@ -659,6 +671,8 @@ The price went up on September 1, but you only remembered on the 16th? No proble
 3. Enter the new prices and save.
 
 Everything that happened on September 1 and later recalculates automatically: both charges and trips. August stays at the old price. There is no separate "recalculate" button, and none is needed, the recalculation runs by itself when you save the period.
+
+It works the same with petrol. You refuelled at a new price: add a period from the refuelling date and enter the litre price. Trips before that date stay at the old price, trips from it on are counted at the new one. History is not rewritten.
 
 Editing works the same way: changing the price in an existing period recalculates everything from its date to the end of history.
 
@@ -684,6 +698,8 @@ A trip has no receipt, so its kilowatt-hour price has to come from somewhere. A 
 | **By charges** | By the actual price of what went into the battery | You charge both at home and on the road and want accuracy |
 
 The "By charges" rule tracks the price of the energy in the battery: after every charge the new energy mixes with what is left, and the price becomes a weighted average. A cheap night charge makes the kilowatt-hour cheaper, an expensive fast charge makes it more expensive. If there were no charges before a trip, or the last one was more than 60 days ago, BYDMate uses the period's home price so the trip is never left without a cost.
+
+On a hybrid, fuel is added to electricity: the trip's litres are multiplied by the litre price of the period the trip falls into. If the period has no litre price, the fuel part is not counted and the trip cost is for electricity only; if the trip has no litres, it is counted as on an EV.
 
 ### What Never Gets Recalculated
 
@@ -735,11 +751,11 @@ If a Telegram bot is connected, every copy is sent to your chat with the bot. If
 
 ### How to Connect a Telegram Bot
 
-You need your own bot: copies arrive only for you, in a private chat with your bot.
+You need your own bot: copies arrive only in your chat with the bot or in your group where you added it.
 
 1. In Telegram, open **@BotFather**, send it `/newbot`, and pick a name and address for the bot. BotFather sends back a token, a long string like `123456789:AA...`.
 2. In BYDMate open **Settings → Service & Data → Data**, the **"Telegram bot"** block. Paste the token into the "Bot token" field and tap **"Check"**.
-3. The app shows a short code made of digits. Open the chat with your bot in Telegram and send it this code. You can copy the code with the "Copy code" button.
+3. The app shows a short code made of digits. Open the chat with your bot in Telegram and send it this code. You can copy the code with the "Copy code" button. To get reports and copies in a shared chat, for example for everyone who drives the car, add the bot to your private group and send `/start@your_bot CODE` there.
 4. Go back to BYDMate and tap **"Check"** again. The bot sends a message to the chat, "BYDMate connected. Backups will arrive here.", and the block shows a "Connected" mark with the bot's and chat's name.
 
 Errors show up right under the button: a wrong token, no network, the code has not arrived yet, a file over 50 MB, and others. The "Back" button on the code step returns you to the token, "Disconnect" forgets the bot, and copies stay in Download only.
@@ -756,7 +772,7 @@ On **BYD Leopard 3 (Fangchengbao Tai 3)** BYDMate reads this value directly from
 
 On other BYD models, access to this value is not yet confirmed, so SoH does not show there. The rest of the card (battery temperature, 12V, cell balance, insulation resistance) works on every supported model.
 
-Tapping the card opens the **"Tech"** screen: traction battery voltage and current, remaining battery energy in kWh per BMS data, available battery power, BMS charge and discharge limits, cell balance, motor and inverter temperatures, front/rear power split in percent, climate, tire pressure and temperature, SoH and mileage history, the number of full battery charge cycles with a note on which kWh sum it is figured from. Every parameter has a "?" badge with a plain-language tip. If the car does not report a parameter, the line shows "-", and empty cards are hidden.
+Tapping the card opens the **"Tech"** screen with detailed battery, motor, climate and tyre data plus diagnostics, see [The "Tech" Screen](#the-tech-screen).
 
 If SoH is available on your car and you want to help add support, open an [Issue](https://github.com/AndyShaman/BYDMate/issues) with your model and year.
 
@@ -773,11 +789,107 @@ SoH and automatic charge logging on Leopard 3 work automatically, there is nothi
 
 ---
 
+## The "Tech" Screen
+
+"Tech" is the screen with the car's detailed data: battery, motors, battery limits, climate, tyres and diagnostics. The values come from the car itself and update live.
+
+### How to Open It
+
+1. Open the **"Dashboard"** tab.
+2. Tap the battery card: the row with SoH, battery temperature, 12V system, cell delta and insulation. It has a yellow outline in the picture.
+3. The **"Tech"** screen opens. The arrow in the top left corner takes you back.
+
+<img src="docs/screenshots/tech-entry-en.jpg" alt="Dashboard: the battery card that opens Tech" width="400">
+
+### What Is on the Screen
+
+<img src="docs/screenshots/tech-screen-en.jpg" alt="The whole Tech screen" width="900">
+
+Six cards, three per row. You can change their order: hold a card and drag it.
+
+- **Battery · now**: charge (SoC), remaining energy in kWh as the battery itself estimates it, SoH, battery temperature, traction battery voltage, power at the motors, how much the battery is giving out right now and how many percent of charge per hour that eats, the 12V system, insulation resistance.
+- **Motors and inverters**: front and rear separately. Motor and inverter temperatures on a scale, rpm, accelerator and brake pedal, power.
+- **BMS limits**: the charge and discharge power the battery controller (BMS) allows right now and how much power the battery can give. Below are the cells: the weakest, the strongest and the difference between them.
+- **Battery · history**: when the last full charge to 100 % and the last calibration happened, mileage by battery data, how much energy has passed through the battery in total, the number of full cycles (with the numbers it is figured from), average charge since the last charge and over all time.
+- **Car status**: how much the A/C compressor draws, whether climate is on, cabin and outside temperature. Below are the pressure and temperature of each tyre on a picture of the car. If the car has a PM2.5 sensor, it is shown too.
+- **Diagnostics**: cluster warnings, time left until the next service, and module fault codes with the **"Scan"** button. Details in [Diagnostics: Module Faults](#diagnostics-module-faults).
+
+Hybrids get a seventh card, **"Fuel"**.
+
+### How to Read It
+
+- Parameters have a **"?"** badge next to them. Tap it for a plain-language tip: what the number means and what value is normal.
+- If the car does not report a parameter, the line shows "-". A card with no data is hidden.
+- The set of parameters depends on the model. Everything on the screen is tested on Leopard 3; on other cars some lines may be empty.
+- The screen only reads data and changes nothing in the car. It needs active wireless ADB debugging, like the rest of the car data (see "Install").
+
+---
+
+## Diagnostics: Module Faults
+
+A car has dozens of electronic modules: battery, brakes, steering, airbags, driver assistance and more. When a module notices a problem, it stores a fault code. A service shop reads these codes with a scanner. Since version 4.1 BYDMate can read them too, right on the car's screen, with no scanner and no internet.
+
+<img src="docs/screenshots/tech-diagnostics.jpg" alt="The Car status and Diagnostics cards on the Tech screen" width="800">
+
+The screenshots show the app in Russian; in English the labels are the ones quoted below.
+
+### Where to find it
+
+Dashboard → tap the battery card → the **"Tech"** screen → the **"Diagnostics"** card. The card has three parts:
+
+- **Cluster warnings**: what the car itself shows on the instrument cluster. "none" means the cluster shows nothing right now.
+- **Next service**: days and km left until the scheduled service. The row shows only if the service reminder is on in the car. On Leopard 3 it is turned on in the car settings: Vehicle → Maintenance → Maintenance Interval or Maintenance Mileage.
+- **Module faults**: the result of the last scan and the **"Scan"** button.
+
+### How to scan
+
+1. Stop and shift to **P**. While driving the button is inactive and says "Scanning only in P".
+2. Press **"Scan"**. The app asks the modules one by one, and the screen shows how many are done.
+3. A window with the result opens. You can close it and open it again by tapping the list in the card; the car is not asked again.
+
+Wireless ADB debugging has to be active, as for the rest of the car data (see "Install"). The app never scans on its own: not when the car turns on, not on a schedule, not before a Telegram report. Only when you press the button.
+
+### How to read the result
+
+<img src="docs/screenshots/dtc-window.jpg" alt="The Diagnostics · module faults window" width="800">
+
+- **At the top**: when the check ran and how many modules answered, for example "15 of 18 modules answered". That is normal: not every module exists on every model, and some modules do not always answer.
+- **"Present now"**: the fault is active right now. These codes are yellow.
+- **"Old"**: the fault happened before and the module remembers it. These are gray. Almost every car has old codes, a module remembers even a short loss of communication. If the cluster shows no warnings and the car behaves as usual, there is usually nothing to worry about.
+- **Codes are grouped by module**: the module address (for example 0x712) and its name (on Leopard 3; on other models some modules are labelled with the address only).
+- **The code** is written the same way as in BYD manuals and service scanners: **U1166-87**. The first letter tells where the problem is: P is the powertrain (motor, battery, charging), C is the chassis (brakes, steering, suspension), B is the body and cabin, U is communication between modules. The digits after the dash say what kind of fault it is.
+- **The description** sits next to the code, with a line under it saying where it comes from:
+  - "from the BYD manual for this model": text from the BYD diagnostic manual for your exact model;
+  - "from similar BYD models": we have no manual for your model, but in the manuals of other BYD models this code in this module has the same description;
+  - "No description of this code in the database": only the code is shown; you can look it up online or show it to a service.
+- **Description language**: English in every app language, the manual's Chinese original in Chinese. BYD manuals are written in Chinese; the English translation was made for BYDMate.
+- **A hint at U1166-87** in the driver assistance (ADAS) module: the car did not see the key. This happens after a remote start from the phone. If the code goes away when the key is near, nothing is broken.
+
+The descriptions are stored inside the app, no internet needed. They come from 54 diagnostic manuals of BYD, Denza and Fangchengbao: about 8,500 distinct codes, with a description for each module.
+
+### Send to yourself in Telegram
+
+The **"Send to Telegram"** button in the window sends the codes with their descriptions to your bot, handy to show a mechanic or forward to a chat. Connect the bot first (see "How to Connect a Telegram Bot"), otherwise the app says "No Telegram bot connected". The app never sends the codes anywhere by itself.
+
+### Good to know
+
+- **Scanning only reads.** It changes nothing in the car, does not erase faults and does not change module settings. The app sends the modules read requests only.
+- **Faults can be erased, the feature is experimental.** "Erase all" in the window or "erase ›" next to one module, on P only and only after a fresh scan. After the erase the app re-reads the modules and shows the result for each. A fault that is present right now comes back at once while its cause remains. You erase at your own risk; if you are going to a service, send the codes to Telegram first.
+- **This is not a repair or a diagnosis.** A code says what a module noticed, not what broke or what to replace. The service decides: show them the codes.
+- **Tested only on Leopard 3** (Fangchengbao Tai 3). On other BYD models the scan may not work and show "Not available on this car", fewer modules may answer, and module names will show as addresses. If you have another model, tell us in an [Issue](https://github.com/AndyShaman/BYDMate/issues) what the scan showed and attach a log recording.
+- **Only in P and only on a press.** We chose not to query the car's modules while driving.
+- **"Could not check"** happens if the gear left P during the scan or the app lost its connection to the car. Press "Scan" again. If it keeps happening, send a log recording in an [Issue](https://github.com/AndyShaman/BYDMate/issues).
+
+At the bottom of the window there is a line about supporting the project. Diagnostic apps are usually paid, BYDMate is free, and every description is available without a donation.
+
+---
+
 ## If You Don't Have a Leopard 3
 
 BYDMate is developed and tested on BYD Leopard 3 (Fangchengbao Tai 3). On other BYD models most features work too, but there are differences. Before the first launch, check:
 
 - **Trip history**: on Leopard 3 (Fangchengbao Tai 3) BYDMate reads trips from the built-in BMS database `energydata`. On models without this database (Song, Yuan, and similar) trips are now recorded natively, by polling the car's parameters in the background (source NATIVE_POLLING), so the list is no longer empty. Consumption in such trips is figured from the SoC delta, so it is a bit coarser than on Leopard 3, where the data comes from the BMS.
+- **DM-i and DM-o hybrids**: the app detects them by itself from the engine mileage and the tank level, there are no settings; until the type is confirmed, the screen is the same as on an EV. This is the first version of the support, built from the dumps of two cars: some values may show a dash. If you see a dash where the car knows the number, attach the parameter catalog (below) to the Issue, and a photo of the cluster with the battery and fuel ranges.
 - **Battery capacity**: defaults to 72.9 kWh for Leopard 3. Go to **Settings → Car and Battery** and set your own capacity. For example, Atto 3 is 60.5 kWh, Seal AWD is 82.5 kWh, Han EV is 85.4 kWh. Without this, range and trip cost calculations will be off.
 - **SoH**: confirmed on Leopard 3 and on DiLink 3.0 (Yuan UP). On other models the "Battery health" card works without the SoH field.
 - **Charges**: the AC and DC algorithm was designed around Leopard 3. On other models a record may appear late or with imprecise power, especially for DC. Use manual add and edit when the automation misses.
@@ -834,7 +946,7 @@ autoservice (command writes) ←  AutomationEngine   ←  Rules (Room DB)
 | Online TTS voices | MiniMax / fal.ai / Replicate / OpenRouter | text of the spoken reply | only if an online voice is chosen |
 | Map in trip details | OpenStreetMap tile servers (or Amap, if chosen in Settings) | coordinates of the visible map area | when the trip map or the places editor is opened |
 | Update check | GitHub API | nothing (fetches the release list, version comparison is local) | automatically |
-| ABRP live telemetry | abetterrouteplanner.com | SOC, power, speed, temperatures, odometer, tire pressure, charging status, battery capacity, SoH, kWh of the current charging session, car model (GPS is deliberately not sent) | only after entering a token |
+| ABRP live telemetry | abetterrouteplanner.com | SOC, power, speed, temperatures, odometer, tire pressure, charging status, battery capacity, SoH, kWh of the current charging session, car model (coordinates only with a separate toggle, for following the car from a phone) | only after entering a token |
 | Configuration copies to Telegram | api.telegram.org, your bot | the configuration archive with the chosen parts, and a message when the bot connects | only after connecting a bot |
 | Telemetry webhook | Settings → Integrations → Webhook | the same JSON as ABRP, POST to your URL every 1/8/30 s (driving/charging/parked); coordinates only with a separate toggle | off by default |
 
@@ -910,9 +1022,11 @@ In **Settings** you can change:
 
 ## Vehicle System
 
-**Settings → Service & Data → Car System** has two items that change the car's own behavior, not the app's.
+**Settings → Service & Data → Car System** has items that change the car's own behavior, not the app's.
 
 **Steering wheel volume knob.** A toggle that makes a press pause and resume playback instead of switching the audio source. Needed after a firmware update that made the press switch the source. Off by default.
+
+**BYD cloud over Wi-Fi.** Connects the car to the BYD cloud over Wi-Fi, so the BYD phone app sees the car, over-the-air updates arrive and the NFC key works. Cars on the new BYD servers need a Chinese VPN: the server only lets in connections from a Chinese address. A VPN on the router the car connects to is best, because it does not depend on the head unit. The other option is a VPN app on the head unit itself, for example [SpeedCN](https://speedcn.in/download); it works only while the head unit is on. Needs ADB. If the car has its own mobile data, the setting changes nothing; switching it off returns the previous connection settings.
 
 **Car interface language.** UI7 firmware only. The button opens BYD's hidden stock dialog with the full list of languages, including Russian, Ukrainian, and Polish. The firmware itself changes the language, the app writes nothing. For some owners, auto-parking stops working in Russian, then switch back to English with the same button.
 
@@ -996,6 +1110,8 @@ BYDMate can send live vehicle data to [A Better Route Planner](https://abetterro
 
 The feature is **optional**, off by default, and turned on by hand in Settings.
 
+ABRP version on the head unit: install 7.1.2 or older, for example from [APKMirror](https://www.apkmirror.com/apk/iternio-planning-ab/a-better-routeplanner-abrp/a-better-routeplanner-abrp-7-1-2-release/). In 7.1.4 and newer the car marker on the map moves in jumps or freezes. This is a bug in ABRP itself, BYDMate does not affect it.
+
 ### How to Get the Token
 
 ABRP uses a "Generic Live Data Token", a separate token for each car in the garage:
@@ -1021,7 +1137,7 @@ Only aggregated vehicle figures, no identifiers:
 
 - **SOC**: current traction battery percent
 - **Speed**: km/h
-- **Power**: current traction power (negative while charging, as Iternio requires)
+- **Power**: current traction power (negative while charging, as Iternio requires). On a hybrid the power is taken only from the battery voltage and current or from charging; if the car does not give them, the field is not sent.
 - **Voltage / current**: traction battery voltage and current
 - **HVAC setpoint**: the set climate temperature
 - **Battery / cabin / exterior temp**: battery, cabin, and outside temperatures
@@ -1034,7 +1150,7 @@ Only aggregated vehicle figures, no identifiers:
 
 ### What Is NOT Sent
 
-- **No GPS coordinates.** ABRP runs as a separate Android app right on DiLink and reads its own location from the OS. When coordinates also came from BYDMate, the car on ABRP's map jumped between the two sources, so since version 3.16 sending them has been removed entirely, along with the setting. The webhook still has its own coordinates toggle.
+- **No GPS coordinates by default.** ABRP runs as a separate Android app right on DiLink and reads its own location from the OS. When coordinates also come from BYDMate, the car on ABRP's map jumps between the two sources. The "Send coordinates to ABRP" setting is for one case: following the car in ABRP on a phone while ABRP in the car itself is not running. If ABRP is open in the car, leave it off.
 - Also not sent: VIN, device ID, trip history, routes, user settings.
 
 ### How ABRP Figures the Remaining Range
@@ -1067,6 +1183,8 @@ The same JSON that goes to ABRP can be POSTed to your own address: Home Assistan
 Fields and units follow the Iternio Telemetry API: `utc` in seconds, `power` in kW (as the car reports it), temperatures in °C, tire pressure in bar, `odometer` in km. Fields with no data (`speed` while parked, or `kwh_charged` outside a charging session, for example) are simply missing. Cadence: once a second while driving, every 8 seconds while charging, every 30 seconds while parked. The server's response is not read, only a 2xx status matters; after a failure the next attempt is 60 seconds later.
 
 The webhook works independently of ABRP: you can turn on just the webhook, just ABRP, or both.
+
+**Home Assistant.** The third-party integration [byd-leopard3-ha-integration](https://github.com/vasyl127/byd-leopard3-ha-integration) can receive this webhook and shows the car in Home Assistant. It is made by another author: we do not review or support its code, so please send questions about it to its author.
 
 ---
 
@@ -1123,6 +1241,7 @@ Common cases:
 - **[@klimuts](https://github.com/klimuts)**: pointed out the auto_container mechanism for projecting the navigator to the cluster
 - **@RBGboost**: reverse-engineered the factory HUD's SOME/IP protocol and built the original YandexHUD implementation. Yandex Navigator guidance on the head-up display in BYDMate is his code and his achievement. You can thank him on Telegram: [@RBGboost](https://t.me/RBGboost)
 - **[byd-turnsignal-cameraview](https://github.com/sunlixWhyNotAvailable/byd-turnsignal-cameraview)** by sunlixWhyNotAvailable: open research into the DiLink camera and window interfaces that the turn-signal blind-spot camera feature is built on. The BYDMate implementation is written from scratch, but this research saved weeks of reverse engineering, thank you!
+- **[denza-lab](https://github.com/xor777/denza-lab)** by xor777 (MIT licence): the way to read the car modules' fault codes and parse their answers. The manual scan in the "Diagnostics" card is built on his research and code.
 - **[danijar2000](https://github.com/danijar2000)**: fix for 2GIS's projection to the cluster (2GIS used to quit when its task moved to the cluster display)
 
 ---

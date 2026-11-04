@@ -178,8 +178,8 @@ object FidResolver {
     /**
      * Resolves [entries] against [catalog], probing the candidates through [probe].
      *
-     * Rules, in order: no symbol / symbol absent from the catalog / catalog value equal to
-     * the constant → constant, silently. A different value becomes a candidate, which is
+     * Rules, in order: a fixed fallback ([FidEntry.resolveFromCatalog] false) / no symbol /
+     * symbol absent from the catalog / catalog value equal to the constant → constant, silently. A different value becomes a candidate, which is
      * dropped when it collides with another entry's address (a fid that already means
      * something else here cannot also mean this), and otherwise has to answer the probe
      * with a value that is neither a sentinel nor outside its decoder's envelope.
@@ -193,6 +193,7 @@ object FidResolver {
         val constant = entries.associate { it.field to FidAddress(it.device, it.fid) }
         val candidates = LinkedHashMap<String, FidAddress>()
         for (entry in entries) {
+            if (!entry.resolveFromCatalog) continue
             val symbol = entry.symbol ?: continue
             val catalogFid = catalog.fidOf(symbol) ?: continue
             if (catalogFid == entry.fid) continue

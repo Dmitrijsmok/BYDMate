@@ -20,8 +20,11 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.bydmate.app.MainActivity
 import com.bydmate.app.cluster.ClusterEntryPoint
+import com.bydmate.app.data.camera.CameraStateMonitor
 import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.data.vehicle.HelperBootstrap
+import com.bydmate.app.diagnostics.Trace
+import com.bydmate.app.diagnostics.TraceArea
 import com.bydmate.app.service.TrackingService
 import com.bydmate.app.split.SplitOverlayController
 import com.bydmate.app.split.SplitSessionManager
@@ -31,6 +34,8 @@ import com.bydmate.app.ui.overlay.OverlayLifecycleOwner
 import com.bydmate.app.ui.overlay.OverlayNotificationManager
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
+import com.bydmate.app.data.nativestack.VehicleKind
+import com.bydmate.app.data.nativestack.VehicleKindMonitor
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import java.util.Locale
@@ -57,6 +62,79 @@ interface SplitWidgetEntryPoint {
     fun splitSessionManager(): SplitSessionManager
     fun splitOverlayController(): SplitOverlayController
     fun helperBootstrap(): HelperBootstrap
+    fun vehicleKindMonitor(): VehicleKindMonitor
+}
+
+/**
+ * DM-i hybrid (#184) inputs of the widget: the car type, the two fuel slots and the car's own
+ * range on battery, which replaces our SOC-based range on a hybrid.
+ */
+private data class WidgetHybrid(
+    val kind: VehicleKind = VehicleKind.UNKNOWN,
+    val fuelPercent: Int? = null,
+    val fuelRangeKm: Int? = null,
+    val evRangeKm: Int? = null,
+) {
+    fun rangeKm(estimatedRangeKm: Double?): Double? =
+        if (kind == VehicleKind.HYBRID) evRangeKm?.toDouble() else estimatedRangeKm
+
+    fun withData(data: com.bydmate.app.data.remote.DiParsData?): WidgetHybrid =
+        copy(fuelPercent = data?.fuelPercent, fuelRangeKm = data?.fuelRangeKm, evRangeKm = data?.evRangeKm)
+}
+
+/**
+ * A person's own split gesture: the widget's left tap or the split steering key. [WidgetController.runSplitTap]
+ * toggle; no saved pair opens the first-pair picker; errors go to the overlay, in the language
+ * of [context] (the caller passes a context localized to the app language).
+ */
+@Suppress("TooGenericExceptionCaught") // callers' scopes have no exception handler
+internal suspend fun toggleSplitByUser(context: Context, fromWidget: Boolean) {
+    try {
+        val ep = EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            SplitWidgetEntryPoint::class.java,
+        )
+        val manager = ep.splitSessionManager()
+        WidgetController.runSplitTap(
+            manager = manager,
+            onNoPair = { ep.splitOverlayController().showFirstPairPicker() },
+            onError = { res ->
+                OverlayNotificationManager.show(
+                    context.applicationContext,
+                    context.getString(res),
+                    "",
+                )
+            },
+            adbBlocked = {
+                // Only a daemon that is dead RIGHT NOW makes the recorded reason
+                // relevant: a later successful spawn leaves the old record in place
+                // for the dump, but isHealthy() then keeps it out of the UI.
+                val bootstrap = ep.helperBootstrap()
+                !bootstrap.isHealthy() && bootstrap.lastSpawnFailure()?.reason ==
+                    HelperBootstrap.SpawnFailReason.ADB_UNREACHABLE
+            },
+            alwaysStart = WidgetController.splitAlwaysStart(fromWidget, manager.isNativePanesFirmware()),
+        )
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("WidgetController", "split toggle failed (widget=$fromWidget): ${e.message}")
+    }
+}
+
+/** Car type through the split entry point; on failure the widget simply stays EV. */
+@Suppress("TooGenericExceptionCaught") // runs on the widget scope, which has no exception handler
+private suspend fun collectVehicleKind(appCtx: Context, onKind: (VehicleKind) -> Unit) {
+    try {
+        EntryPointAccessors.fromApplication(appCtx, SplitWidgetEntryPoint::class.java)
+            .vehicleKindMonitor()
+            .kind
+            .collect { onKind(it) }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("WidgetController", "vehicle kind subscription failed: ${e.message}")
+    }
 }
 
 /**
@@ -82,6 +160,7 @@ object WidgetController {
     private const val DOUBLE_TAP_MS = 250L
     private const val BUTTON_DP = WidgetButtonLayout.BUTTON_DP
     private const val GAP_DP = WidgetButtonLayout.GAP_DP
+    private const val SUPPRESSED_PREFIX = "suppressed:"
 
     @Volatile private var appForegrounded: Boolean = false
     @Volatile private var previewMode: Boolean = false
@@ -109,6 +188,9 @@ object WidgetController {
     private lateinit var prefsScaleFlow: kotlinx.coroutines.flow.Flow<Float>
     private lateinit var prefsHideOnYoutubeFlow: kotlinx.coroutines.flow.Flow<Boolean>
     private lateinit var prefsHideInAppsFlow: kotlinx.coroutines.flow.Flow<Set<String>>
+    private lateinit var prefsHomeOnlyFlow: kotlinx.coroutines.flow.Flow<Boolean>
+    // Launcher packages for the "only on the home screen" rule; null until resolved non-empty.
+    @Volatile private var resolvedHomePackages: Set<String>? = null
 
     // Compose state for the widget data
     private var socState = mutableStateOf<Int?>(null)
@@ -120,6 +202,7 @@ object WidgetController {
     private var insideTempState = mutableStateOf<Int?>(null)
     private var batTempState = mutableStateOf<Int?>(null)
     private var voltsState = mutableStateOf<Double?>(null)
+    private var hybridState = mutableStateOf(WidgetHybrid())
     private var alphaState = mutableStateOf(1.0f)
     private var scaleState = mutableStateOf(1.0f)
     private var trashActive = mutableStateOf(false)
@@ -160,6 +243,7 @@ object WidgetController {
         prefsScaleFlow = prefs.scaleFlow()
         prefsHideOnYoutubeFlow = prefs.hideOnYoutubeFlow()
         prefsHideInAppsFlow = prefs.hideInAppsFlow()
+        prefsHomeOnlyFlow = prefs.homeOnlyFlow()
         val metrics = viewCtx.resources.displayMetrics
 
         val initialScale = prefs.getScale()
@@ -201,9 +285,10 @@ object WidgetController {
             setViewTreeLifecycleOwner(lifecycleOwner)
             setViewTreeSavedStateRegistryOwner(lifecycleOwner)
             setContent {
+                val hybrid = hybridState.value
                 FloatingWidgetView(
                     soc = socState.value,
-                    rangeKm = rangeState.value,
+                    rangeKm = hybrid.rangeKm(rangeState.value),
                     consumption = consumptionState.value,
                     trend = trendState.value,
                     sessionStartedAt = sessionStartedAtState.value,
@@ -214,6 +299,9 @@ object WidgetController {
                     alpha = alphaState.value,
                     scaleFactor = scaleState.value,
                     listening = listeningState.value,
+                    kind = hybrid.kind,
+                    fuelPercent = hybrid.fuelPercent,
+                    fuelRangeKm = hybrid.fuelRangeKm,
                 )
             }
             setOnTouchListener(WidgetTouchListener(viewCtx, prefs, metrics))
@@ -273,6 +361,7 @@ object WidgetController {
         }
 
         Log.i(TAG, "widget: attached ($reason)")
+        Trace.event(TraceArea.WIDGET, "attach", "reason" to reason)
         startDataSubscription(appCtx)
     }
 
@@ -349,7 +438,10 @@ object WidgetController {
         expandedState.value = false
         listeningState.value = false
         wm = null
-        if (wasAttached) Log.i(TAG, "widget: detached ($reason)")
+        if (wasAttached) {
+            Log.i(TAG, "widget: detached ($reason)")
+            Trace.event(TraceArea.WIDGET, "detach", "reason" to reason)
+        }
     }
 
     private fun startDataSubscription(appCtx: Context) {
@@ -365,11 +457,14 @@ object WidgetController {
                 TrackingService.youtubeForeground,
                 prefsHideOnYoutubeFlow,
                 TrackingService.foregroundPackage,
-                prefsHideInAppsFlow,
-            ) { cam, yt, hideYt, fgPkg, hideApps -> hideReason(cam, yt, hideYt, fgPkg, hideApps) },
+                combine(prefsHideInAppsFlow, prefsHomeOnlyFlow, ::Pair),
+            ) { cam, yt, hideYt, fgPkg, (hideApps, homeOnly) ->
+                val home = if (homeOnly) homePackagesForWidget(appCtx) else emptySet()
+                hideReason(cam, yt, hideYt, fgPkg, hideApps, homeOnly, home)
+            },
             suppressReasons,
         ) { reason, reasons ->
-            reason ?: reasons.takeIf { it.isNotEmpty() }?.let { "suppressed:${it.joinToString(",")}" }
+            reason ?: reasons.takeIf { it.isNotEmpty() }?.let { SUPPRESSED_PREFIX + it.joinToString(",") }
         }
         // Stock combine(...) is typed only up to 5 flows — bundle consumption +
         // alpha + scale + hideOverlay into one UiBundle so we stay under the limit.
@@ -404,6 +499,7 @@ object WidgetController {
                 insideTempState.value = snap.data?.insideTemp
                 batTempState.value = snap.data?.avgBatTemp
                 voltsState.value = snap.data?.voltage12v
+                hybridState.value = hybridState.value.withData(snap.data)
                 sessionStartedAtState.value = snap.sessionStartedAt
                 tripDistanceKmState.value = snap.tripDistanceKm
                 consumptionState.value = snap.consumption.displayValue
@@ -421,6 +517,7 @@ object WidgetController {
                 if (reason != lastHideReason) {
                     if (reason != null) Log.i(TAG, "widget: hidden ($reason)")
                     else Log.i(TAG, "widget: shown (was $lastHideReason)")
+                    traceVisibility(reason, lastHideReason)
                     lastHideReason = reason
                 }
                 // Hide the entire root (panel + button layer) so the buttons
@@ -430,6 +527,8 @@ object WidgetController {
                 if (reason != null) hideTrashZone()
             }
         }
+
+        scope.launch { collectVehicleKind(appCtx) { hybridState.value = hybridState.value.copy(kind = it) } }
 
         // Voice-session listening indicator (Wave B): reuses the existing ClusterEntryPoint Hilt
         // bridge (already used by SteeringWheelKeyService) to reach the @Singleton VoiceController
@@ -725,22 +824,71 @@ object WidgetController {
     private val CAR_SETTINGS_PACKAGES = setOf("com.byd.carsettings")
 
     /**
+     * Packages that answer the HOME intent (the car's launcher differs per model, so it is never
+     * hardcoded), plus our own package: the widget never shows over BYDMate except in the settings
+     * preview, and the home-only rule must not take that preview away. Empty when nothing
+     * resolved, which keeps the widget visible; an empty result is retried on the next call.
+     */
+    internal fun homePackagesForWidget(context: Context): Set<String> {
+        resolvedHomePackages?.let { return it }
+        val found = queryHomePackages(context)
+        if (found.isEmpty()) {
+            Log.w(TAG, "home packages: none resolved, home-only rule keeps the widget visible")
+            return emptySet()
+        }
+        Log.i(TAG, "home packages: $found")
+        Trace.event(TraceArea.WIDGET, "home-packages", "pkgs" to found.joinToString(","))
+        return (found + context.packageName).also { resolvedHomePackages = it }
+    }
+
+    /** Raw HOME-intent query, no caching or tracing; also read by the diagnostics dump. */
+    fun queryHomePackages(context: Context): Set<String> = try {
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val all = context.packageManager.queryIntentActivities(intent, 0)
+        // AOSP Settings registers FallbackHome (priority -1000) as a HOME activity; it is not a
+        // launcher, so skip negative-priority entries unless nothing else is left.
+        (all.filter { it.priority >= 0 }.ifEmpty { all })
+            .mapNotNull { it.activityInfo?.packageName }
+            .toSet()
+    } catch (e: Exception) {
+        Log.w(TAG, "home packages: query failed: ${e.message}")
+        emptySet()
+    }
+
+    /**
      * Pure visibility decision, unit-tested: camera and car settings always hide, YouTube
      * only by opt-in, plus any package the user put on the "hide in these apps" list.
+     * With [homeOnly] on, any foreground app outside [homePackages] hides it too; an unknown
+     * foreground or an empty (unresolved) launcher set keeps it visible.
      * Returns the reason that fired, or null when the widget should stay visible.
      */
+    @Suppress("LongParameterList") // one flat input per visibility rule, so tests pin each one
     fun hideReason(
         cameraActive: Boolean,
         youtubeForeground: Boolean,
         hideOnYoutube: Boolean,
         foregroundPkg: String?,
         hideInApps: Set<String>,
+        homeOnly: Boolean = false,
+        homePackages: Set<String> = emptySet(),
     ): String? = when {
         cameraActive -> "camera"
         foregroundPkg != null && foregroundPkg in CAR_SETTINGS_PACKAGES -> "car_settings"
         youtubeForeground && hideOnYoutube -> "youtube"
         foregroundPkg != null && foregroundPkg in hideInApps -> "app:$foregroundPkg"
+        homeOnly && foregroundPkg != null && homePackages.isNotEmpty() &&
+            foregroundPkg !in homePackages -> "not_home:$foregroundPkg"
         else -> null
+    }
+
+    /** Trace event of a hide ([reason]) or show (was [previous]). Every reason but our own
+     *  overlays ("suppressed:...") follows from what took the screen, so the last screen change
+     *  is its cause. */
+    internal fun traceVisibility(reason: String?, previous: String?): Long {
+        val fromScreen = (reason ?: previous)?.startsWith(SUPPRESSED_PREFIX) == false
+        val cause = CameraStateMonitor.lastForegroundTraceId.takeIf { fromScreen }
+        return if (reason != null) Trace.event(TraceArea.WIDGET, "hide", "reason" to reason, by = cause)
+        else Trace.event(TraceArea.WIDGET, "show", "was" to previous, by = cause)
     }
 
     /** Boolean wrapper over [hideReason] for callers that only need the yes/no answer. */
@@ -801,6 +949,9 @@ object WidgetController {
             SplitStartResult.DISABLED -> onError(R.string.split_feature_disabled)
         }
     }
+
+    /** The UI7 always-start rule is the widget tap's only; the split key toggles everywhere (owner). */
+    internal fun splitAlwaysStart(fromWidget: Boolean, nativePanes: Boolean): Boolean = fromWidget && nativePanes
 
     // --- Touch handling ---
 
@@ -1011,37 +1162,7 @@ object WidgetController {
          * overlay. Error states are shown via [OverlayNotificationManager].
          */
         private fun launchSplit() {
-            dataScope?.launch {
-                try {
-                    val ep = EntryPointAccessors.fromApplication(
-                        context.applicationContext,
-                        SplitWidgetEntryPoint::class.java,
-                    )
-                    val manager = ep.splitSessionManager()
-                    runSplitTap(
-                        manager = manager,
-                        onNoPair = { ep.splitOverlayController().showFirstPairPicker() },
-                        onError = { res ->
-                            OverlayNotificationManager.show(
-                                context.applicationContext,
-                                context.getString(res),
-                                "",
-                            )
-                        },
-                        adbBlocked = {
-                            // Only a daemon that is dead RIGHT NOW makes the recorded reason
-                            // relevant: a later successful spawn leaves the old record in place
-                            // for the dump, but isHealthy() then keeps it out of the UI.
-                            val bootstrap = ep.helperBootstrap()
-                            !bootstrap.isHealthy() && bootstrap.lastSpawnFailure()?.reason ==
-                                HelperBootstrap.SpawnFailReason.ADB_UNREACHABLE
-                        },
-                        alwaysStart = manager.isNativePanesFirmware(),
-                    )
-                } catch (e: Exception) {
-                    Log.w(TAG, "launchSplit failed: ${e.message}")
-                }
-            }
+            dataScope?.launch { toggleSplitByUser(context, fromWidget = true) }
         }
     }
 }

@@ -42,6 +42,7 @@ class AgentToolsNavigateAppTest {
         every { it.willOpenMaps(any()) } answers {
             firstArg<JSONObject>().optString("app").trim().equals("maps", ignoreCase = true)
         }
+        every { it.willOpenPinned(any()) } returns null
     }
     private val places = mockk<PlaceRepository>(relaxed = true)
 
@@ -108,6 +109,35 @@ class AgentToolsNavigateAppTest {
             """{"query":"кафе","app":"MAPS"}""")).getString("app"))
         assertEquals("maps", JSONObject(payloadOf("show_point_on_map",
             """{"destination":"точка","lat":55.7,"lon":37.6,"app":"maps"}""")).getString("app"))
+    }
+
+    /** One command, one named app (fork A, app=waze/google_maps/dgis): the id reaches the payload. */
+    @Test fun `a named route app reaches the payload of all three tools`() = runTest {
+        assertEquals("waze", JSONObject(payloadOf("navigate_to",
+            """{"destination":"точка","lat":55.7,"lon":37.6,"app":"waze"}""")).getString("app"))
+        assertEquals("google_maps", JSONObject(payloadOf("search_on_map",
+            """{"query":"кафе","app":"Google_Maps"}""")).getString("app"))
+        assertEquals("dgis", JSONObject(payloadOf("show_point_on_map",
+            """{"destination":"точка","lat":55.7,"lon":37.6,"app":"dgis"}""")).getString("app"))
+        assertEquals("yandex", JSONObject(payloadOf("navigate_to",
+            """{"destination":"точка","lat":55.7,"lon":37.6,"app":"yandex"}""")).getString("app"))
+    }
+
+    @Test fun `an unknown app name stays the default path`() = runTest {
+        val payload = payloadOf("navigate_to", """{"destination":"точка","lat":55.7,"lon":37.6,"app":"2gis"}""")
+        assertFalse("an unknown app must not reach the payload: $payload", payload.contains("app"))
+    }
+
+    @Test fun `the app parameter lists every route app`() = runTest {
+        val schemas = tools.schemas(includeAutomationTools = false)
+        val navigate = (0 until schemas.length()).map { schemas.getJSONObject(it).getJSONObject("function") }
+            .single { it.getString("name") == "navigate_to" }
+        val enum = navigate.getJSONObject("parameters").getJSONObject("properties")
+            .getJSONObject("app").getJSONArray("enum")
+        assertEquals(
+            listOf("navigator", "yandex", "dgis", "maps", "waze", "google_maps"),
+            (0 until enum.length()).map { enum.getString(it) },
+        )
     }
 
     @Test fun `a saved place keeps the maps choice`() = runTest {

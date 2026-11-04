@@ -11,14 +11,20 @@ enum class ReportField(val id: String, val labelRes: Int, val descRes: Int) {
     LOCATION("location", R.string.tg_report_field_location, R.string.tg_report_field_location_desc),
     SOC("soc", R.string.tg_report_field_soc, R.string.tg_report_field_soc_desc),
     RANGE("range", R.string.tg_report_field_range, R.string.tg_report_field_range_desc),
+    ODOMETER("odometer", R.string.tg_report_field_odometer, R.string.tg_report_field_odometer_desc),
     TRIP("trip", R.string.tg_report_field_trip, R.string.tg_report_field_trip_desc),
+    TRIP_TIME("trip_time", R.string.tg_report_field_trip_time, R.string.tg_report_field_trip_time_desc),
+    TRIP_KWH("trip_kwh", R.string.tg_report_field_trip_kwh, R.string.tg_report_field_trip_kwh_desc),
+    TRIP_COST("trip_cost", R.string.tg_report_field_trip_cost, R.string.tg_report_field_trip_cost_desc),
+    TRIP1("trip1", R.string.dashboard_trip1_label, R.string.tg_report_field_trip1_desc),
+    TRIP2("trip2", R.string.dashboard_trip2_label, R.string.tg_report_field_trip2_desc),
     TEMPS("temps", R.string.tg_report_field_temps, R.string.tg_report_field_temps_desc),
     OPENINGS("openings", R.string.tg_report_field_openings, R.string.tg_report_field_openings_desc),
     TIRES("tires", R.string.tg_report_field_tires, R.string.tg_report_field_tires_desc);
 
     companion object {
         /** What a new action and the power-off report start with. */
-        val DEFAULT: Set<ReportField> = setOf(LOCATION, SOC, RANGE, TRIP)
+        val DEFAULT: Set<ReportField> = setOf(LOCATION, SOC, RANGE, ODOMETER, TRIP)
 
         fun fromId(id: String): ReportField? = entries.firstOrNull { it.id == id }
 

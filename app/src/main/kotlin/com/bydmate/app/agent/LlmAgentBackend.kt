@@ -3,6 +3,8 @@ package com.bydmate.app.agent
 import android.util.Log
 import com.bydmate.app.data.remote.LlmHttpException
 import com.bydmate.app.data.remote.OpenRouterClient
+import com.bydmate.app.diagnostics.Trace
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import javax.inject.Inject
@@ -109,16 +111,24 @@ class LlmAgentBackend @Inject constructor(
         tools: JSONArray?,
         onDelta: ((String) -> Unit)?,
         withExtras: Boolean,
-    ): Result<AgentReply> = (
-        if (onDelta != null) client.chatStream(
-            conn.baseUrl, conn.apiKey, conn.model, wire, tools,
-            if (withExtras) providerExtras(conn, streaming = true) else null, onDelta,
-        )
-        else client.chatRaw(
-            conn.baseUrl, conn.apiKey, conn.model, wire, tools,
-            if (withExtras) providerExtras(conn, streaming = false) else null,
-        )
-    ).map { parseReply(it) }
+    ): Result<AgentReply> {
+        val startMs = nowMs()
+        return (
+            if (onDelta != null) client.chatStream(
+                conn.baseUrl, conn.apiKey, conn.model, wire, tools,
+                if (withExtras) providerExtras(conn, streaming = true) else null, onDelta,
+            )
+            else client.chatRaw(
+                conn.baseUrl, conn.apiKey, conn.model, wire, tools,
+                if (withExtras) providerExtras(conn, streaming = false) else null,
+            )
+        ).map { parseReply(it) }.also { result ->
+            val tookMs = nowMs() - startMs
+            if (result.isFailure || tookMs > Trace.SLOW_CALL_MS) {
+                Trace.call("llm", conn.baseUrl.toHttpUrlOrNull()?.host ?: conn.id, tookMs, result.exceptionOrNull())
+            }
+        }
+    }
 
     private fun rejectedExtras(conn: LlmConnection, result: Result<AgentReply>, streaming: Boolean): Boolean {
         val e = result.exceptionOrNull()
@@ -131,11 +141,14 @@ class LlmAgentBackend @Inject constructor(
         else -> false
     }
 
-    private fun userMessage(e: Throwable?): String = when {
-        e is LlmHttpException && (e.code == 401 || e.code == 403) ->
-            "Ключ подключения не подходит, проверь настройки"
-        e is LlmHttpException && e.code == 429 -> "Лимит запросов исчерпан, попробуй позже"
-        e is LlmHttpException && e.code >= 500 -> "Сервер модели недоступен, попробуй позже"
+    // Not an HTTP error (network, malformed body) maps to code 0 and lands in the generic text.
+    private fun userMessage(e: Throwable?): String = when ((e as? LlmHttpException)?.code ?: 0) {
+        401, 403 -> "Ключ подключения не подходит, проверь настройки"
+        429 -> "Лимит запросов исчерпан, попробуй позже"
+        in 500..Int.MAX_VALUE -> "Сервер модели недоступен, попробуй позже"
+        402 -> "У провайдера модели закончились средства: пополни баланс или лимит ключа"
+        404 -> "Провайдер не нашёл модель или она не работает с инструментами, выбери другую в настройках"
+        400 -> "Провайдер отклонил запрос: проверь название модели в настройках или выбери другую"
         else -> "Нет связи с сервером, скажи простую команду"
     }
 

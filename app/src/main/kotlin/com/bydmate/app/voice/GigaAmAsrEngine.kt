@@ -1,5 +1,8 @@
 package com.bydmate.app.voice
 
+import android.util.Log
+import com.bydmate.app.diagnostics.Trace
+import com.bydmate.app.diagnostics.TraceArea
 import com.k2fsa.sherpa.onnx.FeatureConfig
 import com.k2fsa.sherpa.onnx.OfflineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineNemoEncDecCtcModelConfig
@@ -10,7 +13,7 @@ import com.k2fsa.sherpa.onnx.Vad
 import com.k2fsa.sherpa.onnx.VadModelConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import java.util.ArrayDeque
+import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -30,6 +33,7 @@ internal interface VadHandle {
     fun empty(): Boolean
     /** Oldest queued speech segment's samples; caller must pop() after consuming it. */
     fun front(): FloatArray
+    fun frontWithStart(): Pair<Long, FloatArray> = 0L to front()
     fun pop()
     fun close()
 }
@@ -82,69 +86,28 @@ private class RealVadHandle(modelManager: GigaAmModelManager) : VadHandle {
     override fun isSpeechDetected(): Boolean = vad.isSpeechDetected()
     override fun empty(): Boolean = vad.empty()
     override fun front(): FloatArray = vad.front().samples
+    override fun frontWithStart(): Pair<Long, FloatArray> = vad.front().let { it.start.toLong() to it.samples }
     override fun pop() = vad.pop()
     override fun close() = vad.release()
-}
-
-/** Rolling raw PCM context from just before Silero declares speech. */
-private class SpeechPreRoll(private val maxSamples: Int) {
-    private val chunks = ArrayDeque<FloatArray>()
-    private var sampleCount = 0
-
-    fun append(frame: FloatArray) {
-        chunks.addLast(frame)
-        sampleCount += frame.size
-        trim()
-    }
-
-    fun take(): FloatArray {
-        if (sampleCount == 0) return FloatArray(0)
-        val out = FloatArray(sampleCount)
-        var offset = 0
-        for (chunk in chunks) {
-            chunk.copyInto(out, offset)
-            offset += chunk.size
-        }
-        chunks.clear()
-        sampleCount = 0
-        return out
-    }
-
-    private fun trim() {
-        while (sampleCount > maxSamples && chunks.isNotEmpty()) {
-            val first = chunks.removeFirst()
-            val excess = sampleCount - maxSamples
-            if (excess < first.size) {
-                val kept = first.copyOfRange(excess, first.size)
-                chunks.addFirst(kept)
-                sampleCount -= excess
-                return
-            }
-            sampleCount -= first.size
-        }
-    }
-}
-
-private fun prependPrefix(prefix: FloatArray, segment: FloatArray): FloatArray {
-    if (prefix.isEmpty()) return segment
-    return FloatArray(prefix.size + segment.size).also { merged ->
-        prefix.copyInto(merged, 0)
-        segment.copyInto(merged, prefix.size)
-    }
 }
 
 /** GigaAM v3 Russian nemo-CTC recognizer segmented by a silero VAD, for the continuous voice
  *  session. The recognizer is cached across sessions (see cachedRecognizer below) since
  *  constructing it loads the model from disk; the VAD stays per-collection, created and
  *  released in transcribe()'s finally block, so neither cancellation nor a second collect can
- *  leak or clobber a VAD handle. */
-@Suppress("TooManyFunctions")
-internal class GigaAmAsrEngine(
+ *  leak or clobber a VAD handle. With [warmVad] (Android 10 head units) that per-collection VAD
+ *  is built ahead of the session instead of on its path, see spareVad. */
+internal class GigaAmAsrEngine @Suppress("LongParameterList") constructor(
     private val modelManager: GigaAmModelManager,
     private val recognizerFactory: () -> RecognizerHandle = { RealRecognizerHandle(modelManager) },
     private val vadFactory: () -> VadHandle = { RealVadHandle(modelManager) },
     private val loadGuard: AsrLoadGuard? = null,
-    private val dilink3Optimizations: Boolean = false,
+    private val warmVad: Boolean = false,
+    // Test seam: where the next spare VAD gets built.
+    private val prewarmExecutor: Executor = Executor { task ->
+        thread(name = "gigaam-vad-prewarm", isDaemon = true) { task.run() }
+    },
+    private val preRollMs: Int = 0,
 ) : ContinuousAsr {
 
     // A tripped guard means the last loads aborted the whole process from native code
@@ -157,15 +120,19 @@ internal class GigaAmAsrEngine(
     // first listened words (field defect APK 337). The VAD stays per-collection: it is cheap and
     // stateful, so a fresh instance per session is the safe reset.
     @Volatile private var cachedRecognizer: RecognizerHandle? = null
-    // Keep one UNUSED VAD hot. A live session takes ownership of the spare and a
-    // replacement is prepared in the background for the next PTT.
-    @Volatile private var cachedVad: VadHandle? = null
-    private val vadWarmupInFlight = AtomicBoolean(false)
+
+    // warmVad only: one VAD built ahead and not used yet (PR #261, DiLink 3.0 ATTO 3: building it
+    // after the start cue swallowed the first words). A session takes it and owns it from then on
+    // (closed in its finally), and the next one is built in the background. Written under this
+    // engine's monitor; volatile so isWarm() reads it from the main thread without the monitor,
+    // which a recognizer load can hold for seconds.
+    @Volatile private var spareVad: VadHandle? = null
+    private val spareInFlight = AtomicBoolean(false)
 
     override fun isWarm(): Boolean =
-        if (dilink3Optimizations) cachedRecognizer != null && cachedVad != null else isReady()
+        if (warmVad) isReady() && cachedRecognizer != null && spareVad != null else isReady()
 
-    override fun requiresWarmBeforeListening(): Boolean = dilink3Optimizations
+    override fun requiresWarmBeforeListening(): Boolean = warmVad
 
     /** Drop the cached recognizer so the next session reloads the model from disk. Called when
      *  the model files change (re-download). The old handle is NOT closed here: an in-flight
@@ -174,23 +141,25 @@ internal class GigaAmAsrEngine(
      *
      *  Not wired to a call site yet: GigaAmModelManager (the re-download/delete owner) has no
      *  reference to this engine, and re-download is a rare, manual user action after which the
-     *  driver restarts the app anyway -- building that wiring now would be speculative (YAGNI). */
+     *  driver restarts the app anyway -- building that wiring now would be speculative (YAGNI).
+     *  The spare VAD, unused by definition, is closed. */
     internal fun invalidateCachedRecognizer() {
         cachedRecognizer = null
         synchronized(this) {
-            runCatching { cachedVad?.close() }
-            cachedVad = null
+            spareVad?.let { runCatching { it.close() } }
+            spareVad = null
         }
     }
 
-    /** Pre-build both native pieces used before pcm.collect starts. Without the VAD spare the
-     *  mic flow is subscribed only after the Silero constructor returns, which can swallow the
-     *  first spoken words on DiLink 3. */
+    /** Pre-builds the cached recognizer (~1.3 s cold load of the 226 MiB model) so the first
+     *  PTT's transcribe() starts the mic immediately instead of after model load (field defect:
+     *  first words swallowed on the first session after app start). With [warmVad] also the
+     *  spare VAD. */
     @Synchronized
     override fun warmUp() {
         if (!isReady()) return
-        val recognizerReady = runCatching { obtainRecognizer() }.isSuccess
-        if (dilink3Optimizations && recognizerReady) runCatching { ensureCachedVad() }
+        val recognizer = runCatching { obtainRecognizer() }
+        if (warmVad && recognizer.isSuccess && spareVad == null) runCatching { spareVad = buildVad() }
     }
 
     /** Single synchronized build point for the shared recognizer: warmUp() and transcribe()
@@ -208,36 +177,34 @@ internal class GigaAmAsrEngine(
             handle.also { cachedRecognizer = it }
         }
 
+    // Same crash-loop bracket as the recognizer: the silero VAD is a native .onnx load
+    // too, and a corrupt file aborts the process the same way. Separate artifact key so
+    // a successful recognizer load can't wipe the VAD's crash evidence.
     private fun buildVad(): VadHandle {
         loadGuard?.noteLoadBegin(AsrLoadGuard.ARTIFACT_VAD)
-        val handle = vadFactory()
+        val vad = vadFactory()
         loadGuard?.noteLoadSuccess(AsrLoadGuard.ARTIFACT_VAD)
-        return handle
+        return vad
     }
 
+    /** Hands the spare VAD to the calling session, which owns (and closes) it from now on. */
     @Synchronized
-    private fun ensureCachedVad(): VadHandle =
-        cachedVad ?: buildVad().also { cachedVad = it }
+    private fun takeSpareVad(): VadHandle? = spareVad.also { spareVad = null }
 
-    @Synchronized
-    private fun takeVad(): VadHandle {
-        val ready = cachedVad
-        if (ready != null) {
-            cachedVad = null
-            return ready
-        }
-        return buildVad()
-    }
-
+    /** Builds the next spare off the session's path. One build at a time; a failure only leaves
+     *  the next session building its own VAD, as on other cars. */
     private fun prewarmNextVad() {
-        if (!isReady() || cachedVad != null || !vadWarmupInFlight.compareAndSet(false, true)) return
-        thread(name = "gigaam-vad-prewarm", isDaemon = true) {
+        if (!spareInFlight.compareAndSet(false, true)) return
+        prewarmExecutor.execute {
             try {
                 synchronized(this@GigaAmAsrEngine) {
-                    if (cachedVad == null && isReady()) cachedVad = buildVad()
+                    if (spareVad == null && isReady()) {
+                        runCatching { spareVad = buildVad() }
+                            .onFailure { Log.w(TAG, "spare vad build failed", it) }
+                    }
                 }
             } finally {
-                vadWarmupInFlight.set(false)
+                spareInFlight.set(false)
             }
         }
     }
@@ -253,48 +220,43 @@ internal class GigaAmAsrEngine(
         // call site into this engine, so the old unsynchronized check-then-act could have
         // double-loaded the model and orphaned one handle.
         val recognizer = obtainRecognizer()
-        val vad = if (dilink3Optimizations) {
-            // DiLink3: take the already-built fresh VAD so PCM collection starts immediately,
-            // then prepare another unused instance while this session is running.
-            takeVad().also { prewarmNextVad() }
-        } else {
-            // Upstream 3.19 behavior for every other platform.
-            buildVad()
-        }
+        val vadStartNs = System.nanoTime()
+        val spare = if (warmVad) takeSpareVad() else null
+        val vad = spare ?: buildVad()   // recognizer is cached -- no paired close needed on this throw path
         try {
+            // One line per session on every car: how long the session waited for its VAD, so a
+            // normal drive shows whether newer head units need the spare too. Milliseconds only.
+            val vadMs = (System.nanoTime() - vadStartNs) / NANOS_PER_MS
+            Log.i(TAG, "vad ready: ms=$vadMs prebuilt=${spare != null}")
+            Trace.event(TraceArea.VOICE, "vad-ready", "ms" to vadMs, "prebuilt" to (spare != null))
+            if (warmVad) prewarmNextVad()
             var speaking = false
             var silentMs = 0L
-            val preRoll = if (dilink3Optimizations) SpeechPreRoll(VAD_PRE_ROLL_SAMPLES) else null
-            var utterancePrefix = FloatArray(0)
-
+            val preRoll = if (preRollMs > 0) SpeechPreRoll(preRollMs * SAMPLE_RATE / 1000) else null
             pcm.collect { shorts ->
                 val frame = FloatArray(shorts.size) { i -> shorts[i] / 32768f }
                 vad.acceptWaveform(frame)
-                val speechDetected = vad.isSpeechDetected()
-
-                if (speechDetected) {
+                preRoll?.append(frame)
+                if (vad.isSpeechDetected()) {
                     if (!speaking) {
+                        preRoll?.speechStart()
                         speaking = true
                         silentMs = 0L
-                        utterancePrefix = preRoll?.take() ?: FloatArray(0)
                         emit(ContinuousAsrEvent.SpeechStart)
                     }
                 } else {
-                    if (!speaking) preRoll?.append(frame)
                     silentMs += (shorts.size * 1000L) / SAMPLE_RATE
                     emit(ContinuousAsrEvent.SilenceTick(silentMs))
                 }
-
                 while (!vad.empty()) {
-                    val rawSegment = vad.front()
+                    val segment = if (preRoll == null) vad.front() else {
+                        val (start, samples) = vad.frontWithStart()
+                        preRoll.finish(start, samples)
+                    }
                     vad.pop()
                     speaking = false
-                    val segment = prependPrefix(utterancePrefix, rawSegment)
-                    utterancePrefix = FloatArray(0)
                     val text = recognizer.decode(segment)
-                    if (text.isNotBlank()) {
-                        emit(ContinuousAsrEvent.Utterance(text, segment.size * 1000L / SAMPLE_RATE))
-                    }
+                    if (text.isNotBlank()) emit(ContinuousAsrEvent.Utterance(text))
                 }
             }
         } finally {
@@ -304,15 +266,13 @@ internal class GigaAmAsrEngine(
 
     companion object {
         const val SAMPLE_RATE = 16000
+        // Recorded by LogRecorder: the VAD line belongs to the voice session's story.
+        private const val TAG = "VoiceController"
+        private const val NANOS_PER_MS = 1_000_000L
 
         // Silero VAD tuning against field defect APK 335: default threshold=0.5 clipped soft
         // speech onsets ("лышишь меня"); default minSilenceDuration=0.25s split phrases
         // mid-sentence ("в том это где").
-        // Preserve 400 ms of audio immediately before Silero declares speech. This protects
-        // soft initial syllables in a noisy cabin without lowering the VAD threshold globally.
-        internal const val VAD_PRE_ROLL_MS = 400
-        internal const val VAD_PRE_ROLL_SAMPLES = SAMPLE_RATE * VAD_PRE_ROLL_MS / 1000
-
         internal const val VAD_THRESHOLD = 0.4f
         internal const val VAD_MIN_SILENCE_SEC = 0.8f
         internal const val VAD_MIN_SPEECH_SEC = 0.25f

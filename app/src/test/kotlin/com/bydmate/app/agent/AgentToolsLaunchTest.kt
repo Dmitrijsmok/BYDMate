@@ -1,6 +1,7 @@
 package com.bydmate.app.agent
 
 import android.content.Context
+import android.content.SharedPreferences
 import com.bydmate.app.cluster.ClusterMode
 import com.bydmate.app.cluster.ClusterVoiceControl
 import com.bydmate.app.data.automation.ActionDispatcher
@@ -39,6 +40,7 @@ class AgentToolsLaunchTest {
     private val tripDao = mockk<TripDao>()
     private val chargeDao = mockk<ChargeDao>()
     private val dispatcher = mockk<ActionDispatcher>(relaxed = true)
+        .also { io.mockk.every { it.willOpenPinned(any()) } returns null }
     private val ruleDao = mockk<RuleDao>()
     private val engine = mockk<AutomationEngine>()
     private val places = mockk<PlaceRepository>()
@@ -122,6 +124,19 @@ class AgentToolsLaunchTest {
         val out = JSONObject(tools().execute(AgentToolCall("1", "go_home", "{}")))
         assertTrue(out.getBoolean("ok"))
         assertEquals("go_home", captured.captured.kind)
+    }
+
+    // end_conversation is offered to the model and only reports ok: the voice session closes itself.
+    @Test fun end_conversation_is_in_the_schemas_and_returns_ok() = runTest {
+        coEvery { ruleDao.getEnabled() } returns emptyList()
+        coEvery { settingsRepository.getString(SettingsRepository.KEY_EXA_API_KEY, "") } returns ""
+        val schemas = tools().schemas()
+        val names = (0 until schemas.length())
+            .map { schemas.getJSONObject(it).getJSONObject("function").getString("name") }
+        assertTrue("end_conversation" in names)
+        val out = JSONObject(tools().execute(AgentToolCall("1", "end_conversation", "{}")))
+        assertTrue(out.getBoolean("ok"))
+        coVerify(exactly = 0) { dispatcher.dispatch(any(), any()) }
     }
 
     // (f) dispatcher failure -> Russian error JSON.
@@ -238,6 +253,110 @@ class AgentToolsLaunchTest {
         assertEquals("app_launch", captured.captured.kind)
         val payload = JSONObject(captured.captured.payload!!)
         assertEquals("ru.yandex.yandexnavi", payload.getString("packageName"))
+    }
+
+    // --- #334: "навигатор" follows «Навигатор для маршрутов» ---
+
+    private fun chooseNavigator(value: String) {
+        val prefs = mockk<SharedPreferences>()
+        every { prefs.getString("route_navigator", null) } returns value
+        every { context.getSharedPreferences("voice", Context.MODE_PRIVATE) } returns prefs
+    }
+
+    private val navigatorFixture = launcherFixture + listOf(
+        "Waze" to "com.waze",
+        "2ГИС" to "ru.dublgis.dgismobile",
+        "Яндекс Карты" to "ru.yandex.yandexmaps",
+    )
+
+    private suspend fun launchedPackage(name: String, apps: List<Pair<String, String>>): String {
+        val captured = slot<ActionDef>()
+        coEvery { dispatcher.dispatch(capture(captured), any()) } returns DispatchResult(true)
+        val t = tools().apply { launcherAppsProvider = { apps } }
+        val out = JSONObject(t.execute(AgentToolCall("1", "launch_app", """{"name":"$name"}""")))
+        assertTrue(out.toString(), out.getBoolean("ok"))
+        return JSONObject(captured.captured.payload!!).getString("packageName")
+    }
+
+    // Fails today: the alias is hardcoded to ru.yandex.yandexnavi.
+    @Test fun launch_app_navigator_opens_waze_when_waze_is_chosen() = runTest {
+        chooseNavigator("waze")
+        assertEquals("com.waze", launchedPackage("навигатор", navigatorFixture))
+    }
+
+    // Fails today for the same reason.
+    @Test fun launch_app_navigator_opens_2gis_when_2gis_is_chosen() = runTest {
+        chooseNavigator("dgis")
+        assertEquals("ru.dublgis.dgismobile", launchedPackage("навигатор", navigatorFixture))
+    }
+
+    @Test fun launch_app_navigator_opens_yandex_maps_when_maps_is_chosen() = runTest {
+        chooseNavigator("maps")
+        assertEquals("ru.yandex.yandexmaps", launchedPackage("навигатор", navigatorFixture))
+    }
+
+    // Guard: the chosen app is not installed -> Yandex Navigator, like routes do.
+    @Test fun launch_app_navigator_falls_back_to_yandex_when_chosen_app_is_missing() = runTest {
+        chooseNavigator("waze")
+        assertEquals("ru.yandex.yandexnavi", launchedPackage("навигатор", launcherFixture))
+    }
+
+    // A vendor build of the chosen app under its own package is found by its launcher label.
+    @Test fun launch_app_navigator_finds_a_vendor_build_by_its_label() = runTest {
+        chooseNavigator("waze")
+        assertEquals("com.vendor.navi.w", launchedPackage("навигатор", launcherFixture + ("Waze" to "com.vendor.navi.w")))
+    }
+
+    // The manual package from settings goes first, as routes use it.
+    @Test fun launch_app_navigator_prefers_the_manual_package() = runTest {
+        val prefs = mockk<SharedPreferences>()
+        every { prefs.getString("route_navigator", null) } returns "waze"
+        every { prefs.getString("route_navigator_package", null) } returns "com.vendor.waze"
+        every { context.getSharedPreferences("voice", Context.MODE_PRIVATE) } returns prefs
+        assertEquals("com.vendor.waze",
+            launchedPackage("навигатор", navigatorFixture + ("Waze Vendor" to "com.vendor.waze")))
+    }
+
+    // Guard: the explicit name keeps meaning Yandex whatever is chosen.
+    @Test fun launch_app_yandex_navigator_name_stays_yandex_when_waze_is_chosen() = runTest {
+        chooseNavigator("waze")
+        assertEquals("ru.yandex.yandexnavi", launchedPackage("яндекс навигатор", navigatorFixture))
+    }
+
+    // Requirement: an explicit Google Maps opens Google Maps, not the Waze chosen in settings.
+    // Its Russian launcher label is a bare «Карты», so a label match alone never found it.
+    @Test fun launch_app_google_maps_opens_google_maps_when_waze_is_chosen() = runTest {
+        chooseNavigator("waze")
+        val apps = navigatorFixture + ("Карты" to "com.google.android.apps.maps")
+        assertEquals("com.google.android.apps.maps", launchedPackage("Google Maps", apps))
+        assertEquals("com.google.android.apps.maps", launchedPackage("гугл карты", apps))
+    }
+
+    // Fork e62d92f3: the ReVanced (MicroG) build answers to the Google Maps name.
+    @Test fun launch_app_alias_google_maps_revanced_resolves_package() = runTest {
+        assertEquals("app.revanced.android.apps.maps",
+            launchedPackage("Google Maps", listOf("Maps" to "app.revanced.android.apps.maps")))
+    }
+
+    // Requirement: an explicit Waze opens Waze whatever is chosen.
+    @Test fun launch_app_waze_opens_waze_when_yandex_is_chosen() = runTest {
+        chooseNavigator("yandex")
+        assertEquals("com.waze", launchedPackage("вейз", navigatorFixture))
+    }
+
+    // «навигация» is the chosen app too (fork 64da6949).
+    @Test fun launch_app_navigation_follows_the_chosen_app() = runTest {
+        chooseNavigator("dgis")
+        assertEquals("ru.dublgis.dgismobile", launchedPackage("навигация", navigatorFixture))
+    }
+
+    // A named app that is missing is not replaced by the Navigator or by Google Maps' «Карты».
+    @Test fun launch_app_yandex_maps_name_never_opens_google_maps() = runTest {
+        val t = tools().apply { launcherAppsProvider = { listOf("Карты" to "com.google.android.apps.maps") } }
+        val out = JSONObject(t.execute(AgentToolCall("1", "launch_app", """{"name":"яндекс карты"}""")))
+        assertFalse(out.has("ok"))
+        assertTrue(out.getString("error").contains("приложение не найдено"))
+        coVerify(exactly = 0) { dispatcher.dispatch(any(), any()) }
     }
 
     // (b) partial unambiguous match -> launches Settings.
@@ -364,6 +483,67 @@ class AgentToolsLaunchTest {
         assertTrue(out.getBoolean("ok"))
         val payload = JSONObject(captured.captured.payload!!)
         assertEquals("com.byd.mediacenter", payload.getString("packageName"))
+    }
+
+    // --- the app table shared with Alice (AliceAppCatalog): fork a6918f26, f8465e49 ---
+
+    // Fork f8465e49: the Russian spaced name opens TikTok.
+    @Test fun launch_app_alias_tiktok_resolves_russian_spaced_name() = runTest {
+        assertEquals("com.zhiliaoapp.musically",
+            launchedPackage("тик ток", listOf("TikTok" to "com.zhiliaoapp.musically")))
+    }
+
+    // A Cyrillic name finds a build under another package by its Latin launcher label.
+    @Test fun launch_app_cyrillic_tiktok_finds_the_latin_label() = runTest {
+        assertEquals("com.example.tiktok.lite",
+            launchedPackage("тикток", launcherFixture + ("TikTok Lite" to "com.example.tiktok.lite")))
+    }
+
+    // Fork a6918f26: the RVX and ReVanced YouTube builds answer to «ютуб».
+    @Test fun launch_app_youtube_opens_the_rvx_build() = runTest {
+        assertEquals("app.rvx.android.youtube",
+            launchedPackage("ютуб", launcherFixture + ("YouTube RVX" to "app.rvx.android.youtube")))
+        assertEquals("app.revanced.android.youtube",
+            launchedPackage("youtube", listOf("YouTube ReVanced" to "app.revanced.android.youtube")))
+    }
+
+    // A patched YouTube under a vendor package is found by its package token.
+    @Test fun launch_app_youtube_finds_a_vendor_build_by_package() = runTest {
+        assertEquals("com.vendor.youtube.patched",
+            launchedPackage("ютуб", listOf("Видео" to "com.vendor.youtube.patched")))
+    }
+
+    // «хром» is Chrome, not the browser the catalog prefers for «браузер».
+    @Test fun launch_app_chrome_is_chrome() = runTest {
+        val apps = listOf("Яндекс Браузер" to "com.yandex.browser", "Chrome" to "com.android.chrome")
+        assertEquals("com.android.chrome", launchedPackage("хром", apps))
+        assertEquals("com.yandex.browser", launchedPackage("браузер", apps))
+    }
+
+    @Test fun open_settings_dispatches_the_section() = runTest {
+        val captured = slot<ActionDef>()
+        coEvery { dispatcher.dispatch(capture(captured), any()) } returns DispatchResult(true)
+        val out = JSONObject(tools().execute(AgentToolCall("1", "open_settings", """{"section":"wifi"}""")))
+        assertTrue(out.getBoolean("ok"))
+        assertEquals("system_settings", captured.captured.kind)
+        assertEquals("wifi", JSONObject(captured.captured.payload!!).getString("section"))
+    }
+
+    @Test fun open_settings_refuses_a_section_outside_the_allowlist() = runTest {
+        val out = JSONObject(tools().execute(AgentToolCall("1", "open_settings", """{"section":"developer"}""")))
+        assertTrue(out.getString("error").contains("неизвестный раздел"))
+        coVerify(exactly = 0) { dispatcher.dispatch(any(), any()) }
+    }
+
+    // A settings name given to launch_app opens the screen, not a launcher search (fork a6918f26).
+    @Test fun launch_app_settings_names_open_the_settings_screen() = runTest {
+        val captured = mutableListOf<ActionDef>()
+        coEvery { dispatcher.dispatch(capture(captured), any()) } returns DispatchResult(true)
+        val t = tools().apply { launcherAppsProvider = { launcherFixture } }
+        t.execute(AgentToolCall("1", "launch_app", """{"name":"настройки машины"}"""))
+        t.execute(AgentToolCall("2", "launch_app", """{"name":"настройки bluetooth"}"""))
+        assertEquals(listOf("system_settings", "system_settings"), captured.map { it.kind })
+        assertEquals(listOf("car", "bluetooth"), captured.map { JSONObject(it.payload!!).getString("section") })
     }
 
     // --- set_cluster_projection ---

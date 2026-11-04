@@ -13,12 +13,34 @@ import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import com.bydmate.app.data.autoservice.AdbRestorePreferencesImpl
 import com.bydmate.app.data.autoservice.WifiDebuggingDialogAutoAllow
-import com.bydmate.app.media.KnobPlayPause
 import com.bydmate.app.data.repository.SettingsRepository
+import com.bydmate.app.diagnostics.Trace
+import com.bydmate.app.diagnostics.TraceArea
+import com.bydmate.app.media.KnobPlayPause
 import com.bydmate.app.navdata.NavA11yFeed
 import com.bydmate.app.service.TrackingService
+import com.bydmate.app.ui.widget.toggleSplitByUser
+import com.bydmate.app.util.appLocalizedContext
 import dagger.hilt.android.EntryPointAccessors
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
+
+/**
+ * False for a key that types text (digits, letters, punctuation, numpad): the a11y filter also
+ * sees a hardware keyboard, and typed text must never reach the always-on trace journal.
+ */
+fun isTraceableKey(keyCode: Int): Boolean =
+    keyCode !in 7..18 &&   // KEYCODE_0..KEYCODE_9, KEYCODE_STAR, KEYCODE_POUND
+        keyCode !in 29..77 && // KEYCODE_A..KEYCODE_Z, KEYCODE_COMMA..KEYCODE_AT (SPACE, ENTER, DEL, TAB)
+        keyCode !in 144..163 && // KEYCODE_NUMPAD_0..KEYCODE_NUMPAD_RIGHT_PAREN
+        keyCode !in TEXT_KEYS_OUTSIDE_RANGES
+
+/** KEYCODE_PLUS, KEYCODE_YEN, KEYCODE_RO: text keys that sit outside the blocks above. */
+private val TEXT_KEYS_OUTSIDE_RANGES = setOf(81, 216, 217)
 
 /**
  * Steering-wheel key filter for cluster projection. When the settings master switch
@@ -55,10 +77,15 @@ internal fun voicePressRoute(
     else -> VoicePressRoute.LOCAL
 }
 
-@Suppress("TooManyFunctions") // Voice scheduling belongs to the key-event lifecycle; keep it cohesive.
+@Suppress("TooManyFunctions") // the service callbacks, key handling and the Navigator window lookups
 class SteeringWheelKeyService : AccessibilityService() {
 
     private var cachedEntryPoint: ClusterEntryPoint? = null
+    // Start of the companion window of the key in capturedKey (isLearnCompanion, learnWindowAnchor).
+    private var learnCaptureAtMs = 0L
+    // The split key's toggle runs here; the start itself runs in SplitSessionManager's own scope.
+    private val keyScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val splitKeyGuard = SplitKeyBusyGuard()
     private var lastLocalVoiceDownMs = 0L
     private var lastLocalVoiceKeyCode = -1
     private val voiceHandler = Handler(Looper.getMainLooper())
@@ -85,6 +112,10 @@ class SteeringWheelKeyService : AccessibilityService() {
         instance = this
         isConnected = true
         Log.d(TAG, "connected; filtering steering-wheel keys")
+        // Streak before markBound resets it: > 0 means this bind follows our own force-stop recovery.
+        Trace.event(TraceArea.APP, "a11y-connected",
+            "streak" to prefs.getInt(com.bydmate.app.service.A11yRecoveryGate.KEY_FAIL_STREAK, 0),
+            "service_running" to TrackingService.isRunning.value)
         com.bydmate.app.service.A11yRecoveryGate.markBound(prefs)  // ends the Android 10 recovery streak
         // Android 10 (DiLink 3.0/4.0) a11y recovery: the daemon force-stops our package and the
         // framework re-binds this service, which brings the process back without TrackingService.
@@ -92,7 +123,7 @@ class SteeringWheelKeyService : AccessibilityService() {
         // (startForegroundService on a running service is a no-op); gated so DiLink 5.x is untouched.
         if (android.os.Build.VERSION.SDK_INT <= 29 && !TrackingService.isRunning.value) {
             try {
-                TrackingService.start(this)
+                TrackingService.start(this, com.bydmate.app.service.AutostartTrace.TRIGGER_A11Y)
                 Log.i(TAG, "a11y connected with TrackingService stopped: started it")
             } catch (e: Exception) {
                 Log.w(TAG, "a11y connected: TrackingService start failed: ${e.message}")
@@ -102,26 +133,17 @@ class SteeringWheelKeyService : AccessibilityService() {
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
         val isDown = event.action == KeyEvent.ACTION_DOWN
+        val firstDown = isDown && event.repeatCount == 0
+        if (firstDown) keyCounters.onPress(event.keyCode)
         val identity = event.keyCode to event.deviceId
         if (!learnVoiceCompanions && identity in learningDown) {
             if (event.action == KeyEvent.ACTION_UP) learningDown.remove(identity)
             return true
         }
+        // The Local/Alice voice-button dialogs learn through their own path (device-bound, full
+        // press including companions); every other learn dialog uses learnVerdict.
         if (learnVoiceCompanions) learnVoiceKey(event)?.let { return it }
-        if (learnMode) {
-            return when (learnDecision(event.keyCode, isDown)) {
-                LearnAction.CAPTURE -> {
-                    capturedKey.value = CaptureResult(event.keyCode, assignable = true)
-                    learnMode = false  // got it; dialog moves to the confirm step
-                    true
-                }
-                LearnAction.REJECT -> {
-                    capturedKey.value = CaptureResult(event.keyCode, assignable = false)
-                    true  // stay in learn mode; dialog shows "can't assign", waits for another key
-                }
-                LearnAction.CONSUME -> true
-            }
-        }
+        else learnVerdict(event, isDown)?.let { return it }
         handleVoiceKey(event, isDown)?.let { return it }
         // Volume-knob press: runs before the star decision, own switch, default off. The key is
         // consumed whenever the feature is on — even when no MediaSession answers — because the
@@ -131,7 +153,7 @@ class SteeringWheelKeyService : AccessibilityService() {
         when (knobDecision(event.keyCode, isDown, knobEnabled)) {
             KnobDecision.CONSUME_AND_PLAY_PAUSE -> {
                 KnobPlayPause.dispatch(applicationContext)
-                return true
+                return traced(event, "play_pause")
             }
             KnobDecision.CONSUME -> return true
             KnobDecision.PASS_THROUGH -> {}
@@ -142,25 +164,103 @@ class SteeringWheelKeyService : AccessibilityService() {
             StarDecision.CONSUME_AND_TOGGLE -> {
                 val ep = entryPoint()
                 ClusterProjectionManager.toggle(applicationContext, ep.helperClient(), ep.helperBootstrap())
-                true
+                traced(event, "cluster_toggle")
             }
             StarDecision.CONSUME -> true
-            // Automation rules bound to a key run LAST: projection, voice and the knob keep
-            // priority over a user assignment, and the settings UI warns about occupied keys.
-            StarDecision.PASS_THROUGH -> when (
+            // Automation rules bound to a key run LAST: projection, voice, the knob and the split
+            // key keep priority over a user assignment, and the settings UI warns about occupied keys.
+            StarDecision.PASS_THROUGH -> splitKeyVerdict(event, isDown) ?: when (
                 steeringKeyDecision(event.keyCode, isDown, TrackingService.steeringKeyAssigned(event.keyCode))
             ) {
                 SteeringKeyDecision.FIRE -> {
-                    TrackingService.fireSteeringKey(event.keyCode) { matched ->
-                        Log.d(TAG, "steering key ${event.keyCode}: $matched rule(s)")
+                    if (firstDown) keyCounters.onMatched()
+                    // The rules it runs trace their own lines, linked to this press by by=#id.
+                    val keyId = traceId(event, "automation")
+                    TrackingService.fireSteeringKey(event.keyCode, keyId) { matched ->
+                        Log.i(TAG, "steering key ${event.keyCode}: $matched rule(s)")
                     }
                     true
                 }
                 SteeringKeyDecision.CONSUME -> true
-                SteeringKeyDecision.PASS_THROUGH -> false
+                // Counted, not traced: the volume keys alone wrote hundreds of lines a day.
+                SteeringKeyDecision.PASS_THROUGH -> {
+                    if (firstDown) keyCounters.onPassed()
+                    false
+                }
             }
         }
     }
+
+    /** The split key: after voice, knob and projection, before the automation rules. Null = not it. */
+    private fun splitKeyVerdict(event: KeyEvent, isDown: Boolean): Boolean? {
+        val split = entryPoint().splitPreferences()
+        return when (splitKeyDecision(event.keyCode, isDown, event.repeatCount,
+            split.isFeatureEnabled(), split.getSteeringKeyCode(), split.getSteeringKeyCompanions())) {
+            SplitKeyDecision.TOGGLE -> {
+                val keyCode = event.keyCode
+                keyScope.launch {
+                    // A press while the previous start/exit still runs would decide on a stale state.
+                    val ran = splitKeyGuard.runIfIdle {
+                        toggleSplitByUser(applicationContext.appLocalizedContext(), fromWidget = false)
+                    }
+                    if (!ran) Log.i(TAG, "split key $keyCode: ignored, previous toggle still running")
+                }
+                traced(event, "split_toggle")
+            }
+            SplitKeyDecision.CONSUME -> true
+            SplitKeyDecision.PASS_THROUGH -> null
+        }
+    }
+
+    /** Learn mode and the companion window right after a capture; null when the key is not part
+     *  of learning and the normal filter decides. */
+    private fun learnVerdict(event: KeyEvent, isDown: Boolean): Boolean? {
+        // A second keycode of the press just learned joins the capture and is swallowed. Checked
+        // before learn mode: the dialog may have re-armed it already (occupied key), and the
+        // companion must not become a capture of its own.
+        // The capture lives in capturedKey, which the dialog clears on "again" and on closing:
+        // outside the dialog there is no window and nothing is swallowed.
+        val capture = capturedKey.value?.takeIf { it.assignable }
+        if (capture != null) {
+            if (isLearnCompanion(event.keyCode, isDown, capture.keyCode, learnCaptureAtMs, event.eventTime)) {
+                capturedKey.value = capture.copy(companions = capture.companions + event.keyCode)
+                return traced(event, "learn_companion")
+            }
+            learnCaptureAtMs = learnWindowAnchor(event.keyCode, capture.keyCode, learnCaptureAtMs, event.eventTime)
+        }
+        if (!learnMode) return null
+        return when (learnDecision(event.keyCode, isDown)) {
+            LearnAction.CAPTURE -> {
+                val result = CaptureResult(event.keyCode, assignable = true)
+                capturedKey.value = result
+                learnCaptureAtMs = event.eventTime
+                learnMode = false  // got it; dialog moves to the confirm step
+                traced(event, "learn")
+            }
+            LearnAction.REJECT -> {
+                capturedKey.value = CaptureResult(event.keyCode, assignable = false)
+                // stay in learn mode; dialog shows "can't assign", waits for another key
+                traced(event, "learn_rejected")
+            }
+            LearnAction.CONSUME -> true
+        }
+    }
+
+    /** Trace of a key press and what it did, once per press: only the first DOWN is written, so
+     *  UP edges and auto-repeats (a held key, the volume knob) stay out of the journal, and keys that
+     *  type text never are. Returns true: every traced key is consumed. */
+    private fun traced(event: KeyEvent, action: String): Boolean {
+        traceId(event, action)
+        return true
+    }
+
+    /** [traced] that returns the event id (0 when nothing was written), for the rules a key fires. */
+    private fun traceId(event: KeyEvent, action: String): Long =
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && isTraceableKey(event.keyCode)) {
+            Trace.event(TraceArea.USER, "key", "code" to event.keyCode, "action" to action)
+        } else {
+            0L
+        }
 
     private fun learnVoiceKey(event: KeyEvent): Boolean? {
         val isDown = event.action == KeyEvent.ACTION_DOWN
@@ -180,7 +280,7 @@ class SteeringWheelKeyService : AccessibilityService() {
             return true
         }
         if (capture != null && event.repeatCount == 0 &&
-            isLearnCompanion(event.keyCode, isDown, capture.keyCode, capture.atMs, event.eventTime)
+            isVoiceLearnCompanion(event.keyCode, isDown, capture.keyCode, capture.atMs, event.eventTime)
         ) {
             learningDown.add(identity)
             capturedKey.value = capture.copy(companions = capture.companions + event.keyCode)
@@ -273,7 +373,7 @@ class SteeringWheelKeyService : AccessibilityService() {
                 entryPoint().voiceController().onPttPressed()
             }
         }
-        return true
+        return traced(event, if (alice) "voice_alice" else "voice")
     }
 
     private fun handleVoiceDecision(
@@ -305,9 +405,11 @@ class SteeringWheelKeyService : AccessibilityService() {
                 }
                 VoicePressRoute.NONE -> Unit
             }
-            true
+            traced(event, "voice")
         }
-        VoiceKeyDecision.CONSUME -> true
+        // Swallow the matching key's UP edge too, otherwise it falls through to the native BYD
+        // assistant, which owns the same hardware keycode. A DOWN consumed here is a companion.
+        VoiceKeyDecision.CONSUME -> traced(event, "voice_companion")
         VoiceKeyDecision.IGNORE -> null
     }
 
@@ -344,12 +446,7 @@ class SteeringWheelKeyService : AccessibilityService() {
             if (active.packageName?.toString() in com.bydmate.app.navdata.NavPackages.GUIDANCE_SOURCES) return active
             @Suppress("DEPRECATION") runCatching { active.recycle() }
         }
-        val windowList = runCatching {
-            if (android.os.Build.VERSION.SDK_INT >= 30) {
-                val byDisplay = windowsOnAllDisplays
-                (0 until byDisplay.size()).flatMap { byDisplay.valueAt(it) }
-            } else windows
-        }.getOrNull() ?: return null
+        val windowList = allWindows() ?: return null
         for (window in windowList) {
             val root = runCatching { window.root }.getOrNull() ?: continue
             if (root.packageName?.toString() in com.bydmate.app.navdata.NavPackages.GUIDANCE_SOURCES) return root
@@ -357,6 +454,26 @@ class SteeringWheelKeyService : AccessibilityService() {
         }
         return null
     }
+
+    /** Roots of every window on all displays that belongs to the Navigator, for the no-guidance
+     *  log; null when the window list cannot be read. Caller must recycle every returned node. */
+    fun navigatorWindowRoots(): List<android.view.accessibility.AccessibilityNodeInfo>? {
+        val windowList = allWindows() ?: return null
+        return windowList.mapNotNull { window ->
+            val root = runCatching { window.root }.getOrNull() ?: return@mapNotNull null
+            val pkg = runCatching { root.packageName?.toString() }.getOrNull()
+            if (pkg in com.bydmate.app.navdata.NavPackages.GUIDANCE_SOURCES) return@mapNotNull root
+            @Suppress("DEPRECATION") runCatching { root.recycle() }
+            null
+        }
+    }
+
+    private fun allWindows(): List<android.view.accessibility.AccessibilityWindowInfo>? = runCatching {
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            val byDisplay = windowsOnAllDisplays
+            (0 until byDisplay.size()).flatMap { byDisplay.valueAt(it) }
+        } else windows
+    }.getOrNull()
 
     // Single volatile read when the HUD feature is off - see NavA11yFeed.enabled.
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -381,7 +498,8 @@ class SteeringWheelKeyService : AccessibilityService() {
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val pkg = event.packageName?.toString()
             if (pkg != null && ForegroundHintFilter.allows(this, event, pkg)) {
-                entryPoint().cameraStateMonitor().onForegroundHint(pkg)
+                entryPoint().cameraStateMonitor().onForegroundHint(
+                    pkg, event.className?.toString(), ForegroundHintFilter.eventDisplayId(event))
             }
             // Preserve upstream 3.19 Android 10 ADB restore handling.
             if (WifiDebuggingDialogAutoAllow.isDialog(event.packageName, event.className)) {
@@ -393,6 +511,8 @@ class SteeringWheelKeyService : AccessibilityService() {
 
     override fun onInterrupt() { /* no-op */ }
 
+    // The framework letting go of the service is the other half of a11y-connected: without it a
+    // dump showing a11y_connected=false next to an enabled setting has no moment to point at (#262).
     override fun onUnbind(intent: Intent?): Boolean {
         cancelPendingLocalVoice()
         aliceLauncher.localHandoff.cancel()
@@ -402,7 +522,8 @@ class SteeringWheelKeyService : AccessibilityService() {
         lastLocalVoiceKeyCode = -1
         instance = null
         isConnected = false
-        Log.d(TAG, "unbound; star key filter inactive")
+        Log.i(TAG, "unbound; star key filter inactive")
+        Trace.event(TraceArea.APP, "a11y-unbound")
         return super.onUnbind(intent)
     }
 
@@ -412,6 +533,8 @@ class SteeringWheelKeyService : AccessibilityService() {
         aliceLauncher.destroy()
         instance = null
         isConnected = false
+        keyScope.cancel()
+        Trace.event(TraceArea.APP, "a11y-destroyed")
         super.onDestroy()
     }
 
@@ -442,7 +565,9 @@ class SteeringWheelKeyService : AccessibilityService() {
         @Volatile
         var learnMode: Boolean = false
 
-        /** Result of a learn-mode key press; the settings dialog (same process) collects this. */
+        /** Result of a learn-mode key press; the settings dialog (same process) collects this.
+         *  [companions]: other keycodes the same press sent (see isLearnCompanion). [deviceId],
+         *  [atMs] and [primaryReleased] are used by the Local/Alice voice-button learn path. */
         data class CaptureResult(
             val keyCode: Int,
             val assignable: Boolean,
@@ -457,5 +582,8 @@ class SteeringWheelKeyService : AccessibilityService() {
 
         /** Last captured key while learning; null = nothing captured yet. */
         val capturedKey = MutableStateFlow<CaptureResult?>(null)
+
+        /** Process-wide key counters, for the steering key dump section and the end snapshot. */
+        val keyCounters = KeyCounters()
     }
 }

@@ -8,12 +8,14 @@ import android.media.PlaybackParams
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
+import com.bydmate.app.platform.LegacyHeadUnit
 import com.bydmate.app.voice.online.TtsRouter
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsSupertonicModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -559,10 +561,14 @@ class SherpaTtsEngine(
         private val pendingSynth = AtomicInteger(0)
         @Volatile private var finishRequested = false
         @Volatile private var pcmQueued = false
+        // Completed by playbackLoop() once the reply drained (or was superseded).
+        private val played = CompletableDeferred<Unit>()
 
         init {
             playbackWorker.execute { playbackLoop() }
         }
+
+        override suspend fun awaitPlayed() = played.await()
 
         @Suppress("CyclomaticComplexMethod", "ComplexCondition")
         override fun enqueue(text: String): Boolean {
@@ -690,6 +696,7 @@ class SherpaTtsEngine(
                     pendingTarget = null
                     _speaking.value = false
                 }
+                played.complete(Unit)
             }
         }
     }
@@ -772,24 +779,15 @@ class SherpaTtsEngine(
         // BYD DiLink routes STREAM_BTTS(17) to the UI "Voice" volume slider (live-validated on
         // Leopard 3, 2026-07-05). setLegacyStreamType is the only public way to target a custom
         // stream; if this firmware rejects it (exception or uninitialized track), fall back to
-        // the previous accessibility route, which has an independent volume.
+        // the previous accessibility route, which has an independent volume. Android 10 head
+        // units use the navigation stream and usage instead (see BYD_STREAM_NAVI).
         var viaFallback = false
-        val result = if (shouldUseBydVoiceStream(Build.FINGERPRINT.orEmpty())) {
-            createTrackWithFallback(
-                primary = { newTrack(bydVoiceAttributes(), format, bufLen).takeIfInitialized() },
-                fallback = { viaFallback = true; newTrack(accessibilityAttributes(), format, bufLen) },
-            )
-        } else {
-            Log.i(TAG, "DiLink3 detected: routing local TTS to BYD STREAM_NAVI=$BYD_STREAM_NAVI")
-            createTrackWithFallback(
-                primary = { newTrack(dilink3VoiceAttributes(BYD_STREAM_NAVI), format, bufLen).takeIfInitialized() },
-                fallback = {
-                    viaFallback = true
-                    Log.w(TAG, "BYD STREAM_NAVI=$BYD_STREAM_NAVI rejected; falling back to Android NAVIGATION_GUIDANCE")
-                    newTrack(androidNavigationAttributes(), format, bufLen)
-                },
-            )
-        }
+        val stream = primaryStreamType(LegacyHeadUnit.isAndroid10)
+        val usage = fallbackUsage(LegacyHeadUnit.isAndroid10)
+        val result = createTrackWithFallback(
+            primary = { newTrack(streamAttributes(stream), format, bufLen).takeIfInitialized() },
+            fallback = { viaFallback = true; newTrack(speechAttributes(usage), format, bufLen) },
+        )
         if (result.state != AudioTrack.STATE_INITIALIZED) {
             Log.w(TAG, "audio track bad state")
             runCatching { result.release() }
@@ -806,7 +804,8 @@ class SherpaTtsEngine(
             val applied = runCatching { result.setStartThresholdInFrames(requested) }.getOrNull()
             Log.i(TAG, "start threshold: requested=$requested applied=$applied")
         }
-        Log.i(TAG, "track created: rate=$sampleRate state=${result.state} viaFallback=$viaFallback")
+        val route = if (viaFallback) "usage=$usage" else "stream=$stream"
+        Log.i(TAG, "track created: rate=$sampleRate state=${result.state} $route viaFallback=$viaFallback")
         return result
     }
 
@@ -818,24 +817,13 @@ class SherpaTtsEngine(
         if (state == AudioTrack.STATE_INITIALIZED) this
         else { runCatching { release() }; null }
 
-    private fun bydVoiceAttributes(): AudioAttributes =
-        AudioAttributes.Builder().setLegacyStreamType(BYD_STREAM_BTTS).build()
+    private fun streamAttributes(stream: Int): AudioAttributes =
+        AudioAttributes.Builder().setLegacyStreamType(stream).build()
 
-    private fun accessibilityAttributes(): AudioAttributes = AudioAttributes.Builder()
+    private fun speechAttributes(usage: Int): AudioAttributes = AudioAttributes.Builder()
         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-        .setUsage(TTS_USAGE)
+        .setUsage(usage)
         .build()
-
-    private fun dilink3VoiceAttributes(streamType: Int): AudioAttributes =
-        AudioAttributes.Builder()
-            .setLegacyStreamType(streamType)
-            .build()
-
-    private fun androidNavigationAttributes(): AudioAttributes =
-        AudioAttributes.Builder()
-            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-            .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
-            .build()
 
     // Not private: awaitDrain is a pure poll loop exercised directly by SherpaTtsEngineTest
     // (no real AudioTrack/JNI needed) to pin the barge-in-frees-the-worker-promptly behaviour.
@@ -848,12 +836,17 @@ class SherpaTtsEngine(
         internal val TTS_USAGE = AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY
         // BYD custom stream behind the DiLink UI "Voice" volume slider.
         internal const val BYD_STREAM_BTTS = 17
+        // Navigation stream: the assistant's voice on Android 10 head units (PR #261), where the
+        // speech followed the music volume; this one has a volume of its own.
         internal const val BYD_STREAM_NAVI = 14
 
-        /** DiLink 3 / ATTO 3 does not expose a usable BYD BTTS stream 17. */
-        internal fun shouldUseBydVoiceStream(fingerprint: String): Boolean =
-            !fingerprint.contains("DiLink3", ignoreCase = true)
+        /** The legacy stream the assistant's track asks for first. */
+        internal fun primaryStreamType(legacyHeadUnit: Boolean): Int =
+            if (legacyHeadUnit) BYD_STREAM_NAVI else BYD_STREAM_BTTS
 
+        /** The usage of the fallback track when the firmware rejects [primaryStreamType]. */
+        internal fun fallbackUsage(legacyHeadUnit: Boolean): Int =
+            if (legacyHeadUnit) AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE else TTS_USAGE
 
         // The track buffer holds this many seconds of audio so a whole sentence's blocking write
         // returns while the sentence is still playing -- the worker then synthesizes the NEXT

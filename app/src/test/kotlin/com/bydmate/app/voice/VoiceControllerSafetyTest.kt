@@ -120,7 +120,7 @@ class VoiceControllerSafetyTest {
         every { gate.ttsEnabled() } returns ttsEnabled
 
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any(), any<() -> Any?>()) } returns flow { /* empty — completes immediately */ }
+        every { audioCapture.captureSession(any(), any<(ShortArray) -> Any?>()) } returns flow { /* empty — completes immediately */ }
 
         val earcon = mockk<VoiceEarcon>(relaxed = true)
 
@@ -154,7 +154,7 @@ class VoiceControllerSafetyTest {
         every { gate.ttsEnabled() } returns false
 
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any(), any<() -> Any?>()) } returns flow { /* empty — completes immediately */ }
+        every { audioCapture.captureSession(any(), any<(ShortArray) -> Any?>()) } returns flow { /* empty — completes immediately */ }
 
         val earcon = mockk<VoiceEarcon>(relaxed = true)
 
@@ -315,7 +315,7 @@ class VoiceControllerSafetyTest {
      * automationResolver → AutomationEngine.fireVoiceRule called; built-in
      * param-dispatch (ActionDispatcher.dispatch) is NOT called.
      *
-     * Uses "навигатор" — a phrase NluParser does not recognize as a built-in command.
+     * Uses "расскажи анекдот" — a phrase NluParser does not recognize as a built-in command.
      */
     @Test
     fun `unrecognized builtin but matched automation fires the rule`() {
@@ -327,7 +327,7 @@ class VoiceControllerSafetyTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         Thread.sleep(300)
         // Built-in param-path must NOT be called when automation resolver handles it.
         coVerify(exactly = 0) { dispatcher.dispatch(match { it.kind == "param" }, any()) }
@@ -563,7 +563,7 @@ class VoiceControllerSafetyTest {
         every { gate.ttsEnabled() } returns false
 
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any(), any<() -> Any?>()) } returns flow { /* empty — completes immediately */ }
+        every { audioCapture.captureSession(any(), any<(ShortArray) -> Any?>()) } returns flow { /* empty — completes immediately */ }
 
         val earcon = mockk<VoiceEarcon>(relaxed = true)
         val automationEngine = mockk<AutomationEngine>(relaxed = true)
@@ -614,7 +614,7 @@ class VoiceControllerSafetyTest {
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
         val automationEngine = mockk<AutomationEngine>(relaxed = true)
         coEvery { automationEngine.fireVoiceRule(any(), any()) } returns VoiceFireResult.Fired(true)
-        val recognizedPhrase = "навигатор"
+        val recognizedPhrase = "расскажи анекдот"
 
         val gate = mockk<VoiceGate>()
         every { gate.isEnabled() } returns true
@@ -622,7 +622,7 @@ class VoiceControllerSafetyTest {
         every { gate.ttsEnabled() } returns false
 
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any(), any<() -> Any?>()) } returns flow { /* empty */ }
+        every { audioCapture.captureSession(any(), any<(ShortArray) -> Any?>()) } returns flow { /* empty */ }
 
         val earcon = mockk<VoiceEarcon>(relaxed = true)
 
@@ -693,7 +693,7 @@ class VoiceControllerSafetyTest {
         every { gate.ttsEnabled() } returns false
 
         val audioCapture = mockk<AudioCapture>(relaxed = true)
-        every { audioCapture.captureSession(any(), any<() -> Any?>()) } returns flow { /* empty */ }
+        every { audioCapture.captureSession(any(), any<(ShortArray) -> Any?>()) } returns flow { /* empty */ }
 
         val earcon = mockk<VoiceEarcon>(relaxed = true)
 
@@ -717,14 +717,14 @@ class VoiceControllerSafetyTest {
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
         awaitSubscribed(fakeAsr.events)
-        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("навигатор"))
+        fakeAsr.events.tryEmit(ContinuousAsrEvent.Utterance("расскажи анекдот"))
         Thread.sleep(500)
 
         val entry = journal.entries.value.first()
         assertEquals(VoiceJournalEntry.Route.AUTOMATION, entry.route)
         assertEquals(VoiceRefusal.RULE_NOT_FOUND, entry.refusal)
         assertEquals(VoiceJournalEntry.Outcome.NOT_UNDERSTOOD, entry.outcome)
-        assertEquals(VoiceUiState.NotUnderstood("навигатор"), controller.state.value)
+        assertEquals(VoiceUiState.NotUnderstood("расскажи анекдот"), controller.state.value)
     }
 
     @Test fun `relative warmer with null acTemp shows the block orb dialog exactly once`() {

@@ -7,7 +7,13 @@ import com.bydmate.app.data.backup.TelegramBackupSink
 import com.bydmate.app.data.backup.TelegramSinkException
 import com.bydmate.app.data.backup.TgBackupConfig
 import com.bydmate.app.data.local.dao.TripDao
+import com.bydmate.app.data.nativestack.VehicleKind
+import com.bydmate.app.data.nativestack.VehicleKindMonitor
 import com.bydmate.app.data.repository.SettingsRepository
+import com.bydmate.app.data.trips.TripCounterMath
+import com.bydmate.app.data.trips.TripCounterResets
+import com.bydmate.app.data.trips.TripCounterUi
+import com.bydmate.app.domain.cost.CostCalculator
 import com.bydmate.app.service.TrackingService
 import com.bydmate.app.util.AppStrings
 import com.bydmate.app.util.appLanguageTag
@@ -20,6 +26,7 @@ import org.json.JSONException
 import org.json.JSONObject
 import java.util.Calendar
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -59,14 +66,18 @@ data class PowerOffReport(
  * or the coordinates, since users post their logs in public issues.
  */
 @Singleton
-@Suppress("TooManyFunctions") // send, outbox on disk and the dump, kept in one place
+// Send, outbox on disk and the dump, kept in one place; Hilt-injected dependencies.
+@Suppress("TooManyFunctions", "LongParameterList")
 class TelegramReporter @Inject constructor(
     @ApplicationContext private val context: Context,
     private val sink: TelegramBackupSink,
     private val settings: SettingsRepository,
     private val tripDao: TripDao,
+    private val tripCounterResets: TripCounterResets,
     private val appStrings: AppStrings,
     private val offState: PowerOffArmState,
+    private val costCalculator: CostCalculator,
+    private val vehicleKindMonitor: VehicleKindMonitor? = null,
 ) {
     companion object {
         private const val TAG = "TgReport"
@@ -75,6 +86,7 @@ class TelegramReporter @Inject constructor(
         const val LATE_MARK_AFTER_MS = 2 * 60_000L
         private const val PARSE_MODE = "HTML"
         private const val RECENT_TRIPS = 5
+        private const val FUEL_CACHE_TTL_MS = 60_000L
     }
 
     sealed interface SendResult {
@@ -94,6 +106,14 @@ class TelegramReporter @Inject constructor(
     @Suppress("SpreadOperator") // at most three format arguments per string
     private val strings = ReportStrings { id, args -> appStrings.get(id, *args) }
     private val outboxMutex = Mutex()
+
+    /**
+     * [counterFuel] per counter, keyed by (reset ts, trip count) and kept [FUEL_CACHE_TTL_MS]: the
+     * power-off report is rebuilt every ~10 s, and litres can land on a trip already counted.
+     */
+    private data class FuelKey(val resetTs: Long, val tripCount: Int)
+    private data class FuelEntry(val key: FuelKey, val readAtMs: Long, val totals: FuelTotals?)
+    private val fuelCache = ConcurrentHashMap<Int, FuelEntry>()
 
     /**
      * Bumped by every [drainOutbox] call. [deliver] reads it before sending: if it moved while the
@@ -129,7 +149,10 @@ class TelegramReporter @Inject constructor(
         if (!config.configured || chatId == null) return null
         val header = TelegramReportBuilder.powerOffHeader(strings)
         val fields = settings.getTgReportOffFields()
-        val report = TelegramReportBuilder.build(header, "", fields, inputs(), language(), strings, clock())
+        val report = TelegramReportBuilder.build(
+            header, "", fields, inputs(), language(), strings, clock(),
+            tripEndLabel = TelegramReportBuilder.TIME_PLACEHOLDER,
+        )
         previous?.takeIf { it.token == config.token && it.chatId == chatId && it.text == report.text }
             ?.let { return it }
         val id = newId()
@@ -160,8 +183,8 @@ class TelegramReporter @Inject constructor(
                 }
                 val now = clock()
                 val late = entry.lateMark && now - entry.createdMs > LATE_MARK_AFTER_MS
-                val text = if (late) entry.text + "\n" + lateMark(entry.createdMs, now) else entry.text
-                val result = sink.sendMessage(config.token, entry.chatId, text, PARSE_MODE)
+                val text = if (late) TelegramReportBuilder.withLateMark(entry.text, lateMark(entry.createdMs, now)) else entry.text
+                val result = sink.sendMessage(config.token, entry.chatId, text, PARSE_MODE, linkPreview = false)
                 val failure = result.exceptionOrNull()
                 val ageS = (now - entry.createdMs) / 1000
                 when {
@@ -179,6 +202,8 @@ class TelegramReporter @Inject constructor(
                     }
                 }
                 saveOutbox(queue)
+                // Only once the report is off the disk: a point cut short never sends it again.
+                if (failure == null) sendPoint(entry.id, config.token, entry.chatId, text)
             }
         }
     }
@@ -224,10 +249,11 @@ class TelegramReporter @Inject constructor(
 
     private suspend fun deliver(id: String, config: TgBackupConfig, chatId: Long, text: String, builtAtMs: Long): SendResult {
         val generationBeforeSend = drainGeneration.get()
-        val failure = sink.sendMessage(config.token, chatId, text, PARSE_MODE).exceptionOrNull()
+        val failure = sink.sendMessage(config.token, chatId, text, PARSE_MODE, linkPreview = false).exceptionOrNull()
         return when {
             failure == null -> {
                 Log.i(TAG, "send id=$id rc=ok")
+                sendPoint(id, config.token, chatId, text)
                 drainOutbox("after_send")
                 SendResult.Sent
             }
@@ -244,6 +270,17 @@ class TelegramReporter @Inject constructor(
                 SendResult.Failed(errorKey(failure))
             }
         }
+    }
+
+    /**
+     * The native location under a report Telegram took, from the report's own map link: one attempt,
+     * never queued. Its failure is one log line; the report itself stays delivered.
+     */
+    private suspend fun sendPoint(id: String, token: String, chatId: Long, text: String) {
+        val point = TelegramReportBuilder.mapPoint(text) ?: return
+        val failure = sink.sendLocation(token, chatId, point.latitude, point.longitude).exceptionOrNull()
+        if (failure == null) Log.i(TAG, "location id=$id rc=ok")
+        else Log.w(TAG, "location id=$id rc=${errorKey(failure)}")
     }
 
     /** [BuiltReport] plus the moment it describes the car: what [deliver] stamps an outbox entry with. */
@@ -335,6 +372,11 @@ class TelegramReporter @Inject constructor(
             LiveTrip(km, TrackingService.tripKwhConsumed.value, startedAt)
         } else null
         val lastTrip = tripDao.getRecent(RECENT_TRIPS).first().firstOrNull { (it.distanceKm ?: 0.0) > 0.0 }
+        tripCounterResets.load()
+        val tariff = costCalculator.tripRateAt(startedAt ?: clock())
+        val hybrid = vehicleKindMonitor?.kind?.value == VehicleKind.HYBRID
+        val trip1 = tripCounter(1, tariff)
+        val trip2 = tripCounter(2, tariff)
         return ReportInputs(
             data = TrackingService.lastData.value,
             rangeKm = TrackingService.lastRangeKm.value,
@@ -342,6 +384,41 @@ class TelegramReporter @Inject constructor(
             longitude = location?.longitude,
             liveTrip = live,
             lastTrip = lastTrip,
+            trip1 = trip1,
+            trip2 = trip2,
+            hybrid = hybrid,
+            trip1Fuel = if (hybrid) counterFuel(1, trip1) else null,
+            trip2Fuel = if (hybrid) counterFuel(2, trip2) else null,
+            tripTariff = tariff,
+            currencySymbol = settings.getCurrencySymbol(),
+        )
+    }
+
+    /**
+     * Litres of the trips started since TRIP [n]'s reset that know their litres, over the km of those
+     * same trips; null when none does. Read again when the counter's reset or trip count moves, or
+     * after [FUEL_CACHE_TTL_MS].
+     */
+    private suspend fun counterFuel(n: Int, counter: TripCounterUi?): FuelTotals? {
+        val c = counter ?: return null
+        val key = FuelKey(c.resetTs, c.tripCount)
+        val nowMs = clock()
+        fuelCache[n]?.takeIf { it.key == key && nowMs - it.readAtMs < FUEL_CACHE_TTL_MS }?.let { return it.totals }
+        val known = tripDao.getByDateRange(c.resetTs, nowMs).first().filter { it.fuelLiters != null }
+        val totals = if (known.isEmpty()) null
+        else FuelTotals(known.sumOf { it.fuelLiters ?: 0.0 }, known.sumOf { it.distanceKm ?: 0.0 })
+        fuelCache[n] = FuelEntry(key, nowMs, totals)
+        return totals
+    }
+
+    /** TRIP [n] as the dashboard shows it now (DashboardViewModel.collectTripCounter, read once). */
+    private suspend fun tripCounter(n: Int, tariff: Double): TripCounterUi? {
+        val reset = tripCounterResets.state(n).value ?: return null
+        val sessionStart = TrackingService.sessionStartedAt.value
+        val stats = tripDao.observeCounterStats(reset.resetTs, sessionStart ?: Long.MAX_VALUE).first()
+        return TripCounterMath.compute(
+            stats, reset, TrackingService.tripDistanceKm.value, TrackingService.tripKwhConsumed.value,
+            sessionStart, TrackingService.liveWholeSession.value, clock(), tariff,
         )
     }
 }

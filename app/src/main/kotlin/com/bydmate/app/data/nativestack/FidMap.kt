@@ -23,6 +23,11 @@ data class FidEntry(
      * ever be used as-is.
      */
     val symbol: String? = null,
+    /**
+     * False for a deliberate fixed-address fallback: [FidResolver] never moves it, its
+     * [symbol] is diagnostic only (it names the primary the entry stands in for).
+     */
+    val resolveFromCatalog: Boolean = true,
 )
 
 /**
@@ -63,6 +68,14 @@ object FidMap {
         FidEntry("fanLevel",             1000, 1077936156,   5, Decoder.INT_RAW, symbol = "Ac.AC_WIND_LEVEL"),
         FidEntry("acCirc",               1000, 1077936148,   5, Decoder.INT_ENUM, symbol = "Ac.AC_CYCLE_MODE"),
         FidEntry("insideTemp",           1000, 1031798832,   5, Decoder.INT_TEMP_C, symbol = "Ac.AC_TEMP_INSIDE"),
+        // The older BYD SDK / Song Plus catalog carries the same AC_TEMP_INSIDE symbol at
+        // 1320181776. Read at that fixed address and used only when the primary read above
+        // answers link-error (65535) or wrong-direction (-10011), see NativeParsReader.
+        // Shares insideTemp's symbol so the collision guard treats both as one field.
+        FidEntry(
+            "insideTempAlt", 1000, 1320181776, 5, Decoder.INT_TEMP_C,
+            symbol = "Ac.AC_TEMP_INSIDE", resolveFromCatalog = false,
+        ),
         FidEntry("exteriorTemp",         1000, 1077936184,   5, Decoder.INT_TEMP_C, symbol = "Ac.AC_TEMP_OUT"),
         // Body
         FidEntry("hood",                 1001, 692060188,    5, Decoder.INT_ENUM, symbol = "Bodywork.BODYWORK_HOOD"),
@@ -238,6 +251,27 @@ object FidMap {
         FidEntry("seatCandLrseLevel2",          1000, 412180540,  5, Decoder.INT_RAW, symbol = "Ac.AC_LRSE_REAR_LEFT_SEAT_HEATING_LEVEL_SET_hal_only"),
         FidEntry("seatCandLrseLevel3",          1000, 412180544,  5, Decoder.INT_RAW, symbol = "Ac.AC_LRSE_REAR_RIGHT_SEAT_VENTILATING_LEVEL_SET_hal_only"),
         FidEntry("seatCandLrseLevel4",          1000, 412180548,  5, Decoder.INT_RAW, symbol = "Ac.AC_LRSE_REAR_RIGHT_SEAT_HEATING_LEVEL_SET_hal_only"),
+    )
+
+    /**
+     * DM-i hybrid READ set (#184). NativeParsReader appends it to the poll batch only when the
+     * car is confirmed HYBRID, so an EV batch keeps its exact length and order. Read at these
+     * compiled addresses (the ones the hybrid dumps answered), never through [FidResolver]:
+     * kept out of [all] so the resolver, the push fields and every EV read stay as they were.
+     * Order is part of the batch contract: the reply tail lines up with this list.
+     */
+    val hybrid: List<FidEntry> = listOf(
+        FidEntry("fuelPercent",  1014, 1246785600, 5, Decoder.INT_PERCENT),   // EV: 255
+        FidEntry("fuelRangeKm",  1014, 1246773304, 5, Decoder.INT_RANGE_KM),  // EV: 2046
+        FidEntry("fuelTotalL",   1014, 1246760976, 7, Decoder.FLOAT_LITERS),  // 0.1 L step
+        FidEntry("mileageHevKm", 1014, 1246773264, 5, Decoder.INT_RAW),       // EV: 1048575
+        FidEntry("mileageEvKm",  1014, 1246773284, 5, Decoder.INT_RAW),       // EV: 1048575
+        FidEntry("engineRpm",    1012, 339738642,  5, Decoder.INT_RPM),       // EV: 8191
+        // STATISTIC_ELEC_DRIVING_RANGE, the named twin of STATISTIC_FUEL_DRIVING_RANGE above
+        // (BYD OpenAPI, Statistic dev 1014): the EV range. On an EV it equals the cluster range
+        // (Leopard 3: 413 km); the fuel twin matches the cockpit on a Leopard 5 (#184). Not yet
+        // read on a hybrid: an absent value is the 2046 word and shows as a dash.
+        FidEntry("evRangeKm",    1014, 1246765118, 5, Decoder.INT_RANGE_KM),
     )
 
     /** Every READ address the app knows, polled or not. */

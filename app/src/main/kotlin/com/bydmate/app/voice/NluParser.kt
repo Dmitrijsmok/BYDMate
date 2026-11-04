@@ -11,6 +11,13 @@ sealed interface ParseResult {
     }
     data class RelativeTemp(val sign: Int) : ParseResult
     data class Volume(val payload: String) : ParseResult
+    /** A question answered from the car's readings; nothing is dispatched. */
+    data class Ask(val question: VehicleQuestion) : ParseResult
+    /** Yandex Music's personal mix, started like the agent's play_music with no query. */
+    data object Music : ParseResult
+    /** Open a navigation app, nothing routed: [app] is a RouteNavigatorUris id, null = the app
+     *  chosen in «Навигатор для маршрутов». */
+    data class Navigator(val app: String? = null) : ParseResult
     data object Unrecognized : ParseResult
 }
 
@@ -70,7 +77,7 @@ object NluParser {
     }
 
     /** Every part between «и» / «а также» as its commands, or null when some part is not a
-     *  command of its own (a step, the volume and a verbless phrase never are). */
+     *  command of its own (a step, the volume, a question and a verbless phrase never are). */
     private fun compound(words: List<String>, dictionary: VoiceDictionary): ParseResult? {
         val parts = split(words)
         if (parts.size < 2) return null

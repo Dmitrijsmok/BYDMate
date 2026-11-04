@@ -20,8 +20,8 @@ import kotlinx.coroutines.flow.update
  * the dump: fields with no snapshot property at all (bsdLeft/bsdRight, the seat candidates, the
  * one-shot snapshots), and the fields the poll derives something else from — driveMode (held
  * through a switch), chargeGunState/bmsState (chargingStatus), wiperRelay/autoWipers (rain),
- * maxBatTemp/minBatTemp (avgBatTemp) and windowRRGen3 (the generation fallback). For those the
- * poll stays the only writer.
+ * maxBatTemp/minBatTemp (avgBatTemp), windowRRGen3 and insideTempAlt (the generation fallbacks).
+ * For those the poll stays the only writer.
  */
 object FidPushApplier {
 

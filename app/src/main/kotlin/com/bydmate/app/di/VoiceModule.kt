@@ -2,11 +2,11 @@ package com.bydmate.app.di
 
 import android.content.Context
 import android.media.AudioManager
-import android.os.Build
 import android.util.Log
 import com.bydmate.app.agent.LlmConnectionResolver
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.repository.SettingsRepository
+import com.bydmate.app.platform.LegacyHeadUnit
 import com.bydmate.app.service.TrackingService
 import com.bydmate.app.voice.*
 import com.bydmate.app.voice.online.MiniMaxTtsBackend
@@ -56,12 +56,8 @@ object VoiceModule {
 
     @Provides @Singleton
     fun provideContinuousAsr(mm: GigaAmModelManager, guard: AsrLoadGuard): ContinuousAsr =
-        GigaAmAsrEngine(
-            mm,
-            loadGuard = guard,
-            dilink3Optimizations = Build.FINGERPRINT.orEmpty()
-                .contains("DiLink3", ignoreCase = true),
-        )
+        GigaAmAsrEngine(mm, loadGuard = guard, warmVad = LegacyHeadUnit.isAndroid10,
+            preRollMs = if (LegacyHeadUnit.isAndroid10) 400 else 0)
 
     @Provides @Singleton
     fun provideRuStressMarker(mm: TtsModelManager): RuStressMarker =
@@ -119,7 +115,11 @@ object VoiceModule {
                 }
             },
             selectedGender = { if (prefs().getString("agent_gender", "m") == "f") TtsGender.FEMALE else TtsGender.MALE },
-            precachePhrases = { AgentPersona.fromId(prefs().getString("agent_persona", null)).phrases() },
+            precachePhrases = {
+                AgentPersona.fromId(prefs().getString("agent_persona", null)).phrases(
+                    if (prefs().getString("agent_gender", "m") == "f") TtsGender.FEMALE else TtsGender.MALE,
+                )
+            },
             phraseDir = File(ctx.filesDir, "tts_phrases"),
         )
     }
@@ -135,10 +135,15 @@ object VoiceModule {
     }
 
     @Provides @Singleton
-    fun provideAudioCapture(@ApplicationContext ctx: Context) =
+    fun provideAutoVoiceDuck(@ApplicationContext ctx: Context, helper: com.bydmate.app.data.vehicle.HelperClient) =
+        AutoVoiceDuck(helper::setAutoVoiceActive, ctx.getSharedPreferences("voice", Context.MODE_PRIVATE))
+
+    @Provides @Singleton
+    fun provideAudioCapture(@ApplicationContext ctx: Context, autoVoiceDuck: AutoVoiceDuck) =
         AudioCapture(
             ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager,
             ctx.getSharedPreferences("voice", Context.MODE_PRIVATE),
+            autoVoiceDuck,
         )
 
     @Provides @Singleton
@@ -152,9 +157,13 @@ object VoiceModule {
         override fun vehicleSnapshot(): DiParsData? = TrackingService.lastData.value
         override fun snapshotAgeMs(): Long? =
             TrackingService.lastDataAtMs.takeIf { it > 0L }?.let { System.currentTimeMillis() - it }
+        override fun rangeKm(): Double? = TrackingService.lastRangeKm.value
         override fun ttsEnabled(): Boolean =
             ctx.getSharedPreferences("voice", Context.MODE_PRIVATE)
                 .getBoolean("tts_enabled", false)
+        override fun closeAfterCommand(): Boolean =
+            ctx.getSharedPreferences("voice", Context.MODE_PRIVATE)
+                .getBoolean("close_after_command", false)
     }
 
     @Provides @Singleton

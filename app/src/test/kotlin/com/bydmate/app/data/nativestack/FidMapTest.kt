@@ -218,6 +218,7 @@ class FidMapTest {
             "chargingCapacity", "bmsState",
             "turnSignal", "gear", "bsdLeft", "bsdRight",
             "windowFL", "windowFR", "windowRL", "windowRR", "windowRRGen3",
+            "insideTemp", "insideTempAlt",
         ) + com.bydmate.app.ui.settings.SeatsDiagnostics.FIDS.map { it.field }
         val missing = asked.filterNot { it in FidMap.byField }
         assertTrue("FidMap has no entry for $missing", missing.isEmpty())
@@ -242,5 +243,20 @@ class FidMapTest {
             listOf("mileage"),
             FidMap.all.filter { it.catalogScale != null }.map { it.field },
         )
+    }
+
+    // PM2.5 is read on demand by Pm25Reader, never through the global poll.
+    @Test fun `no pm25 entry in FidMap and the batch is as before`() {
+        assertTrue(FidMap.entries.none { it.field.startsWith("pm25") })
+        assertEquals(95, FidMap.entries.size)
+    }
+
+    /** The resolver must never move a fixed fallback onto its primary's catalog address. */
+    @Test fun `only the cabin temperature fallback is pinned to its constant`() {
+        assertEquals(listOf("insideTempAlt"), FidMap.all.filterNot { it.resolveFromCatalog }.map { it.field })
+        val alt = FidMap.byField.getValue("insideTempAlt")
+        assertEquals(1000, alt.device)
+        assertEquals(1320181776, alt.fid)
+        assertEquals(FidMap.byField.getValue("insideTemp").symbol, alt.symbol)
     }
 }

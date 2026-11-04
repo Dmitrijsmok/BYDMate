@@ -62,6 +62,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import com.bydmate.app.data.repository.SettingsRepository
+import com.bydmate.app.diagnostics.Trace
+import com.bydmate.app.diagnostics.TraceArea
 import com.bydmate.app.service.UpdateChecker
 import com.bydmate.app.ui.charges.ChargesScreen
 import com.bydmate.app.ui.automation.AutomationScreen
@@ -238,6 +240,7 @@ fun AppNavigation(
                             },
                             selected = currentDestination?.hierarchy?.any { it.route == screen.route } == true,
                             onClick = {
+                                Trace.event(TraceArea.USER, "tab", "to" to screen.route)
                                 navController.navigate(screen.route) {
                                     popUpTo(navController.graph.findStartDestination().id) {
                                         saveState = true
@@ -274,17 +277,25 @@ fun AppNavigation(
                 )
             }
             composable(Screen.Dashboard.route) {
+                // Same tab switch as the bottom bar's Settings item.
+                val openSettingsTab = {
+                    navController.navigate(Screen.Settings.route) {
+                        popUpTo(navController.graph.findStartDestination().id) {
+                            saveState = true
+                        }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                }
                 DashboardScreen(
                     onOpenTechPanel = { navController.navigate("tech_panel") },
-                    // Same tab switch as the bottom bar's Settings item.
-                    onOpenSettings = {
-                        navController.navigate(Screen.Settings.route) {
-                            popUpTo(navController.graph.findStartDestination().id) {
-                                saveState = true
-                            }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
+                    onOpenSettings = openSettingsTab,
+                    // Settings first: the periods screen takes its view model from that entry,
+                    // and Back lands on Settings.
+                    onOpenTariffPeriods = {
+                        openSettingsTab()
+                        // The restored Settings stack may already end on the periods screen.
+                        navController.navigate("tariff_periods") { launchSingleTop = true }
                     },
                 )
             }

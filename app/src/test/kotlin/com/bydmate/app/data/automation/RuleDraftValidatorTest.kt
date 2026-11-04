@@ -63,6 +63,20 @@ class RuleDraftValidatorTest {
         assertEquals(ActionValidationError.AppNotSelected(1), err)
     }
 
+    @Test fun app_close_action_blank_package_is_invalid() {
+        val err = RuleDraftValidator.validateActions(listOf(
+            ActionDef(command = "", displayName = "x", kind = "app_close",
+                payload = """{"packageName":"","appLabel":""}""")))
+        assertEquals(ActionValidationError.AppNotSelected(1), err)
+    }
+
+    @Test fun media_key_action_takes_only_play_or_pause() {
+        fun key(p: String) = listOf(ActionDef(command = "", displayName = "x", kind = "media_key", payload = p))
+        assertEquals(null, RuleDraftValidator.validateActions(key("play")))
+        assertEquals(null, RuleDraftValidator.validateActions(key("pause")))
+        assertEquals(ActionValidationError.MediaKeyInvalid(1), RuleDraftValidator.validateActions(key("toggle")))
+    }
+
     @Test fun call_action_phone_too_short_is_invalid() {
         val err = RuleDraftValidator.validateActions(listOf(
             ActionDef(command = "", displayName = "x", kind = "call", payload = """{"phone":"123"}""")))
@@ -145,6 +159,15 @@ class RuleDraftValidatorTest {
     @Test fun sentry_action_valid_payload_is_valid() {
         assertNull(RuleDraftValidator.validateActions(listOf(
             ActionDef(command = "sentry", displayName = "x", kind = "sentry", payload = "1"))))
+    }
+
+    @Test fun screen_action_payload_is_0_or_1() {
+        fun check(payload: String?) = RuleDraftValidator.validateActions(listOf(
+            ActionDef(command = "screen", displayName = "x", kind = "screen", payload = payload)))
+        assertNull(check("0"))
+        assertNull(check("1"))
+        assertEquals(ActionValidationError.ScreenInvalid(1), check("2"))
+        assertEquals(ActionValidationError.ScreenInvalid(1), check(null))
     }
 
     @Test fun hotspot_action_invalid_payload_is_invalid() {

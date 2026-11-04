@@ -86,4 +86,52 @@ class RouteNavigatorUrisTest {
     @Test fun `maps is a valid settings selection`() {
         assertEquals(RouteNavigatorUris.MAPS, RouteNavigatorUris.normalize(RouteNavigatorUris.MAPS))
     }
+
+    /** #305: Waze is the fourth settings value; its links put the latitude first. */
+    @Test fun `waze is a valid settings selection with its own package`() {
+        assertEquals("waze", RouteNavigatorUris.normalize("waze"))
+        assertEquals("com.waze", RouteNavigatorUris.packageOf("waze"))
+    }
+
+    @Test fun `waze links take the latitude first`() {
+        assertEquals("waze://?ll=57.0,36.0&navigate=yes", RouteNavigatorUris.route("waze", 57.0, 36.0))
+        assertEquals("waze://?ll=55.75,37.62", RouteNavigatorUris.showPoint("waze", 55.75, 37.62, "Кафе"))
+    }
+
+    @Test fun `google maps is a valid settings selection with its own package`() {
+        assertEquals(RouteNavigatorUris.GOOGLE_MAPS, RouteNavigatorUris.normalize("google_maps"))
+        assertEquals("com.google.android.apps.maps", RouteNavigatorUris.packageOf(RouteNavigatorUris.GOOGLE_MAPS))
+        // The MicroG build first: stock Google Maps may not run on a head unit without Google services.
+        assertEquals(
+            listOf("app.revanced.android.apps.maps", "com.google.android.apps.maps"),
+            RouteNavigatorUris.GOOGLE_MAPS_PACKAGES,
+        )
+    }
+
+    /** Fork 35d862a4: the documented api=1 Maps URLs, latitude first, caption in brackets. */
+    @Test fun `google maps uses the official maps urls`() {
+        assertEquals(
+            "https://www.google.com/maps/search/?api=1&query=%D0%BA%D0%B0%D1%84%D0%B5",
+            RouteNavigatorUris.search(RouteNavigatorUris.GOOGLE_MAPS, "кафе"),
+        )
+        assertEquals(
+            "https://www.google.com/maps/search/?api=1&query=55.75%2C37.62%20(%D0%9A%D0%B0%D1%84%D0%B5)",
+            RouteNavigatorUris.showPoint(RouteNavigatorUris.GOOGLE_MAPS, 55.75, 37.62, "Кафе"),
+        )
+        assertEquals(
+            "https://www.google.com/maps/search/?api=1&query=55.75%2C37.62",
+            RouteNavigatorUris.showPoint(RouteNavigatorUris.GOOGLE_MAPS, 55.75, 37.62, null),
+        )
+        assertEquals(
+            "https://www.google.com/maps/dir/?api=1&destination=57.0%2C36.0&travelmode=driving&dir_action=navigate",
+            RouteNavigatorUris.route(RouteNavigatorUris.GOOGLE_MAPS, 57.0, 36.0),
+        )
+    }
+
+    @Test fun `waze search encodes spaces and cyrillic`() {
+        assertEquals(
+            "waze://?q=%D0%BA%D0%B0%D1%84%D0%B5%20%D1%83%20%D0%B4%D0%BE%D0%BC%D0%B0",
+            RouteNavigatorUris.search("waze", "кафе у дома"),
+        )
+    }
 }

@@ -46,8 +46,34 @@ interface TripDao {
     @Query("SELECT * FROM trips WHERE byd_id = :bydId LIMIT 1")
     suspend fun getByBydId(bydId: Long): TripEntity?
 
+    /** Frees a recycled energydata id (#348); conditional, so a stale full-row write cannot be undone by it. */
+    @Query("UPDATE trips SET byd_id = NULL WHERE id = :id AND byd_id = :bydId")
+    suspend fun unlinkBydId(id: Long, bydId: Long): Int
+
     @Query("SELECT * FROM trips WHERE soc_start IS NULL AND source = 'energydata'")
     suspend fun getTripsWithoutSoc(): List<TripEntity>
+
+    /**
+     * DM-i: energydata trips since [sinceTs] that have no fuel counters attached yet. Older
+     * trips are left out: their snapshot pair can no longer appear.
+     */
+    @Query("""
+        SELECT * FROM trips
+        WHERE source = 'energydata' AND fuel_total_start IS NULL AND end_ts IS NOT NULL
+          AND start_ts >= :sinceTs
+    """)
+    suspend fun getEnergyDataTripsWithoutCounters(sinceTs: Long): List<TripEntity>
+
+    /**
+     * DM-i: [getTripsWithoutCost] plus trips that burned fuel but carry no kWh, plus priced trips
+     * whose litres arrived after their electricity was priced (no fuel part yet).
+     */
+    @Query("""
+        SELECT * FROM trips
+        WHERE (cost IS NULL AND (kwh_consumed IS NOT NULL OR fuel_liters IS NOT NULL))
+           OR (fuel_liters > 0 AND fuel_cost IS NULL)
+    """)
+    suspend fun getHybridTripsWithoutCost(): List<TripEntity>
 
     @Query("SELECT * FROM trips WHERE cost IS NULL AND kwh_consumed IS NOT NULL")
     suspend fun getTripsWithoutCost(): List<TripEntity>
@@ -65,16 +91,27 @@ interface TripDao {
     @Query("SELECT * FROM trips WHERE source = 'live'")
     suspend fun getLiveTrips(): List<TripEntity>
 
-    @Query("SELECT * FROM trips WHERE start_ts >= :minTs AND start_ts <= :maxTs LIMIT 1")
-    suspend fun getByStartTsRange(minTs: Long, maxTs: Long): TripEntity?
+    /**
+     * The stored trip an energydata record starting at [startTs] already is: one without a byd id
+     * (a live or unlinked trip) within [windowMs], nearest first. A trip linked to another byd id is
+     * another record (two short drives minutes apart) unless it starts at the very same second.
+     */
+    @Query("""
+        SELECT * FROM trips
+        WHERE start_ts >= :startTs - :windowMs AND start_ts <= :startTs + :windowMs
+          AND (byd_id IS NULL OR start_ts = :startTs)
+        ORDER BY ABS(start_ts - :startTs)
+        LIMIT 1
+    """)
+    suspend fun getSameTripByTime(startTs: Long, windowMs: Long): TripEntity?
 
     @Query("SELECT * FROM trips ORDER BY start_ts")
     suspend fun getAllSnapshot(): List<TripEntity>
 
-    /** Recalculation input: trips inside the range that carry an energy figure to price. */
+    /** Recalculation input: trips inside the range that carry kWh or (DM-i) litres to price. */
     @Query("""
         SELECT * FROM trips
-        WHERE start_ts >= :from AND start_ts <= :to AND kwh_consumed IS NOT NULL
+        WHERE start_ts >= :from AND start_ts <= :to AND (kwh_consumed IS NOT NULL OR fuel_liters > 0)
         ORDER BY start_ts ASC
     """)
     suspend fun getWithEnergyInRange(from: Long, to: Long): List<TripEntity>

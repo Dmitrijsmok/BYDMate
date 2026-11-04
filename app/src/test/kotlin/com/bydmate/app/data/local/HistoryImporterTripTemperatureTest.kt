@@ -43,6 +43,10 @@ class HistoryImporterTripTemperatureTest {
         tripTombstoneDao = mockk<TripTombstoneDao>(relaxed = true),
         costCalculator = mockk(relaxed = true),
         odometerMarks = mockk(relaxed = true),
+        vehicleKind = com.bydmate.app.data.nativestack.kindMonitor(),
+        counterSnapshotDao = mockk(relaxed = true),
+        counterSnapshotWriter = mockk(relaxed = true),
+        lastStateDao = mockk(relaxed = true),
     )
 
     private val record = BydTripRecord(
@@ -55,7 +59,7 @@ class HistoryImporterTripTemperatureTest {
         coEvery { energyDataReader.readTripsSince(any()) } returns listOf(record)
         coEvery { settingsRepository.getBatteryCapacity() } returns 72.9
         coEvery { tripDao.getByBydId(record.id) } returns null
-        coEvery { tripDao.getByStartTsRange(any(), any()) } returns null
+        coEvery { tripDao.getSameTripByTime(any(), any()) } returns null
 
         val inserted = slot<TripEntity>()
         importer().syncFromEnergyData()

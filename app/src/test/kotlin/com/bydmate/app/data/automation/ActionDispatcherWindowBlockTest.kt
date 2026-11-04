@@ -28,6 +28,14 @@ class ActionDispatcherWindowBlockTest {
 
     // ── isWindowOpenCommand: close-to-0 commands are NOT opens ───────────────
 
+    @Test fun `window stop commands are not opens and pass at any speed`() {
+        listOf("主驾停止", "副驾停止", "后左停止", "后右停止").forEach { cmd ->
+            assertFalse(cmd, isOpen(cmd))
+            assertNull(cmd, speedGate(cmd, null))
+            assertNull(cmd, speedGate(cmd, 200))
+        }
+    }
+
     @Test fun `driver window to 0 percent is a close not an open`() {
         assertFalse(isOpen("主驾打开0"))
     }

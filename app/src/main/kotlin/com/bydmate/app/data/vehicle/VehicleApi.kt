@@ -41,7 +41,7 @@ interface VehicleApi {
     suspend fun dispatch(commandString: String): Result<Unit>
     suspend fun writeAcOn(): Result<Unit>
     suspend fun writeAcOff(): Result<Unit>
-    suspend fun writeSetDriverTemp(celsius: Int): Result<Unit>   // range 16..30
+    suspend fun writeSetDriverTemp(celsius: Int): Result<Unit>   // range 16..33
     suspend fun writeWindowDriver(percent: Int): Result<Unit>    // range 0..100
     suspend fun writeWindowPassenger(percent: Int): Result<Unit> // range 0..100
     suspend fun writeWindowRearLeft(percent: Int): Result<Unit>  // range 0..100
@@ -50,4 +50,7 @@ interface VehicleApi {
     suspend fun writeUnlockDoors(): Result<Unit>
     suspend fun writeSunroof(mode: SunroofMode): Result<Unit>
     suspend fun writeSunshade(open: Boolean): Result<Unit>
+
+    /** Rear seats whose heat this car has (#327). */
+    suspend fun rearSeatHeatSides(): Set<RearSeat> = emptySet()
 }

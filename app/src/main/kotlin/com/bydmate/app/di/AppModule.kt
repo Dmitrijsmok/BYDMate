@@ -374,6 +374,45 @@ object AppModule {
         }
     }
 
+    /** DM-i hybrid (#184): fuel columns on trips, the open trip's start counters, counter snapshots. */
+    internal val MIGRATION_22_23 = object : Migration(22, 23) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE trips ADD COLUMN fuel_liters REAL")
+            db.execSQL("ALTER TABLE trips ADD COLUMN hev_km REAL")
+            db.execSQL("ALTER TABLE trips ADD COLUMN fuel_total_start REAL")
+            db.execSQL("ALTER TABLE trips ADD COLUMN fuel_total_end REAL")
+            db.execSQL("ALTER TABLE trips ADD COLUMN mileage_hev_start REAL")
+            db.execSQL("ALTER TABLE trips ADD COLUMN mileage_hev_end REAL")
+            db.execSQL("ALTER TABLE trips ADD COLUMN fuel_cost REAL")
+            db.execSQL("ALTER TABLE tariff_periods ADD COLUMN fuel_price_per_liter REAL")
+            db.execSQL("ALTER TABLE last_state ADD COLUMN trip_start_fuel_total REAL")
+            db.execSQL("ALTER TABLE last_state ADD COLUMN trip_start_mileage_hev REAL")
+            db.execSQL("ALTER TABLE last_state ADD COLUMN on_ts INTEGER")
+            db.execSQL("ALTER TABLE last_state ADD COLUMN on_fuel_total REAL")
+            db.execSQL("ALTER TABLE last_state ADD COLUMN on_mileage_hev REAL")
+            db.execSQL("ALTER TABLE last_state ADD COLUMN on_mileage REAL")
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS counter_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    ts INTEGER NOT NULL,
+                    fuel_total REAL,
+                    mileage_hev REAL,
+                    mileage_ev REAL,
+                    odometer REAL,
+                    reason TEXT NOT NULL
+                )
+            """.trimIndent())
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_counter_snapshots_ts ON counter_snapshots(ts)")
+        }
+    }
+
+    /** Start time on trip tombstones (#348): energydata ids are recycled when the car recreates its DB. */
+    internal val MIGRATION_23_24 = object : Migration(23, 24) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE trip_tombstones ADD COLUMN start_ts INTEGER")
+        }
+    }
+
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase {
@@ -389,7 +428,7 @@ object AppModule {
 
     /** Every production migration: the app database and a restored archive of an older schema share them. */
     fun withMigrations(builder: RoomDatabase.Builder<AppDatabase>): RoomDatabase.Builder<AppDatabase> =
-        builder.addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22)
+        builder.addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24)
 
     @Provides fun provideTripDao(db: AppDatabase): TripDao = db.tripDao()
     @Provides fun provideTripPointDao(db: AppDatabase): TripPointDao = db.tripPointDao()
@@ -409,10 +448,17 @@ object AppModule {
     fun provideVehicleWriteLogDao(db: AppDatabase): VehicleWriteLogDao = db.vehicleWriteLogDao()
 
     @Provides
+    fun provideEndSnapshotSource(impl: com.bydmate.app.ui.settings.RecordingEndSnapshot): com.bydmate.app.diagnostics.EndSnapshotSource = impl
+
+    @Provides
     fun provideTripTombstoneDao(db: AppDatabase): TripTombstoneDao = db.tripTombstoneDao()
 
     @Provides
     fun provideTariffPeriodDao(db: AppDatabase): TariffPeriodDao = db.tariffPeriodDao()
+
+    @Provides
+    fun provideCounterSnapshotDao(db: AppDatabase): com.bydmate.app.data.local.dao.CounterSnapshotDao =
+        db.counterSnapshotDao()
 
     @Provides
     @Singleton
@@ -520,24 +566,58 @@ object AppModule {
 
     @Provides
     @Singleton
+    @Suppress("LongParameterList") // one parameter per injected dependency
     fun provideTripRecorder(
         tripDao: TripDao,
         lastStateDao: LastStateDao,
         energyDataReader: EnergyDataReader,
         deadDetector: com.bydmate.app.data.local.EnergyDataDeadDetector,
         settingsRepository: SettingsRepository,
+        vehicleKindMonitor: com.bydmate.app.data.nativestack.VehicleKindMonitor,
     ): TripRecorder = TripRecorder(
         tripDao = tripDao,
         lastStateDao = lastStateDao,
         energyDataReader = energyDataReader,
         deadDetector = deadDetector,
         batteryCapacityKwh = { settingsRepository.getBatteryCapacity() },
+        kind = { vehicleKindMonitor.kind.value },
     )
 
     @Provides
     @Singleton
     fun provideHelperClient(): com.bydmate.app.data.vehicle.HelperClient =
         com.bydmate.app.data.vehicle.HelperClientImpl()
+
+    @Provides
+    @Singleton
+    fun provideDtcScanRepository(
+        @ApplicationContext context: Context,
+        helper: com.bydmate.app.data.vehicle.HelperClient,
+        settings: SettingsRepository,
+        sink: com.bydmate.app.data.backup.TelegramBackupSink,
+        vehicleKindMonitor: com.bydmate.app.data.nativestack.VehicleKindMonitor,
+    ): com.bydmate.app.data.dtc.DtcScanRepository = com.bydmate.app.data.dtc.DtcScanRepository(
+        helper = helper,
+        prefs = context.getSharedPreferences(com.bydmate.app.data.dtc.DtcScanRepository.PREFS_NAME, Context.MODE_PRIVATE),
+        settings = settings,
+        sink = sink,
+        scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default),
+        liveSample = { com.bydmate.app.service.TrackingService.lastSample },
+        serviceRunning = { com.bydmate.app.service.TrackingService.isRunning.value },
+        elapsedNow = { android.os.SystemClock.elapsedRealtime() },
+        wallNow = { System.currentTimeMillis() },
+        describer = com.bydmate.app.data.dtc.DtcDescriber(
+            open = { name -> context.assets.open("dtc/$name").reader(Charsets.UTF_8) },
+            autoType = { com.bydmate.app.data.dtc.CarAutoType.read(helper) },
+            energy = {
+                when (vehicleKindMonitor.kind.value) {
+                    com.bydmate.app.data.nativestack.VehicleKind.EV -> com.bydmate.app.data.dtc.DtcEnergy.EV
+                    com.bydmate.app.data.nativestack.VehicleKind.HYBRID -> com.bydmate.app.data.dtc.DtcEnergy.DM
+                    com.bydmate.app.data.nativestack.VehicleKind.UNKNOWN -> com.bydmate.app.data.dtc.DtcEnergy.UNKNOWN
+                }
+            },
+        ),
+    )
 
     @Provides
     @Singleton
@@ -572,6 +652,7 @@ object AppModule {
 
     @Provides
     @Singleton
+    @Suppress("LongParameterList") // Hilt-injected dependencies
     fun provideVehicleApi(
         parsReader: com.bydmate.app.data.nativestack.ParsReader,
         autoservice: com.bydmate.app.data.autoservice.AutoserviceClient,
@@ -581,10 +662,11 @@ object AppModule {
         seatChannelStore: com.bydmate.app.data.vehicle.SeatChannelStore,
         windowChannelStore: com.bydmate.app.data.vehicle.WindowChannelStore,
         seatCommandJournal: com.bydmate.app.data.vehicle.SeatCommandJournal,
+        fidCatalogManager: com.bydmate.app.data.nativestack.FidCatalogManager,
     ): com.bydmate.app.data.vehicle.VehicleApi =
         com.bydmate.app.data.vehicle.VehicleApiImpl(
             parsReader, autoservice, helper, allowlist, writeLogDao, seatChannelStore, windowChannelStore,
-            seatCommandJournal,
+            seatCommandJournal, rearCatalog = { fidCatalogManager.catalog },
         )
 
     @Provides
@@ -647,6 +729,19 @@ object AppModule {
     fun provideAdbRestoreSystem(
         impl: com.bydmate.app.data.autoservice.AndroidAdbRestoreSystem,
     ): com.bydmate.app.data.autoservice.AdbRestoreSystem = impl
+
+    @Provides
+    @Singleton
+    fun provideCloudOverWifiPreferences(
+        @ApplicationContext ctx: Context,
+    ): com.bydmate.app.data.autoservice.CloudOverWifiPreferences =
+        com.bydmate.app.data.autoservice.CloudOverWifiPreferencesImpl(ctx)
+
+    @Provides
+    @Singleton
+    fun provideCloudOverWifiSystem(
+        impl: com.bydmate.app.data.autoservice.AndroidCloudOverWifiSystem,
+    ): com.bydmate.app.data.autoservice.CloudOverWifiSystem = impl
 
     @Provides
     @Singleton

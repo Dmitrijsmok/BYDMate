@@ -41,6 +41,8 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import com.bydmate.app.data.automation.AutomationEngine
+import com.bydmate.app.diagnostics.Trace
+import com.bydmate.app.diagnostics.TraceArea
 import com.bydmate.app.data.automation.OneShotTrigger
 import com.bydmate.app.util.appLocalizedContext
 import kotlinx.coroutines.launch
@@ -63,6 +65,9 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
+import com.bydmate.app.data.vehicle.RearSeat
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
@@ -94,6 +99,8 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.FlowRow
@@ -185,12 +192,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.bydmate.app.R
-import com.bydmate.app.cluster.ClusterProjectionManager
-import com.bydmate.app.cluster.DEFAULT_TRIGGER_KEYCODE
-import com.bydmate.app.cluster.localVoiceBinding
-import com.bydmate.app.cluster.aliceVoiceBinding
-import com.bydmate.app.cluster.VOLUME_KNOB_PRESS_KEYCODE
+import com.bydmate.app.cluster.SteeringKeyOwner
 import com.bydmate.app.cluster.knownButtonNameRes
+import com.bydmate.app.cluster.readSteeringKeyOwners
+import com.bydmate.app.cluster.steeringKeyOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableLongStateOf
@@ -378,7 +383,7 @@ fun AutomationScreen(
     }
 
     // Editor dialog
-    if (state.showEditor) {
+    if (state.showEditor) CompositionLocalProvider(LocalRearSeats provides state.rearSeats) {
         EditorDialog(
             editing = state.editing,
             places = state.places,
@@ -646,9 +651,12 @@ private fun RuleDot(enabled: Boolean) {
 
 /** The rule's switch centred in a 64x48dp slot; the M3 switch itself is 52x48dp to touch. */
 @Composable
-private fun RuleSwitch(enabled: Boolean, onToggle: () -> Unit) {
+private fun RuleSwitch(enabled: Boolean, onToggle: () -> Unit, ruleId: Long) {
     Box(Modifier.size(SWITCH_SLOT, 48.dp), contentAlignment = Alignment.Center) {
-        Switch(checked = enabled, onCheckedChange = { onToggle() }, colors = bydSwitchColors())
+        Switch(checked = enabled, onCheckedChange = {
+            Trace.event(TraceArea.USER, "rule-toggle", "rule" to ruleId, "on" to !enabled)
+            onToggle()
+        }, colors = bydSwitchColors())
     }
 }
 
@@ -723,7 +731,7 @@ private fun RuleListRow(
                 actions.forEachIndexed { i, action ->
                     ActionCell(action, labeled, Modifier.width(if (labeled) cellWidths[i] else MIN_TOUCH))
                 }
-                RuleSwitch(rule.enabled, onToggle)
+                RuleSwitch(rule.enabled, onToggle, rule.id)
             }
             ListActionMode.BELOW_LABELED, ListActionMode.BELOW_ICONS -> Column(
                 modifier = padding,
@@ -731,7 +739,7 @@ private fun RuleListRow(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     RuleRowText(rule, last, onStatus, Modifier.weight(1f).padding(end = 8.dp))
-                    RuleSwitch(rule.enabled, onToggle)
+                    RuleSwitch(rule.enabled, onToggle, rule.id)
                 }
                 HorizontalDivider(color = CardBorder, modifier = Modifier.padding(end = 12.dp))
                 Row(Modifier.fillMaxWidth()) {
@@ -792,7 +800,7 @@ private fun RuleGridCard(
                     RuleDot(rule.enabled)
                     Spacer(Modifier.width(8.dp))
                     RuleName(rule, Modifier.weight(1f))
-                    RuleSwitch(rule.enabled, onToggle)
+                    RuleSwitch(rule.enabled, onToggle, rule.id)
                 }
                 RulePhraseLine(rule, Modifier.padding(end = 10.dp))
                 RuleStatusChip(rule, last, onStatus)
@@ -1430,7 +1438,7 @@ private fun EditorDialog(
                                 Spacer(Modifier.height(8.dp))
                             }
 
-                            if (editing.actions.size < 10) {
+                            if (editing.actions.size < MAX_RULE_ACTIONS) {
                                 AddActionButton(
                                     highlight = Missing.NoActions in missing,
                                     modifier = Modifier.anchor(false, "addAction"),
@@ -2454,29 +2462,23 @@ internal fun steeringKeyLabel(context: Context, keyCode: Int): String {
 
 /**
  * Keys already owned by another BYDMate feature. SteeringWheelKeyService handles projection, the
- * voice button and the volume knob BEFORE automation rules, so a rule bound to one of those keys
- * would never fire — the learn dialog says so instead of saving a dead binding.
+ * voice button, the volume knob and the split key BEFORE automation rules, so a rule bound to one
+ * of those keys would never fire — the learn dialog says so instead of saving a dead binding.
  */
 private fun steeringKeyOccupiedReason(context: Context): (Int) -> String? {
-    val clusterPrefs = context.getSharedPreferences(ClusterProjectionManager.PREFS_NAME, Context.MODE_PRIVATE)
-    val voicePrefs = context.getSharedPreferences("voice", Context.MODE_PRIVATE)
-    return { keyCode ->
-        when {
-            clusterPrefs.getBoolean(ClusterProjectionManager.KEY_MIRROR_ENABLED, false) &&
-                keyCode == clusterPrefs.getInt(ClusterProjectionManager.KEY_TRIGGER_KEYCODE, DEFAULT_TRIGGER_KEYCODE) ->
-                context.getString(R.string.automation_steering_key_occupied_projection)
-
-            keyCode in (voicePrefs.localVoiceBinding().codes + voicePrefs.aliceVoiceBinding().codes) ->
-                context.getString(R.string.automation_steering_key_occupied_voice)
-
-            clusterPrefs.getBoolean(ClusterProjectionManager.KEY_KNOB_PLAY_PAUSE, false) &&
-                keyCode == VOLUME_KNOB_PRESS_KEYCODE ->
-                context.getString(R.string.automation_steering_key_occupied_knob)
-
-            else -> null
-        }
-    }
+    val owners = readSteeringKeyOwners(context)
+    return { keyCode -> steeringKeyOwner(keyCode, owners)?.let { steeringKeyOwnerText(context, it) } }
 }
+
+/** Why a key cannot be learned: the feature that already owns it. */
+internal fun steeringKeyOwnerText(context: Context, owner: SteeringKeyOwner): String = context.getString(
+    when (owner) {
+        SteeringKeyOwner.VOICE -> R.string.automation_steering_key_occupied_voice
+        SteeringKeyOwner.KNOB -> R.string.automation_steering_key_occupied_knob
+        SteeringKeyOwner.PROJECTION -> R.string.automation_steering_key_occupied_projection
+        SteeringKeyOwner.SPLIT -> R.string.automation_steering_key_occupied_split
+    }
+)
 
 // --- Action Row ---
 
@@ -2540,6 +2542,10 @@ private fun ActionRow(
                     NotificationActionControls(action = action, onUpdate = onUpdate, modifier = fill)
                 "app_launch" ->
                     AppLaunchActionControls(action = action, onUpdate = onUpdate, modifier = fill)
+                "app_close" ->
+                    AppCloseActionControls(action = action, onUpdate = onUpdate, modifier = fill)
+                "media_key" ->
+                    MediaKeyActionControls(payload = action.payload, modifier = fill)
                 "call" ->
                     CallActionControls(action = action, onUpdate = onUpdate, modifier = fill)
                 "navigate" ->
@@ -2556,6 +2562,8 @@ private fun ActionRow(
                     SentryActionControls(action = action, onUpdate = onUpdate, modifier = fill)
                 "hotspot" ->
                     HotspotActionControls(action = action, onUpdate = onUpdate, modifier = fill)
+                "screen" ->
+                    ScreenActionControls(payload = action.payload, modifier = fill)
                 "cluster_projection" ->
                     ClusterActionControls(action = action, onUpdate = onUpdate, modifier = fill)
                 // A toggle on sentry or the cluster goes back to its own three-state row, so the
@@ -2580,8 +2588,11 @@ private fun ActionRow(
                     TelegramReportActionControls(
                         action = action, tgBotConnected = tgBotConnected, onUpdate = onUpdate, modifier = fill,
                     )
-                else -> // "param" (default)
-                    ParamActionControls(action = action, onUpdate = onUpdate, modifier = fill)
+                else -> { // "param" (default); a graded command is edited as its level row
+                    val level = LevelFamily.of(action.command)
+                    if (level != null) LevelActionControls(action = action, level = level, onUpdate = onUpdate, modifier = fill)
+                    else ParamActionControls(action = action, onUpdate = onUpdate, modifier = fill)
+                }
             }
         }
 
@@ -2599,13 +2610,105 @@ private fun ParamActionControls(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val lc = context.appLocalizedContext()
+    val rearSeats = LocalRearSeats.current
+    val entries = remember(lc, rearSeats) { catalogEntries(lc, rearSeats) }
     CatalogDropdown(
-        selected = ACTION_COMMANDS.find { it.command == action.command }?.localizedName(context) ?: action.displayName,
-        items = ACTION_COMMANDS.map { it.localizedName(context) },
-        categories = ACTION_COMMANDS.map { it.localizedCategory(context) },
+        selected = paramSelectedText(action, context),
+        items = entries.map { it.label },
+        categories = entries.map { lc.getString(it.categoryRes) },
         modifier = modifier,
-        onSelect = { idx -> onUpdate(actionDefFor(ACTION_COMMANDS[idx], context)) }
+        onSelect = { idx -> onUpdate(entries[idx].make(context)) }
     )
+}
+
+/** A graded command («Температура: 22 °C»): the catalog dropdown and its level controls in one line. */
+@Composable
+private fun LevelActionControls(
+    action: ActionDef,
+    level: LevelValue,
+    onUpdate: (ActionDef) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val lc = LocalContext.current.appLocalizedContext()
+    val family = level.family
+    LevelRow(
+        icon = family.icon,
+        value = level.value,
+        range = family.range,
+        step = family.step,
+        valueText = family.valueText(level.value, lc),
+        onValue = { v -> onUpdate(action.copy(command = family.command(v), displayName = family.displayName(v, lc))) },
+        modifier = modifier,
+    ) {
+        ParamActionControls(action = action, onUpdate = onUpdate, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+/**
+ * One graded value in one line: icon, [header] (name or dropdown), minus, a slider with a tick
+ * per step, plus and the value. Minus and plus are 48 dp and stop at the ends of [range]; the
+ * value keeps a fixed minimum width so the slider does not jump when «выкл» becomes «3».
+ */
+@Composable
+private fun LevelRow(
+    icon: ImageVector,
+    value: Int,
+    range: IntRange,
+    step: Int,
+    valueText: String,
+    onValue: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    header: @Composable () -> Unit,
+) {
+    Row(
+        modifier.heightIn(min = MIN_TOUCH),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = AccentTeal, modifier = Modifier.size(20.dp))
+        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { header() }
+        LevelStepButton(Icons.Outlined.Remove, stringResource(R.string.auto_a11y_level_down), value > range.first) {
+            onValue(levelStep(value, range, step, up = false))
+        }
+        Slider(
+            value = value.toFloat(),
+            onValueChange = { v -> levelSnap(v, range, step).let { if (it != value) onValue(it) } },
+            valueRange = range.first.toFloat()..range.last.toFloat(),
+            steps = ((range.last - range.first) / step - 1).coerceAtLeast(0),
+            modifier = Modifier.weight(LEVEL_SLIDER_WEIGHT),
+        )
+        LevelStepButton(Icons.Outlined.Add, stringResource(R.string.auto_a11y_level_up), value < range.last) {
+            onValue(levelStep(value, range, step, up = true))
+        }
+        Text(
+            valueText,
+            fontSize = EDITOR_TEXT,
+            color = AccentTeal,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.End,
+            maxLines = 1,
+            modifier = Modifier.widthIn(min = 64.dp),
+        )
+    }
+}
+
+/** The slider's share next to the name, so a long name does not squeeze it away. */
+private const val LEVEL_SLIDER_WEIGHT = 1.2f
+
+@Composable
+private fun LevelStepButton(icon: ImageVector, description: String, enabled: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(MIN_TOUCH)
+            .clip(FIELD_SHAPE)
+            .background(CardSurfaceElevated)
+            .border(1.5.dp, CardBorder, FIELD_SHAPE)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, description, tint = if (enabled) AccentGreen else TextMuted, modifier = Modifier.size(24.dp))
+    }
 }
 
 // Delay options, in ms
@@ -2662,37 +2765,16 @@ private fun MediaVolumeActionControls(
     val label = stringResource(R.string.automation_action_media_volume_label)
     val namePrefix = stringResource(R.string.automation_action_media_volume)
 
-    Row(
+    LevelRow(
+        icon = Icons.Outlined.VolumeUp,
+        value = current,
+        range = 0..maxVolume,
+        step = 1,
+        valueText = "$current/$maxVolume",
+        onValue = { lvl -> onUpdate(action.copy(payload = lvl.toString(), displayName = "$namePrefix: $lvl")) },
         modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            Icons.Outlined.VolumeUp,
-            contentDescription = null,
-            tint = AccentTeal,
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(label, fontSize = EDITOR_TEXT, color = TextPrimary)
-        Spacer(Modifier.width(8.dp))
-        Slider(
-            value = current.toFloat(),
-            onValueChange = { v ->
-                val lvl = v.toInt().coerceIn(0, maxVolume)
-                onUpdate(action.copy(payload = lvl.toString(), displayName = "$namePrefix: $lvl"))
-            },
-            valueRange = 0f..maxVolume.toFloat(),
-            steps = (maxVolume - 1).coerceAtLeast(0),
-            modifier = Modifier.weight(1f)
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            "$current/$maxVolume",
-            fontSize = EDITOR_TEXT,
-            color = AccentTeal,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.widthIn(min = 48.dp)
-        )
+        Text(label, fontSize = EDITOR_TEXT, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -2823,6 +2905,32 @@ private fun HotspotActionControls(
                 onUpdate(action.copy(payload = payload, displayName = "$displayLabel: $name"))
             },
             colors = bydSwitchColors()
+        )
+    }
+}
+
+// --- Screen Action Controls (#275) ---
+
+/** «Экран: выключить / включить»: nothing to configure, the row only names the step. */
+@Composable
+private fun ScreenActionControls(payload: String?, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .background(CardSurface, RoundedCornerShape(6.dp))
+            .border(1.dp, CardBorder, RoundedCornerShape(6.dp))
+            .heightIn(min = FIELD_HEIGHT)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Outlined.Tune, null, tint = AccentTeal, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = stringResource(
+                if (payload == "1") R.string.automation_action_screen_on else R.string.automation_action_screen_off
+            ),
+            fontSize = 16.sp,
+            color = TextPrimary,
+            maxLines = 1,
         )
     }
 }
@@ -2985,31 +3093,24 @@ private class PickerTile(val label: String, val needsOverlay: Boolean = false, v
 
 private class PickerSection(val name: String, val tiles: List<PickerTile>)
 
+/** Rear seats whose heat this car reports (#327), for the editor's catalog; none outside the editor. */
+private val LocalRearSeats = compositionLocalOf { emptySet<RearSeat>() }
+
 /** The section the picker opened on last time: it opens there again. */
 private object ActionPickerMemory {
     var section = 0
 }
 
-/** The car's catalog sections in the picker's order, then messages, apps, screen, system and waits. */
-private val CATALOG_SECTIONS = listOf(
-    R.string.auto_cat_windows, R.string.auto_cat_climate, R.string.auto_cat_seats, R.string.auto_cat_sunroof,
-    R.string.auto_cat_locks, R.string.auto_cat_body, R.string.auto_cat_light, R.string.auto_cat_mirrors,
-    R.string.auto_cat_drive_mode, R.string.auto_cat_fridge,
-)
-
+/** The car's catalog sections ([catalogSections]), then messages, apps, screen, system and waits. */
 @Composable
 private fun pickerSections(): List<PickerSection> {
     val context = LocalContext.current
     val lc = context.appLocalizedContext()
-    return remember(lc) {
-        val catalog = CATALOG_SECTIONS.map { cat ->
-            PickerSection(
-                lc.getString(cat),
-                ACTION_COMMANDS.filter { it.categoryRes == cat }.map { option ->
-                    PickerTile(option.localizedName(lc)) { actionDefFor(option, it) }
-                },
-            )
-        }.filter { it.tiles.isNotEmpty() }
+    val rearSeats = LocalRearSeats.current
+    return remember(lc, rearSeats) {
+        val catalog = catalogSections(lc, rearSeats).map { (cat, entries) ->
+            PickerSection(lc.getString(cat), entries.map { entry -> PickerTile(entry.label) { entry.make(it) } })
+        }
         catalog + listOf(
             PickerSection(lc.getString(R.string.auto_ui_section_messages), listOf(
                 PickerTile(lc.getString(R.string.automation_action_notification), needsOverlay = true) { newNotificationAction(it) },
@@ -3019,7 +3120,10 @@ private fun pickerSections(): List<PickerSection> {
             )),
             PickerSection(lc.getString(R.string.auto_ui_section_apps), listOf(
                 PickerTile(lc.getString(R.string.automation_action_app_launch)) { newAppLaunchAction(it) },
+                PickerTile(lc.getString(R.string.automation_action_app_close)) { newAppCloseAction(it) },
                 PickerTile(lc.getString(R.string.automation_action_yandex_music)) { newYandexMusicAction(it) },
+                PickerTile(lc.getString(R.string.automation_action_media_play)) { newMediaKeyAction(it, "play") },
+                PickerTile(lc.getString(R.string.automation_action_media_pause)) { newMediaKeyAction(it, "pause") },
                 PickerTile(lc.getString(R.string.automation_action_call)) { newCallAction(it) },
                 PickerTile(lc.getString(R.string.automation_action_navigate)) { newNavigateAction(it) },
                 PickerTile(lc.getString(R.string.automation_action_url)) { newUrlAction(it) },
@@ -3033,6 +3137,8 @@ private fun pickerSections(): List<PickerSection> {
             PickerSection(lc.getString(R.string.auto_ui_section_system), listOf(
                 PickerTile(lc.getString(R.string.automation_action_sentry)) { newSentryAction(it) },
                 PickerTile(lc.getString(R.string.automation_action_hotspot)) { newHotspotAction(it) },
+                PickerTile(lc.getString(R.string.automation_action_screen_off)) { newScreenAction(it, on = false) },
+                PickerTile(lc.getString(R.string.automation_action_screen_on)) { newScreenAction(it, on = true) },
                 PickerTile(lc.getString(R.string.automation_action_media_volume)) { newMediaVolumeAction(it) },
             )),
             PickerSection(lc.getString(R.string.auto_ui_wait), DELAY_OPTION_MS.map { ms ->
@@ -3856,37 +3962,40 @@ private fun TelegramReportEditDialog(
             Text(stringResource(R.string.automation_action_tg_report_add), color = TextPrimary, fontSize = 16.sp)
         },
         text = {
-            // Scrolls, so the buttons stay reachable at the largest text size.
-            Column(
-                modifier = Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                ReportField.entries.forEach { field ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { selected = if (field in selected) selected - field else selected + field }
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Checkbox(
-                            checked = field in selected,
-                            onCheckedChange = null,
-                            colors = CheckboxDefaults.colors(
-                                checkedColor = AccentGreen,
-                                uncheckedColor = CardBorder,
-                                checkmarkColor = NavyDark,
-                            ),
-                        )
-                        Column(modifier = Modifier.padding(start = 10.dp)) {
-                            Text(
-                                stringResource(field.labelRes),
-                                color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+            // Only the items scroll, so the buttons stay reachable at the largest text size; the own text
+            // sits outside the scroller, which otherwise jumps to the cursor on every key (#344).
+            Column {
+                Column(
+                    modifier = Modifier.weight(1f, fill = false).heightIn(max = 400.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    ReportField.entries.forEach { field ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selected = if (field in selected) selected - field else selected + field }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = field in selected,
+                                onCheckedChange = null,
+                                colors = CheckboxDefaults.colors(
+                                    checkedColor = AccentGreen,
+                                    uncheckedColor = CardBorder,
+                                    checkmarkColor = NavyDark,
+                                ),
                             )
-                            Text(
-                                stringResource(field.descRes),
-                                color = TextSecondary, fontSize = 14.sp, lineHeight = 16.sp,
-                            )
+                            Column(modifier = Modifier.padding(start = 10.dp)) {
+                                Text(
+                                    stringResource(field.labelRes),
+                                    color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                                )
+                                Text(
+                                    stringResource(field.descRes),
+                                    color = TextSecondary, fontSize = 14.sp, lineHeight = 16.sp,
+                                )
+                            }
                         }
                     }
                 }
@@ -3895,6 +4004,7 @@ private fun TelegramReportEditDialog(
                     value = textValue,
                     onValueChange = { if (it.length <= TG_REPORT_TEXT_MAX) textValue = it },
                     label = { Text(stringResource(R.string.automation_tg_report_text_label)) },
+                    minLines = 2,
                     maxLines = 4,
                     shape = RoundedCornerShape(8.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -4229,6 +4339,105 @@ private fun AppLaunchActionControls(
                 onUpdate(action.withAppLaunch(newPkg, newLabel, pendingMinimize))
                 editing = false
             },
+        )
+    }
+}
+
+// --- App Close Action Controls (#280) ---
+
+@Composable
+private fun AppCloseActionControls(
+    action: ActionDef,
+    onUpdate: (ActionDef) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var editing by remember { mutableStateOf(false) }
+    val pkg = action.appLaunchPackageName()
+    val label = action.appLaunchLabel()
+    val selfPackage = LocalContext.current.packageName
+
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(CardSurface, RoundedCornerShape(6.dp))
+                .border(1.dp, CardBorder, RoundedCornerShape(6.dp))
+                .clickable { editing = true }
+                .heightIn(min = FIELD_HEIGHT)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Apps,
+                contentDescription = null,
+                tint = AccentTeal,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = label.ifBlank { pkg.ifBlank { stringResource(R.string.automation_tap_to_pick_app) } },
+                fontSize = 16.sp,
+                color = if (label.isBlank() && pkg.isBlank()) TextSecondary else TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Text(
+            text = stringResource(R.string.automation_action_app_close_hint),
+            fontSize = 14.sp,
+            color = TextSecondary
+        )
+    }
+
+    if (editing) {
+        AppLaunchPickerDialog(
+            currentPackage = pkg,
+            excludedPackages = setOf(selfPackage),
+            onDismiss = { editing = false },
+            onSelect = { newPkg, newLabel ->
+                onUpdate(action.withAppClose(newPkg, newLabel))
+                editing = false
+            },
+        )
+    }
+}
+
+// --- Media Key Action Controls (#212, #275) ---
+
+@Composable
+private fun MediaKeyActionControls(payload: String?, modifier: Modifier = Modifier) {
+    val play = payload == "play"
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(CardSurface, RoundedCornerShape(6.dp))
+                .border(1.dp, CardBorder, RoundedCornerShape(6.dp))
+                .heightIn(min = FIELD_HEIGHT)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = if (play) Icons.Outlined.PlayArrow else Icons.Outlined.Pause,
+                contentDescription = null,
+                tint = AccentTeal,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = stringResource(
+                    if (play) R.string.automation_action_media_play else R.string.automation_action_media_pause
+                ),
+                fontSize = 16.sp,
+                color = TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(
+            text = stringResource(R.string.automation_action_media_key_hint),
+            fontSize = 14.sp,
+            color = TextSecondary
         )
     }
 }

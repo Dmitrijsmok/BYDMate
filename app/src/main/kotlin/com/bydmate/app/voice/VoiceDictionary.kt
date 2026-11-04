@@ -1,5 +1,7 @@
 package com.bydmate.app.voice
 
+import com.bydmate.app.data.automation.RouteNavigatorUris
+
 /**
  * The built-in Russian command dictionary (Java resource [RESOURCE]): a closed list of phrase
  * templates, expanded at load into every phrase they accept. A phrase runs offline only when it
@@ -109,6 +111,18 @@ internal sealed interface CommandExpr {
         override fun resolve(values: Map<String, String>) = ParseResult.Volume(fill(payload, values).single())
     }
 
+    class Ask(private val question: VehicleQuestion) : CommandExpr {
+        override fun resolve(values: Map<String, String>) = ParseResult.Ask(question)
+    }
+
+    object Music : CommandExpr {
+        override fun resolve(values: Map<String, String>) = ParseResult.Music
+    }
+
+    class Navigator(private val app: String?) : CommandExpr {
+        override fun resolve(values: Map<String, String>) = ParseResult.Navigator(app)
+    }
+
     class Commands(private val terms: List<String>) : CommandExpr {
         override fun resolve(values: Map<String, String>) = ParseResult.Command(terms.flatMap { fill(it, values) })
     }
@@ -119,7 +133,16 @@ internal sealed interface CommandExpr {
         fun parse(text: String): CommandExpr = when {
             text == "TEMP +1" -> Temp(1)
             text == "TEMP -1" -> Temp(-1)
+            text == "MUSIC" -> Music
+            text == "NAVIGATOR" -> Navigator(null)
+            text.startsWith("NAVIGATOR ") -> text.removePrefix("NAVIGATOR ").trim().let { id ->
+                require(id in RouteNavigatorUris.ALL) { "unknown navigator \"$id\" in \"$text\"" }
+                Navigator(id)
+            }
             text.startsWith("VOL ") -> Vol(text.removePrefix("VOL ").trim())
+            text.startsWith("ASK ") -> text.removePrefix("ASK ").trim().let { id ->
+                Ask(requireNotNull(VehicleQuestion.of(id)) { "unknown question \"$id\" in \"$text\"" })
+            }
             else -> Commands(text.split(" + ").map { it.trim() }.onEach {
                 require(it.isNotEmpty() && it.none(Char::isWhitespace)) { "bad command \"$it\" in \"$text\"" }
             })
