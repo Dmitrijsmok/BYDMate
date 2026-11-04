@@ -420,7 +420,7 @@ How it works:
 - A phrase runs offline only if said in full and exactly as in the list. A different wording of the same thing goes to the agent.
 - Polite words do not get in the way: "пожалуйста" (please), "можешь" (can you), "слушай" (listen), "спасибо" (thanks) are simply dropped.
 - "A and B" runs both commands if each one is in the list: "открой окно водителя и закрой люк" (open the driver's window and close the sunroof).
-- Windows and the sunroof open by a fraction: "наполовину" (halfway), "на 50 процентов" (at 50 percent), "чуть-чуть" (just a bit), "полностью" (all the way), "на треть" (a third). The percent is rounded down to the nearest supported position, the window never opens wider than asked.
+- Windows and the sunroof open by a fraction: "наполовину" (halfway), "на 30 процентов" (at 30 percent), "чуть-чуть" (just a bit), "полностью" (all the way), "на треть" (a third). A side window takes the named percent exactly (1 to 99); words without a number, and percents for the sunroof, are rounded down to the nearest supported position, so nothing opens wider than asked.
 - Everything else goes to the cloud AI agent, if it is on. Without the agent, such a phrase gets "didn't understand" as the answer, while the phrases from the list keep working.
 
 Examples from the list. Full list with wording variants: [docs/VOICE_COMMANDS.md](docs/VOICE_COMMANDS.md).
@@ -428,7 +428,7 @@ Examples from the list. Full list with wording variants: [docs/VOICE_COMMANDS.md
 | Phrase | What happens |
 |-------|----------------|
 | "Открой окна" (Open the windows) | all windows open all the way |
-| "Открой окно на 50 процентов" (Open the window 50 percent) | the driver's window opens halfway |
+| "Открой окно на 30 процентов" (Open the window 30 percent) | the driver's window opens to 30 % |
 | "Приоткрой окно водителя" (Crack the driver's window) | the driver's window opens to vent |
 | "Режим проветривания" (Airing mode) | all windows go to vent, the sunroof lifts |
 | "Выключи режим проветривания" (Turn off airing mode) | the windows and sunroof close |

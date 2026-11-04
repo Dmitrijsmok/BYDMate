@@ -48,6 +48,11 @@ object VoiceCatalog {
         VoiceCommandSpec(HALF, WINDOW_PASSENGER) { "副驾半开" },
         VoiceCommandSpec(HALF, WINDOW_REAR_LEFT) { "后左半开" },
         VoiceCommandSpec(HALF, WINDOW_REAR_RIGHT) { "后右半开" },
+        // Windows — individual exact share (1..99; 0 and 100 are the close / open above)
+        VoiceCommandSpec(SET, WINDOW_DRIVER, ValueSpec(1, 99)) { n -> "主驾打开$n" },
+        VoiceCommandSpec(SET, WINDOW_PASSENGER, ValueSpec(1, 99)) { n -> "副驾打开$n" },
+        VoiceCommandSpec(SET, WINDOW_REAR_LEFT, ValueSpec(1, 99)) { n -> "后左打开$n" },
+        VoiceCommandSpec(SET, WINDOW_REAR_RIGHT, ValueSpec(1, 99)) { n -> "后右打开$n" },
         // Climate
         VoiceCommandSpec(ON, AC_AUTO) { "自动空调" },
         VoiceCommandSpec(OFF, AC_AUTO) { "关闭空调" },

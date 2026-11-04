@@ -48,8 +48,12 @@ rule on: включи|включить|включите|включай
 rule off: выключи|выключить|выключите|выключай|отключи|отключить|погаси
 
 # ---- How far an opening goes ---------------------------------------------------------------
-# A spoken share maps to the widest detent that does not exceed it: windows 10 (vent), 50, 100;
-# the sunroof 7 (tilt), 50, 100. Below the smallest detent nothing matches.
+# A side window takes the number said: 1..99 sets each named window to it (the per-door position
+# fid, 主驾打开30; several windows repeat it per door), 100 is the dedicated full open (打开100,
+# 全开) and 0, after «поставь … на», the dedicated close (打开0, 关闭). A fraction or «чуть» maps
+# to the widest detent that does not exceed it: windows 10 (vent), 50, 100. The sunroof has only
+# its detents, 7 (tilt), 50, 100: a share maps to the widest one that does not exceed it, and
+# below the smallest nothing matches.
 
 rule full: полностью|до конца|на максимум
 rule half: наполовину|на половину|на половинку|до половины|на пол
@@ -57,10 +61,13 @@ rule little: чуть|чуть чуть|немного|немножко|слег
 rule prep: на|до
 rule pct_word: процентов|процента|процент
 list frac: на треть|на четверть => 通风 ; на три четверти => 半开
-list pct1: 10..49 => 通风 ; 50..99 => 半开 ; 100 => 打开100
-list pcts: 10..49 => 通风 ; 50..99 => 半开 ; 100 => 全开
-list set1: 0 => 打开0 ; 10..49 => 通风 ; 50..99 => 半开 ; 100 => 打开100
-list sets: 0 => 关闭 ; 10..49 => 通风 ; 50..99 => 半开 ; 100 => 全开
+# One window: {win}打开{wpct} is 打开100 at 100 and 打开0 at 0, the dedicated open / close.
+range wpct: 1..100
+range wset: 0..100
+# Several windows: 1..99 per door, the endpoints stay the whole-set open / close.
+range wspct: 1..99
+list pcts: 100 => 全开
+list sets: 0 => 关闭 ; 100 => 全开
 list roof_pct: 7..49 => 天窗通风 ; 50..99 => 天窗打开50 ; 100 => 天窗打开100
 list roof_frac: на треть|на четверть => 天窗通风 ; на три четверти => 天窗打开50
 
@@ -77,10 +84,13 @@ list win: <okno>|мое <okno>|<okno> водителя|<okno> у водител�
         |форточку пассажира|пассажирскую форточку => 副驾 ;
     левое <okno>|заднее левое <okno>|<okno> сзади слева|<okno> слева сзади|левую форточку [сзади] => 后左 ;
     правое <okno>|заднее правое <okno>|<okno> сзади справа|<okno> справа сзади|правую форточку [сзади] => 后右
-list wins: окна|все окна|стекла|все стекла|окошки|окна в машине|передние и задние окна => 车窗 ;
-    передние окна|все передние окна|передние стекла|окна спереди|окна водителя и пассажира
-        |стекла водителя и пассажира => 前排车窗 ;
-    задние окна|все задние окна|задние стекла|окна сзади|заднее окно => 后排车窗
+rule wins_all: окна|все окна|стекла|все стекла|окошки|окна в машине|передние и задние окна
+rule wins_front: передние окна|все передние окна|передние стекла|окна спереди|окна водителя и пассажира
+    |стекла водителя и пассажира
+rule wins_rear: задние окна|все задние окна|задние стекла|окна сзади|заднее окно
+list wins: <wins_all> => 车窗 ; <wins_front> => 前排车窗 ; <wins_rear> => 后排车窗
+# The same windows one by one, for an exact share: one position command per door.
+list wins_each: <wins_all> => 主驾,副驾,后左,后右 ; <wins_front> => 主驾,副驾 ; <wins_rear> => 后左,后右
 
 # Fully open or closed.
 <open> {win} [<full>] => {win}打开100
@@ -124,19 +134,23 @@ solo {wins} <little> => {wins}通风
 solo [<on>] режим проветривания => 车窗通风 + 天窗通风
 solo <off> режим проветривания => 车窗关闭 + 天窗打开0
 
-# A share by number or fraction.
-<open> {win} [<prep>] {pct1} [<pct_word>] => {win}{pct1}
-<set> {win} на {set1} [<pct_word>] => {win}{set1}
+# A share by number (exact) or fraction (a detent).
+<open> {win} [<prep>] {wpct} [<pct_word>] => {win}打开{wpct}
+<set> {win} на {wset} [<pct_word>] => {win}打开{wset}
 <open> {win} {frac} => {win}{frac}
-solo {win} <prep> {pct1} [<pct_word>] => {win}{pct1}
-solo {win} {pct1} <pct_word> => {win}{pct1}
-solo {pct1} <pct_word> {win} => {win}{pct1}
+solo {win} <prep> {wpct} [<pct_word>] => {win}打开{wpct}
+solo {win} {wpct} <pct_word> => {win}打开{wpct}
+solo {wpct} <pct_word> {win} => {win}打开{wpct}
 solo {win} {frac} => {win}{frac}
 <open> {wins} [<prep>] {pcts} [<pct_word>] => {wins}{pcts}
+<open> {wins_each} [<prep>] {wspct} [<pct_word>] => {wins_each}打开{wspct}
 <set> {wins} на {sets} [<pct_word>] => {wins}{sets}
+<set> {wins_each} на {wspct} [<pct_word>] => {wins_each}打开{wspct}
 <open> {wins} {frac} => {wins}{frac}
 solo {wins} <prep> {pcts} [<pct_word>] => {wins}{pcts}
+solo {wins_each} <prep> {wspct} [<pct_word>] => {wins_each}打开{wspct}
 solo {wins} {pcts} <pct_word> => {wins}{pcts}
+solo {wins_each} {wspct} <pct_word> => {wins_each}打开{wspct}
 solo {wins} {frac} => {wins}{frac}
 
 # Every window but some: each door that is left gets its own command.

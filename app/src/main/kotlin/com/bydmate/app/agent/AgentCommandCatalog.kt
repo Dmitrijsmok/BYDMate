@@ -50,6 +50,11 @@ object AgentCommandCatalog {
         Cmd("window_passenger_half", "окно переднего пассажира наполовину", { "副驾半开" }),
         Cmd("window_rear_left_half", "заднее левое окно наполовину", { "后左半开" }),
         Cmd("window_rear_right_half", "заднее правое окно наполовину", { "后右半开" }),
+        // Windows — individual exact share, N percent (0 / 100 are the close / open ids above)
+        Cmd("window_driver_position", "окно водителя на N процентов", { n -> "主驾打开$n" }, 1..99),
+        Cmd("window_passenger_position", "окно переднего пассажира на N процентов", { n -> "副驾打开$n" }, 1..99),
+        Cmd("window_rear_left_position", "заднее левое окно на N процентов", { n -> "后左打开$n" }, 1..99),
+        Cmd("window_rear_right_position", "заднее правое окно на N процентов", { n -> "后右打开$n" }, 1..99),
         // Climate
         Cmd("ac_on", "включить климат-контроль (авто)", { "自动空调" }),
         Cmd("ac_off", "выключить климат-контроль", { "关闭空调" }),

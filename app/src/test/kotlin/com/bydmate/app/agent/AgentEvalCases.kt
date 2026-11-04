@@ -40,9 +40,9 @@ internal object AgentEvalCases {
         EvalCase("приоткрой задние окна", EvalKind.ACT, "vehicle_control",
             listOf("windows_half_rear"), note = "half detent on the rear pair, not the whole car"),
         EvalCase("открой водительское окно на двадцать процентов", EvalKind.ACT, "vehicle_control",
-            listOf("window_driver_vent"),
-            note = "percentages do not exist: 20 % is nearest to the vent detent (10 %), " +
-                "and the reply must say which position was used"),
+            listOf("window_driver_position"),
+            note = "a named percentage is exact on a side window: the position id with value 20, " +
+                "not the nearest detent"),
         EvalCase("сделай потеплее, поставь двадцать два", EvalKind.ACT, "vehicle_control",
             listOf("ac_set_temp"), note = "value-carrying climate command"),
         EvalCase("включи подогрев сиденья на тройку", EvalKind.ACT, "vehicle_control",

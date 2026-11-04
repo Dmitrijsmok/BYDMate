@@ -26,18 +26,18 @@ utterance	expected	category	danger
 окно водителя на пол	主驾半开	windows	danger
 открой окно на половинку	主驾半开	windows	danger
 открой окно на половину пожалуйста	主驾半开	windows	danger
-открой окно на пятьдесят процентов	主驾半开	windows	danger
-окно на пятьдесят процентов	主驾半开	windows	danger
-открой окно на пятьдесят	主驾半开	windows	danger
-открой окно на 50 процентов	主驾半开	windows	danger
-открой окно на 50%	主驾半开	windows	danger
-открой окно до пятидесяти процентов	主驾半开	windows	danger
-открой окно на сорок процентов	主驾通风	windows	danger
-открой окно на семьдесят процентов	主驾半开	windows	danger
-открой окно на тридцать процентов	主驾通风	windows	danger
-открой окно на десять процентов	主驾通风	windows	danger
-открой окна на двадцать пять процентов	车窗通风	windows	danger
-открой окна на восемьдесят процентов	车窗半开	windows	danger
+открой окно на пятьдесят процентов	主驾打开50	windows	danger
+окно на пятьдесят процентов	主驾打开50	windows	danger
+открой окно на пятьдесят	主驾打开50	windows	danger
+открой окно на 50 процентов	主驾打开50	windows	danger
+открой окно на 50%	主驾打开50	windows	danger
+открой окно до пятидесяти процентов	主驾打开50	windows	danger
+открой окно на сорок процентов	主驾打开40	windows	danger
+открой окно на семьдесят процентов	主驾打开70	windows	danger
+открой окно на тридцать процентов	主驾打开30	windows	danger
+открой окно на десять процентов	主驾打开10	windows	danger
+открой окна на двадцать пять процентов	主驾打开25+副驾打开25+后左打开25+后右打开25	windows	danger
+открой окна на восемьдесят процентов	主驾打开80+副驾打开80+后左打开80+后右打开80	windows	danger
 открой окна на сто процентов	车窗全开	windows	
 открой окно на треть	主驾通风	windows	danger
 открой водительское окно на треть	主驾通风	windows	danger
@@ -299,14 +299,14 @@ utterance	expected	category	danger
 открой окно водителя на четверть	主驾通风	windows	danger
 подними стекло пассажира наполовину	副驾半开	windows	danger
 закрой окна до половины	车窗半开	windows	
-открой окно на двадцать	主驾通风	windows	danger
-двадцать процентов окно	主驾通风	windows	danger
-открой окна пятьдесят процентов	车窗半开	windows	danger
+открой окно на двадцать	主驾打开20	windows	danger
+двадцать процентов окно	主驾打开20	windows	danger
+открой окна пятьдесят процентов	主驾打开50+副驾打开50+后左打开50+后右打开50	windows	danger
 окна наполовину	车窗半开	windows	danger
 открой окна немного	车窗通风	windows	danger
 опусти стекла наполовину	车窗半开	windows	danger
 закрой форточку	主驾打开0	windows	
-сделай окно на пятьдесят процентов	主驾半开	windows	danger
+сделай окно на пятьдесят процентов	主驾打开50	windows	danger
 закрой окна кроме	UNRECOGNIZED	windows	
 включи обдув стекла	吹前挡	climate	danger
 температура двадцать два	设置温度22	climate	
@@ -360,9 +360,9 @@ utterance	expected	category	danger
 открой окно завтра	UNRECOGNIZED	windows	danger
 открой люк позже	UNRECOGNIZED	sunroof	danger
 открой окна как раньше	UNRECOGNIZED	windows	danger
-открой окно на шестьдесят процентов	主驾半开	windows	danger
-открой окно на пятнадцать процентов	主驾通风	windows	danger
-открой окно на пять процентов	UNRECOGNIZED	windows	danger
+открой окно на шестьдесят процентов	主驾打开60	windows	danger
+открой окно на пятнадцать процентов	主驾打开15	windows	danger
+открой окно на пять процентов	主驾打开5	windows	danger
 поставь окно на ноль процентов	主驾打开0	windows	
 открой люк на пять процентов	UNRECOGNIZED	sunroof	danger
 открой люк на восемьдесят процентов	天窗打开50	sunroof	danger
@@ -391,9 +391,9 @@ utterance	expected	category	danger
 включи обдув переднего стекла	吹前挡	climate	
 включи подогрев всех зеркал	后视镜加热	mirrors	
 вентилятор климата на три	风量3	fan	
-открой окно на пятьдесят пожалуйста процентов	主驾半开	windows	danger
+открой окно на пятьдесят пожалуйста процентов	主驾打开50	windows	danger
 открой окно до пожалуйста конца	主驾打开100	windows	
-открой окно на пожалуйста пятьдесят	主驾半开	windows	danger
+открой окно на пожалуйста пятьдесят	主驾打开50	windows	danger
 окна закрой	车窗关闭	windows	
 открой стекло пассажира	副驾打开100	windows	
 проветри левое окно	后左通风	windows	danger
@@ -409,7 +409,7 @@ utterance	expected	category	danger
 задние окна наполовину	后排车窗半开	windows	danger
 приоткрой передние окна	前排车窗通风	windows	danger
 проветри задние окна	后排车窗通风	windows	danger
-открой водительское окно на двадцать процентов	主驾通风	windows	danger
+открой водительское окно на двадцать процентов	主驾打开20	windows	danger
 открой правое окно	后右打开100	windows	
 открыть окно	主驾打开100	windows	
 не открой окно	UNRECOGNIZED	windows	danger
@@ -423,18 +423,18 @@ utterance	expected	category	danger
 открой окно на максимум минимум	UNRECOGNIZED	windows	danger
 открой окно на двадцать на тридцать	UNRECOGNIZED	windows	danger
 открой окно на сто процентов	主驾打开100	windows	
-открой окно на восемьдесят процентов	主驾半开	windows	danger
-открой окно на семьдесят пять процентов	主驾半开	windows	danger
-открой окно на тридцать три процента	主驾通风	windows	danger
-открой окно на двадцать пять процентов	主驾通风	windows	danger
-открой окно на двадцать два процента	主驾通风	windows	danger
-открой окно на девять процентов	UNRECOGNIZED	windows	danger
+открой окно на восемьдесят процентов	主驾打开80	windows	danger
+открой окно на семьдесят пять процентов	主驾打开75	windows	danger
+открой окно на тридцать три процента	主驾打开33	windows	danger
+открой окно на двадцать пять процентов	主驾打开25	windows	danger
+открой окно на двадцать два процента	主驾打开22	windows	danger
+открой окно на девять процентов	主驾打开9	windows	danger
 открой окна кроме окна	UNRECOGNIZED	windows	danger
 закрой окна кроме заднего левого и правого	UNRECOGNIZED	windows	
 открой окна кроме переднего правого	主驾打开100+后左打开100+后右打开100	windows	danger
 открой закрой окно	UNRECOGNIZED	windows	danger
-поставь окно на пятьдесят процентов	主驾半开	windows	danger
-установи окна на двадцать процентов	车窗通风	windows	danger
+поставь окно на пятьдесят процентов	主驾打开50	windows	danger
+установи окна на двадцать процентов	主驾打开20+副驾打开20+后左打开20+后右打开20	windows	danger
 проветри салон	车窗通风	windows	danger
 проветри машину	车窗通风	windows	danger
 проветрить машину	车窗通风	windows	danger
@@ -551,9 +551,9 @@ utterance	expected	category	danger
 открой наполовину окна	车窗半开	windows	danger
 поставь окно на проветривание	主驾通风	windows	danger
 окна приоткрой	车窗通风	windows	danger
-окно пассажира тридцать процентов	副驾通风	windows	danger
-окна на двадцать процентов	车窗通风	windows	danger
-окна пятьдесят процентов	车窗半开	windows	danger
+окно пассажира тридцать процентов	副驾打开30	windows	danger
+окна на двадцать процентов	主驾打开20+副驾打开20+后左打开20+后右打开20	windows	danger
+окна пятьдесят процентов	主驾打开50+副驾打开50+后左打开50+后右打开50	windows	danger
 окна на треть	车窗通风	windows	danger
 люк открой	天窗打开100	sunroof	
 люк закрой	天窗打开0	sunroof	
@@ -561,7 +561,7 @@ utterance	expected	category	danger
 открой люк и окна	天窗打开100+车窗全开	sunroof	
 второй уровень вентиляции сиденья пассажира	副驾座椅通风2档	seats	
 выключи руль	关闭方向盘加热	steering heat	
-окно водителя на пятьдесят	主驾半开	windows	danger
+окно водителя на пятьдесят	主驾打开50	windows	danger
 открой пассажирское окно	副驾打开100	windows	
 разблокируй машину	车门解锁	locks	
 заблокируй машину	车门上锁	locks	

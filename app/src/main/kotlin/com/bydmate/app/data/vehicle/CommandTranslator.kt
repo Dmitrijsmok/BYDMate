@@ -280,10 +280,11 @@ object CommandTranslator {
             val c = m.groupValues[1].toIntOrNull() ?: return emptyList()
             return fridgeHeat(c.coerceIn(FRIDGE_HEAT_MIN, FRIDGE_HEAT_MAX))
         }
-        // Dynamic window position: <door>打开<N> → window_<door>_pos for the canonical 1..99 only
-        // (the automation level row, step 10). 打开0 / 打开100 are the table's dedicated close /
-        // open fids. No clamp: 打开150 or 打开0100 stay unknown, because the speed gate
-        // (ActionDispatcher.isWindowOpenCommand) does not take them for an open either.
+        // Dynamic window position: <door>打开<N> → window_<door>_pos for 1..99 (an exact share by
+        // local voice, the agent's window_*_position, the automation level row, Alice).
+        // 打开0 / 打开100 are the table's dedicated close / open fids. No clamp: 打开150 or 打开0100
+        // stay unknown, because the speed gate (ActionDispatcher.isWindowOpenCommand) does not
+        // take them for an open either.
         WINDOW_POS_REGEX.matchEntire(stripped)?.let { m ->
             return windowsPct(m.groupValues[2].toInt(), WINDOW_DOORS.getValue(m.groupValues[1]))
         }
@@ -316,8 +317,8 @@ object CommandTranslator {
     // opening for fresh air; tune from user feedback. Stays under the >80 km/h gate.
     private const val VENT_PCT = 10
 
-    // Half = the 50 % detent, the only aperture between vent and full open that
-    // voice and the agent expose (arbitrary percentages are not offered).
+    // Half = the 50 % detent («наполовину»); a percentage the driver names goes through the
+    // dynamic <door>打开<N> path in resolve() instead.
     private const val HALF_PCT = 50
 
     /** Action names produced only by dynamic resolution (absent from [table]). */
