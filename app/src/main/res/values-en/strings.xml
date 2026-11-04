@@ -2180,4 +2180,28 @@
         <item quantity="one">%1$d more code did not fit, all of them are in the “Diagnostics” window</item>
         <item quantity="other">%1$d more codes did not fit, all of them are in the “Diagnostics” window</item>
     </plurals>
+
+    <!-- Smart Home: Yandex Alice bridge -->
+    <string name="settings_alice_header">Yandex Alice</string>
+    <string name="settings_alice_polling_title">Alice bridge</string>
+    <string name="settings_alice_polling_desc">BYDMate fetches Alice\'s commands from your server (Worker) and reports the car state to it</string>
+    <string name="settings_alice_endpoint">Worker address (Endpoint URL)</string>
+    <string name="settings_alice_api_key">API key</string>
+    <string name="settings_alice_ttl_hint">Commands older than %1$d s are not run: the car may have been offline when Alice took them.</string>
+    <string name="settings_alice_permissions_header">What Alice may do</string>
+    <string name="settings_alice_vehicle_control_title">Alice may control the car</string>
+    <string name="settings_alice_vehicle_control_desc">Climate, seats, lights, windows and sunroof, trunk, text commands. BYDMate\'s speed limits always apply.</string>
+    <string name="settings_alice_navigation_title">Alice may navigate</string>
+    <string name="settings_alice_navigation_desc">Route, map search and a point on the map, in the app chosen in «Navigator for routes».</string>
+    <string name="settings_alice_always_allowed_hint">Launching apps, media, the cluster projection and questions about the car always work.</string>
+    <string name="settings_alice_state_report">State sent %1$s s ago: cabin %2$s, climate %3$s, outside %4$s (response %5$s)</string>
+    <string name="settings_alice_state_report_none">The car state has not been sent yet</string>
+    <string name="settings_alice_last_command">Last command %1$s s ago: %2$s → %3$s</string>
+    <string name="settings_alice_last_command_none">No commands from Alice yet</string>
+    <string name="settings_alice_refresh">Refresh</string>
+    <string name="settings_voice_app_matches_title">Voice command apps</string>
+    <string name="settings_voice_app_matches_desc">Shows which installed app BYDMate matched to each Alice command.</string>
+    <string name="settings_voice_app_matches_button">Show</string>
+    <string name="settings_voice_app_matches_dialog_title">Application matches</string>
+    <string name="settings_voice_app_matches_not_found">Not found on this device</string>
 </resources>

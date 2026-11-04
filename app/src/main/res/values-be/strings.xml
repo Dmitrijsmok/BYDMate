@@ -2342,4 +2342,28 @@
         <item quantity="many">Яшчэ %1$d кодаў не змясціліся, усе ў акне «Дыягностыка»</item>
         <item quantity="other">Яшчэ %1$d кода не змясціліся, усе ў акне «Дыягностыка»</item>
     </plurals>
+
+    <!-- Smart Home: Yandex Alice bridge -->
+    <string name="settings_alice_header">Яндэкс Аліса</string>
+    <string name="settings_alice_polling_title">Мост з Алісай</string>
+    <string name="settings_alice_polling_desc">BYDMate забірае каманды Алісы з вашага сервера (Worker) і паведамляе яму стан машыны</string>
+    <string name="settings_alice_endpoint">Адрас Worker (Endpoint URL)</string>
+    <string name="settings_alice_api_key">API-ключ</string>
+    <string name="settings_alice_ttl_hint">Каманды, старэйшыя за %1$d с, не выконваюцца: машына магла быць па-за сеткай, калі Аліса іх прыняла.</string>
+    <string name="settings_alice_permissions_header">Што дазволена Алісе</string>
+    <string name="settings_alice_vehicle_control_title">Аліса можа кіраваць машынай</string>
+    <string name="settings_alice_vehicle_control_desc">Клімат, сядзенні, святло, вокны і люк, багажнік, тэкставыя каманды. Абмежаванні BYDMate па хуткасці дзейнічаюць заўсёды.</string>
+    <string name="settings_alice_navigation_title">Аліса можа пракладваць маршруты</string>
+    <string name="settings_alice_navigation_desc">Маршрут, пошук і кропка на карце — у навігатары, абраным у «Навігатар для маршрутаў».</string>
+    <string name="settings_alice_always_allowed_hint">Запуск праграм, медыя, праекцыя на прыборную панэль і пытанні пра аўтамабіль працуюць заўсёды.</string>
+    <string name="settings_alice_state_report">Стан адпраўлены %1$s с таму: салон %2$s, клімат %3$s, вуліца %4$s (адказ %5$s)</string>
+    <string name="settings_alice_state_report_none">Стан машыны яшчэ не адпраўляўся</string>
+    <string name="settings_alice_last_command">Апошняя каманда %1$s с таму: %2$s → %3$s</string>
+    <string name="settings_alice_last_command_none">Каманд ад Алісы яшчэ не было</string>
+    <string name="settings_alice_refresh">Абнавіць</string>
+    <string name="settings_voice_app_matches_title">Праграмы галасавых каманд</string>
+    <string name="settings_voice_app_matches_desc">Паказвае, якую ўсталяваную праграму BYDMate знайшоў для кожнай каманды Алісы.</string>
+    <string name="settings_voice_app_matches_button">Паказаць</string>
+    <string name="settings_voice_app_matches_dialog_title">Супадзенні праграм</string>
+    <string name="settings_voice_app_matches_not_found">Не знойдзена на гэтай прыладзе</string>
 </resources>

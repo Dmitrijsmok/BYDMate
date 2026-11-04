@@ -2358,4 +2358,28 @@
         <item quantity="other">Ещё %1$d кода не поместились, все в окне «Диагностика»</item>
     </plurals>
     <string name="tech_value_pm25" translatable="false">%1$d µg/m³</string>
+
+    <!-- Smart Home: Yandex Alice bridge -->
+    <string name="settings_alice_header">Яндекс Алиса</string>
+    <string name="settings_alice_polling_title">Мост с Алисой</string>
+    <string name="settings_alice_polling_desc">BYDMate забирает команды Алисы с вашего сервера (Worker) и сообщает ему состояние машины</string>
+    <string name="settings_alice_endpoint">Адрес Worker (Endpoint URL)</string>
+    <string name="settings_alice_api_key">API-ключ</string>
+    <string name="settings_alice_ttl_hint">Команды старше %1$d с не выполняются: машина могла быть не в сети, когда Алиса их приняла.</string>
+    <string name="settings_alice_permissions_header">Что разрешено Алисе</string>
+    <string name="settings_alice_vehicle_control_title">Алиса может управлять машиной</string>
+    <string name="settings_alice_vehicle_control_desc">Климат, сиденья, свет, окна и люк, багажник, текстовые команды. Ограничения BYDMate по скорости действуют всегда.</string>
+    <string name="settings_alice_navigation_title">Алиса может прокладывать маршруты</string>
+    <string name="settings_alice_navigation_desc">Маршрут, поиск и точка на карте — в навигаторе, выбранном в «Навигатор для маршрутов».</string>
+    <string name="settings_alice_always_allowed_hint">Запуск приложений, медиа, проекция на приборную панель и вопросы об автомобиле работают всегда.</string>
+    <string name="settings_alice_state_report">Состояние отправлено %1$s с назад: салон %2$s, климат %3$s, улица %4$s (ответ %5$s)</string>
+    <string name="settings_alice_state_report_none">Состояние машины ещё не отправлялось</string>
+    <string name="settings_alice_last_command">Последняя команда %1$s с назад: %2$s → %3$s</string>
+    <string name="settings_alice_last_command_none">Команд от Алисы ещё не было</string>
+    <string name="settings_alice_refresh">Обновить</string>
+    <string name="settings_voice_app_matches_title">Приложения голосовых команд</string>
+    <string name="settings_voice_app_matches_desc">Показывает, какое установленное приложение BYDMate нашёл для каждой команды Алисы.</string>
+    <string name="settings_voice_app_matches_button">Показать</string>
+    <string name="settings_voice_app_matches_dialog_title">Совпадения приложений</string>
+    <string name="settings_voice_app_matches_not_found">Не найдено на этом устройстве</string>
 </resources>

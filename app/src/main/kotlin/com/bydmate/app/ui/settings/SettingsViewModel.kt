@@ -194,12 +194,19 @@ data class SettingsUiState(
     val tariffPeriodError: String? = null,
     /** Losses derived from the meter readings the driver typed in; null until one exists. */
     val measuredLosses: MeasuredLosses? = null,
-    // Hidden Smart Home settings (unlocked by tapping version 7 times)
-    val devModeUnlocked: Boolean = false,
+    // Smart Home (Yandex Alice bridge)
     val aliceEndpoint: String = "",
     val aliceApiKey: String = "",
     val aliceEnabled: Boolean = false,
     val aliceSaveStatus: String? = null,
+    /** «Алиса может управлять машиной» / «… прокладывать маршруты»: both off by default. */
+    val aliceVehicleControl: Boolean = false,
+    val aliceNavigation: Boolean = false,
+    /** What the bridge last told the worker and did, refreshed when the section opens. */
+    val aliceStateReport: com.bydmate.app.data.remote.AliceStateReportSnapshot =
+        com.bydmate.app.data.remote.AliceStateReportSnapshot(),
+    val aliceLastCommand: com.bydmate.app.data.remote.AliceLastCommand? = null,
+    val aliceAppMatches: List<com.bydmate.app.data.remote.VoiceAppMatch> = emptyList(),
     val autoCheckUpdates: Boolean = true,
     val abrpTelemetryEnabled: Boolean = false,
     val abrpApiKey: String = "",
@@ -584,6 +591,9 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
             val aliceEndpoint = settingsRepository.getString(SettingsRepository.KEY_ALICE_ENDPOINT, "")
             val aliceApiKey = settingsRepository.getString(SettingsRepository.KEY_ALICE_API_KEY, "")
             val aliceEnabled = settingsRepository.getString(SettingsRepository.KEY_ALICE_ENABLED, "false") == "true"
+            val aliceVehicleControl =
+                settingsRepository.getString(SettingsRepository.KEY_ALICE_VEHICLE_CONTROL, "false") == "true"
+            val aliceNavigation = settingsRepository.getString(SettingsRepository.KEY_ALICE_NAVIGATION, "false") == "true"
 
             val abrpEnabled = settingsRepository.getString(SettingsRepository.KEY_ABRP_ENABLED, "false") == "true"
             val abrpApiKey = settingsRepository.getString(SettingsRepository.KEY_ABRP_API_KEY, "")
@@ -686,6 +696,8 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     aliceEndpoint = aliceEndpoint,
                     aliceApiKey = aliceApiKey,
                     aliceEnabled = aliceEnabled,
+                    aliceVehicleControl = aliceVehicleControl,
+                    aliceNavigation = aliceNavigation,
                     abrpTelemetryEnabled = abrpEnabled,
                     abrpApiKey = abrpApiKey,
                     abrpUserToken = abrpUserToken,
@@ -1199,21 +1211,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
         }
     }
 
-    // --- Smart Home (hidden) ---
-
-    private var versionTapCount = 0
-    private var lastVersionTapTime = 0L
-
-    fun onVersionTap() {
-        val now = System.currentTimeMillis()
-        if (now - lastVersionTapTime > 2000) versionTapCount = 0
-        lastVersionTapTime = now
-        versionTapCount++
-        if (versionTapCount >= 7) {
-            _uiState.update { it.copy(devModeUnlocked = true) }
-            versionTapCount = 0
-        }
-    }
+    // --- Smart Home (Yandex Alice bridge) ---
 
     fun updateAliceEndpoint(value: String) {
         _uiState.update { it.copy(aliceEndpoint = value) }
@@ -1240,6 +1238,41 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
         _uiState.update { it.copy(aliceEnabled = enabled) }
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_ALICE_ENABLED, enabled.toString())
+        }
+    }
+
+    fun toggleAliceVehicleControl(enabled: Boolean) {
+        _uiState.update { it.copy(aliceVehicleControl = enabled) }
+        viewModelScope.launch {
+            settingsRepository.setString(SettingsRepository.KEY_ALICE_VEHICLE_CONTROL, enabled.toString())
+        }
+    }
+
+    fun toggleAliceNavigation(enabled: Boolean) {
+        _uiState.update { it.copy(aliceNavigation = enabled) }
+        viewModelScope.launch {
+            settingsRepository.setString(SettingsRepository.KEY_ALICE_NAVIGATION, enabled.toString())
+        }
+    }
+
+    /** The last state report (temperatures) and command of the bridge, for the section's status lines. */
+    fun refreshAliceDiagnostics() {
+        _uiState.update {
+            it.copy(
+                aliceStateReport = com.bydmate.app.data.remote.AliceBridgeDiagnostics.stateReport,
+                aliceLastCommand = com.bydmate.app.data.remote.AliceBridgeDiagnostics.lastCommand,
+            )
+        }
+    }
+
+    /** Which installed app each Alice app action opens on this head unit. */
+    fun loadAliceAppMatches() {
+        viewModelScope.launch {
+            val matches = withContext(Dispatchers.IO) {
+                runCatching { com.bydmate.app.data.remote.AliceAppResolver(appContext).diagnosticMatches() }
+                    .getOrDefault(emptyList())
+            }
+            _uiState.update { it.copy(aliceAppMatches = matches) }
         }
     }
 
@@ -2160,6 +2193,27 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
             try {
                 appendLine(com.bydmate.app.data.carstatus.CarStatusReader(appContext).dumpLine())
             } catch (e: Exception) { appendLine("error: ${e.message}") }
+
+            // What the Alice worker was last told (the temperatures Alice answers from) and the
+            // last bridge command. The endpoint and key are secrets: only whether they are set.
+            appendLine("--- alice bridge ---")
+            try {
+                val values = listOf(
+                    SettingsRepository.KEY_ALICE_ENABLED, SettingsRepository.KEY_ALICE_ENDPOINT,
+                    SettingsRepository.KEY_ALICE_API_KEY, SettingsRepository.KEY_ALICE_VEHICLE_CONTROL,
+                    SettingsRepository.KEY_ALICE_NAVIGATION,
+                ).associateWith { settingsRepository.getString(it, "") }
+                appendLine(
+                    "polling=${values[SettingsRepository.KEY_ALICE_ENABLED] == "true"} " +
+                        "endpoint_set=${values[SettingsRepository.KEY_ALICE_ENDPOINT].orEmpty().isNotBlank()} " +
+                        "key_len=${values[SettingsRepository.KEY_ALICE_API_KEY].orEmpty().length} " +
+                        "vehicle_control=${values[SettingsRepository.KEY_ALICE_VEHICLE_CONTROL] == "true"} " +
+                        "navigation=${values[SettingsRepository.KEY_ALICE_NAVIGATION] == "true"}"
+                )
+                appendLine(com.bydmate.app.data.remote.AliceBridgeDiagnostics.dumpLine())
+            } catch (e: Exception) {
+                appendLine("error: ${e.message}")
+            }
 
             // ICE-side addresses nothing in the app reads yet (#184). A DM-i owner sends this
             // dump with the engine running and the raw words say which of them are live there.

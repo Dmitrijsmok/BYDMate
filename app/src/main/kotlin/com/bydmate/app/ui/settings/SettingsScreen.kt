@@ -275,23 +275,15 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(12.dp))
 
         var selected by rememberSaveable { mutableStateOf(SettingsSection.VOICE) }
-        val hiddenSelected = selected == SettingsSection.SMART_HOME
-        val safeSelected = if (hiddenSelected && !state.devModeUnlocked) {
-            SettingsSection.VOICE
-        } else {
-            selected
-        }
 
         Row(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             SettingsRail(
-                selected = safeSelected,
-                smartHomeUnlocked = state.devModeUnlocked,
+                selected = selected,
                 appVersion = state.appVersion,
                 onSelect = { selected = it },
-                onVersionTap = { viewModel.onVersionTap() },
                 modifier = Modifier.width(260.dp).fillMaxSize(),
             )
 
@@ -306,7 +298,7 @@ fun SettingsScreen(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    when (safeSelected) {
+                    when (selected) {
                         SettingsSection.BATTERY -> BatterySection(state, viewModel, onNavigateToTariffPeriods)
                         SettingsSection.INTEGRATIONS -> IntegrationsSection(state, viewModel)
                         SettingsSection.VOICE -> VoiceSettingsContent(
@@ -328,10 +320,8 @@ fun SettingsScreen(
 @Composable
 private fun SettingsRail(
     selected: SettingsSection,
-    smartHomeUnlocked: Boolean,
     appVersion: String,
     onSelect: (SettingsSection) -> Unit,
-    onVersionTap: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Card(
@@ -352,12 +342,9 @@ private fun SettingsRail(
                 )
 
                 SettingsSection.entries.forEach { section ->
-                    val isHidden = section == SettingsSection.SMART_HOME
-                    if (isHidden && !smartHomeUnlocked) return@forEach
                     RailItem(
                         section = section,
                         isActive = section == selected,
-                        isHidden = isHidden,
                         onClick = { onSelect(section) },
                     )
                 }
@@ -367,8 +354,7 @@ private fun SettingsRail(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                    .clickable { onVersionTap() },
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -385,16 +371,10 @@ private fun SettingsRail(
 private fun RailItem(
     section: SettingsSection,
     isActive: Boolean,
-    isHidden: Boolean,
     onClick: () -> Unit,
 ) {
-    val activeColor = if (isHidden) AccentOrange else AccentGreen
-    val bg = if (isActive) activeColor.copy(alpha = 0.12f) else Color.Transparent
-    val fg = when {
-        isActive -> activeColor
-        isHidden -> AccentOrange
-        else -> TextSecondary
-    }
+    val bg = if (isActive) AccentGreen.copy(alpha = 0.12f) else Color.Transparent
+    val fg = if (isActive) AccentGreen else TextSecondary
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -4347,7 +4327,13 @@ private fun OnlineTtsVoiceRow(
 
 @Composable
 private fun SmartHomeSection(state: SettingsUiState, viewModel: SettingsViewModel) {
-    SectionHeader(text = "Умный дом")
+    var showAppMatches by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { viewModel.refreshAliceDiagnostics() }
+    if (showAppMatches) {
+        AliceAppMatchesDialog(matches = state.aliceAppMatches, onDismiss = { showAppMatches = false })
+    }
+
+    SectionHeader(text = stringResource(R.string.settings_alice_header))
     Card(
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
@@ -4358,27 +4344,28 @@ private fun SmartHomeSection(state: SettingsUiState, viewModel: SettingsViewMode
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SettingToggleRow(
-                title = "Polling",
+                title = stringResource(R.string.settings_alice_polling_title),
+                description = stringResource(R.string.settings_alice_polling_desc),
                 traceId = "alice_polling",
                 checked = state.aliceEnabled,
                 onCheckedChange = { viewModel.toggleAlice(it) },
             )
             SettingsTextField(
-                label = "Endpoint URL",
+                label = stringResource(R.string.settings_alice_endpoint),
                 value = state.aliceEndpoint,
                 onValueChange = { viewModel.updateAliceEndpoint(it) },
                 keyboardType = KeyboardType.Uri
             )
             SettingsTextField(
-                label = "API Key",
+                label = stringResource(R.string.settings_alice_api_key),
                 value = state.aliceApiKey,
                 onValueChange = { viewModel.updateAliceApiKey(it) },
                 keyboardType = KeyboardType.Password,
                 secret = true
             )
             SettingActionRow(
-                title = "Сохранить",
-                buttonLabel = "Сохранить",
+                title = stringResource(R.string.settings_config_save_button),
+                buttonLabel = stringResource(R.string.settings_config_save_button),
                 onClick = { viewModel.saveAliceSettings() },
                 style = SettingButtonStyle.Primary,
                 enabled = state.aliceEndpoint.isNotBlank() && state.aliceApiKey.isNotBlank(),
@@ -4386,9 +4373,135 @@ private fun SmartHomeSection(state: SettingsUiState, viewModel: SettingsViewMode
             state.aliceSaveStatus?.let {
                 Text(it, color = AccentGreen, fontSize = 12.sp)
             }
-            SettingHint("Polling опрашивает Worker каждую секунду\nи выполняет команды через D+ API")
+            SettingHint(stringResource(R.string.settings_alice_ttl_hint, ALICE_COMMAND_TTL_S))
         }
     }
+
+    SectionHeader(text = stringResource(R.string.settings_alice_permissions_header))
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SettingToggleRow(
+                title = stringResource(R.string.settings_alice_vehicle_control_title),
+                description = stringResource(R.string.settings_alice_vehicle_control_desc),
+                traceId = "alice_vehicle_control",
+                checked = state.aliceVehicleControl,
+                onCheckedChange = { viewModel.toggleAliceVehicleControl(it) },
+            )
+            SettingDivider()
+            SettingToggleRow(
+                title = stringResource(R.string.settings_alice_navigation_title),
+                description = stringResource(R.string.settings_alice_navigation_desc),
+                traceId = "alice_navigation",
+                checked = state.aliceNavigation,
+                onCheckedChange = { viewModel.toggleAliceNavigation(it) },
+            )
+            SettingHint(stringResource(R.string.settings_alice_always_allowed_hint))
+        }
+    }
+
+    SectionHeader(text = stringResource(R.string.settings_diagnostics_header))
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            AliceBridgeStatusLines(state)
+            SettingActionRow(
+                title = stringResource(R.string.settings_alice_refresh),
+                buttonLabel = stringResource(R.string.settings_alice_refresh),
+                onClick = { viewModel.refreshAliceDiagnostics() },
+            )
+            SettingDivider()
+            SettingActionRow(
+                title = stringResource(R.string.settings_voice_app_matches_title),
+                description = stringResource(R.string.settings_voice_app_matches_desc),
+                buttonLabel = stringResource(R.string.settings_voice_app_matches_button),
+                onClick = {
+                    viewModel.loadAliceAppMatches()
+                    showAppMatches = true
+                },
+            )
+        }
+    }
+}
+
+/** Seconds an Alice bridge command may be old (AliceCommandTtl), for the hint. */
+private val ALICE_COMMAND_TTL_S = (com.bydmate.app.data.remote.AliceCommandTtl.DEFAULT_TTL_MS / 1000L).toInt()
+
+/** The temperatures last sent to the worker and the last command, as plain status text. */
+@Composable
+private fun AliceBridgeStatusLines(state: SettingsUiState) {
+    val now = System.currentTimeMillis()
+    fun temp(value: Int?) = value?.let { "$it °C" } ?: "—"
+    fun age(atMs: Long) = ((now - atMs) / 1000L).coerceAtLeast(0L).toString()
+    val report = state.aliceStateReport
+    val reportText = if (report.attemptedAtMs <= 0L) {
+        stringResource(R.string.settings_alice_state_report_none)
+    } else {
+        stringResource(
+            R.string.settings_alice_state_report,
+            age(report.attemptedAtMs), temp(report.insideTemp), temp(report.acTemp), temp(report.exteriorTemp),
+            report.httpCode?.toString() ?: report.error ?: "—",
+        )
+    }
+    val last = state.aliceLastCommand
+    val lastText = if (last == null) {
+        stringResource(R.string.settings_alice_last_command_none)
+    } else {
+        stringResource(R.string.settings_alice_last_command, age(last.atMs), last.action, last.error ?: "OK")
+    }
+    Text(reportText, color = TextSecondary, fontSize = 12.sp)
+    Text(lastText, color = TextSecondary, fontSize = 12.sp)
+}
+
+@Composable
+private fun AliceAppMatchesDialog(
+    matches: List<com.bydmate.app.data.remote.VoiceAppMatch>,
+    onDismiss: () -> Unit,
+) {
+    AppAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_voice_app_matches_dialog_title)) },
+        text = {
+            LazyColumn(
+                modifier = Modifier.heightIn(max = 420.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(matches, key = { it.action }) { match ->
+                    Column {
+                        Text(
+                            text = match.action,
+                            color = TextPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                        Text(
+                            text = match.packageName
+                                ?.let { pkg -> listOfNotNull(match.appLabel, pkg).distinct().joinToString(" · ") }
+                                ?: stringResource(R.string.settings_voice_app_matches_not_found),
+                            color = if (match.packageName != null) TextSecondary else TextMuted,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(android.R.string.ok)) }
+        },
+    )
 }
 
 @Composable

@@ -2181,4 +2181,28 @@
         <item quantity="many">Mais %1$d códigos não couberam, todos estão na janela «Diagnóstico»</item>
         <item quantity="other">Mais %1$d códigos não couberam, todos estão na janela «Diagnóstico»</item>
     </plurals>
+
+    <!-- Smart Home: Yandex Alice bridge -->
+    <string name="settings_alice_header">Yandex Alice</string>
+    <string name="settings_alice_polling_title">Ponte com a Alice</string>
+    <string name="settings_alice_polling_desc">O BYDMate busca os comandos da Alice no seu servidor (Worker) e informa a ele o estado do carro</string>
+    <string name="settings_alice_endpoint">Endereço do Worker (Endpoint URL)</string>
+    <string name="settings_alice_api_key">Chave de API</string>
+    <string name="settings_alice_ttl_hint">Comandos com mais de %1$d s não são executados: o carro pode ter estado offline quando a Alice os recebeu.</string>
+    <string name="settings_alice_permissions_header">O que a Alice pode fazer</string>
+    <string name="settings_alice_vehicle_control_title">A Alice pode controlar o carro</string>
+    <string name="settings_alice_vehicle_control_desc">Climatização, bancos, luzes, vidros e teto solar, porta-malas, comandos de texto. Os limites de velocidade do BYDMate sempre se aplicam.</string>
+    <string name="settings_alice_navigation_title">A Alice pode traçar rotas</string>
+    <string name="settings_alice_navigation_desc">Rota, busca no mapa e ponto no mapa, no app escolhido em «Navegador para rotas».</string>
+    <string name="settings_alice_always_allowed_hint">Abrir apps, mídia, a projeção no painel e perguntas sobre o carro funcionam sempre.</string>
+    <string name="settings_alice_state_report">Estado enviado há %1$s s: cabine %2$s, climatização %3$s, exterior %4$s (resposta %5$s)</string>
+    <string name="settings_alice_state_report_none">O estado do carro ainda não foi enviado</string>
+    <string name="settings_alice_last_command">Último comando há %1$s s: %2$s → %3$s</string>
+    <string name="settings_alice_last_command_none">Nenhum comando da Alice ainda</string>
+    <string name="settings_alice_refresh">Atualizar</string>
+    <string name="settings_voice_app_matches_title">Apps de comandos de voz</string>
+    <string name="settings_voice_app_matches_desc">Mostra qual app instalado o BYDMate associou a cada comando da Alice.</string>
+    <string name="settings_voice_app_matches_button">Mostrar</string>
+    <string name="settings_voice_app_matches_dialog_title">Correspondências de apps</string>
+    <string name="settings_voice_app_matches_not_found">Não encontrado neste dispositivo</string>
 </resources>

@@ -2538,6 +2538,26 @@ class SettingsViewModelTest {
         assertTrue(vm.uiState.value.tgLogAutoSendEnabled)
     }
 
+    @Test fun `Alice permissions start off and persist independently`() = runTest {
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertFalse(vm.uiState.value.aliceVehicleControl)
+        assertFalse(vm.uiState.value.aliceNavigation)
+
+        vm.toggleAliceNavigation(true)
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals("true", settingsDao.map[SettingsRepository.KEY_ALICE_NAVIGATION])
+        assertNull(settingsDao.map[SettingsRepository.KEY_ALICE_VEHICLE_CONTROL])
+
+        vm.toggleAliceVehicleControl(true)
+        vm.toggleAliceNavigation(false)
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals("true", settingsDao.map[SettingsRepository.KEY_ALICE_VEHICLE_CONTROL])
+        assertEquals("false", settingsDao.map[SettingsRepository.KEY_ALICE_NAVIGATION])
+        assertTrue(vm.uiState.value.aliceVehicleControl)
+        assertFalse(vm.uiState.value.aliceNavigation)
+    }
+
     @Test fun `voice buttons persist independently and clearing Alice retains Local`() = runTest {
         val vm = buildViewModel()
         testDispatcher.scheduler.advanceUntilIdle()

@@ -2342,4 +2342,28 @@
         <item quantity="many">Jeszcze %1$d kodów się nie zmieściło, wszystkie w oknie „Diagnostyka”</item>
         <item quantity="other">Jeszcze %1$d kodu się nie zmieściło, wszystkie w oknie „Diagnostyka”</item>
     </plurals>
+
+    <!-- Smart Home: Yandex Alice bridge -->
+    <string name="settings_alice_header">Yandex Alice</string>
+    <string name="settings_alice_polling_title">Most z Alice</string>
+    <string name="settings_alice_polling_desc">BYDMate pobiera polecenia Alice z Twojego serwera (Worker) i przekazuje mu stan samochodu</string>
+    <string name="settings_alice_endpoint">Adres Workera (Endpoint URL)</string>
+    <string name="settings_alice_api_key">Klucz API</string>
+    <string name="settings_alice_ttl_hint">Polecenia starsze niż %1$d s nie są wykonywane: samochód mógł być offline, gdy Alice je przyjęła.</string>
+    <string name="settings_alice_permissions_header">Co może Alice</string>
+    <string name="settings_alice_vehicle_control_title">Alice może sterować samochodem</string>
+    <string name="settings_alice_vehicle_control_desc">Klimatyzacja, fotele, światła, szyby i szyberdach, bagażnik, polecenia tekstowe. Ograniczenia prędkości BYDMate obowiązują zawsze.</string>
+    <string name="settings_alice_navigation_title">Alice może wyznaczać trasy</string>
+    <string name="settings_alice_navigation_desc">Trasa, wyszukiwanie i punkt na mapie — w aplikacji wybranej w „Nawigacja dla tras”.</string>
+    <string name="settings_alice_always_allowed_hint">Uruchamianie aplikacji, multimedia, projekcja na zegary i pytania o samochód działają zawsze.</string>
+    <string name="settings_alice_state_report">Stan wysłany %1$s s temu: kabina %2$s, klimatyzacja %3$s, na zewnątrz %4$s (odpowiedź %5$s)</string>
+    <string name="settings_alice_state_report_none">Stan samochodu nie został jeszcze wysłany</string>
+    <string name="settings_alice_last_command">Ostatnie polecenie %1$s s temu: %2$s → %3$s</string>
+    <string name="settings_alice_last_command_none">Brak jeszcze poleceń od Alice</string>
+    <string name="settings_alice_refresh">Odśwież</string>
+    <string name="settings_voice_app_matches_title">Aplikacje poleceń głosowych</string>
+    <string name="settings_voice_app_matches_desc">Pokazuje, którą zainstalowaną aplikację BYDMate dopasował do każdego polecenia Alice.</string>
+    <string name="settings_voice_app_matches_button">Pokaż</string>
+    <string name="settings_voice_app_matches_dialog_title">Dopasowania aplikacji</string>
+    <string name="settings_voice_app_matches_not_found">Nie znaleziono na tym urządzeniu</string>
 </resources>

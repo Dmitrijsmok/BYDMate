@@ -2289,4 +2289,28 @@
     <plurals name="tech_dtc_more_codes">
         <item quantity="other">还有 %1$d 个故障码放不下，全部见“诊断”窗口</item>
     </plurals>
+
+    <!-- Smart Home: Yandex Alice bridge -->
+    <string name="settings_alice_header">Yandex Alice</string>
+    <string name="settings_alice_polling_title">Alice 桥接</string>
+    <string name="settings_alice_polling_desc">BYDMate 从你的服务器（Worker）获取 Alice 的指令，并向其报告车辆状态</string>
+    <string name="settings_alice_endpoint">Worker 地址（Endpoint URL）</string>
+    <string name="settings_alice_api_key">API 密钥</string>
+    <string name="settings_alice_ttl_hint">超过 %1$d 秒的指令不会执行：Alice 接收指令时车辆可能处于离线状态。</string>
+    <string name="settings_alice_permissions_header">Alice 的权限</string>
+    <string name="settings_alice_vehicle_control_title">允许 Alice 控制车辆</string>
+    <string name="settings_alice_vehicle_control_desc">空调、座椅、灯光、车窗和天窗、后备箱、文字指令。BYDMate 的车速限制始终有效。</string>
+    <string name="settings_alice_navigation_title">允许 Alice 导航</string>
+    <string name="settings_alice_navigation_desc">路线、地图搜索和地图上的位置，在「路线导航应用」中选择的应用里打开。</string>
+    <string name="settings_alice_always_allowed_hint">启动应用、媒体、仪表盘投屏以及关于车辆的提问始终可用。</string>
+    <string name="settings_alice_state_report">%1$s 秒前已发送状态：车内 %2$s，空调 %3$s，车外 %4$s（响应 %5$s）</string>
+    <string name="settings_alice_state_report_none">尚未发送车辆状态</string>
+    <string name="settings_alice_last_command">%1$s 秒前的最后一条指令：%2$s → %3$s</string>
+    <string name="settings_alice_last_command_none">尚未收到 Alice 的指令</string>
+    <string name="settings_alice_refresh">刷新</string>
+    <string name="settings_voice_app_matches_title">语音命令应用</string>
+    <string name="settings_voice_app_matches_desc">显示 BYDMate 为每条 Alice 指令匹配到的已安装应用。</string>
+    <string name="settings_voice_app_matches_button">显示</string>
+    <string name="settings_voice_app_matches_dialog_title">应用匹配</string>
+    <string name="settings_voice_app_matches_not_found">此设备上未找到</string>
 </resources>
