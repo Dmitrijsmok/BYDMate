@@ -314,4 +314,35 @@ class ActionDispatcherMediaKeyTest {
             unmockkStatic(Log::class)
         }
     }
+
+    // --- media transport (Alice bridge): next / previous / play-pause, never a global key ---
+
+    @Test fun `play-pause pauses a playing player and plays a paused one`() {
+        dispatcher.activeMediaControllers = { listOf(session("a.paused", 2), session("b.playing", 3)) }
+        assertTrue(dispatcher.dispatchMediaTransport(ActionDispatcher.MediaTransport.PLAY_PAUSE).success)
+        dispatcher.activeMediaControllers = { listOf(session("a.paused", 2)) }
+        assertTrue(dispatcher.dispatchMediaTransport(ActionDispatcher.MediaTransport.PLAY_PAUSE).success)
+        assertEquals(listOf("b.playing" to 127, "a.paused" to 126), sent)
+    }
+
+    @Test fun `next and previous go to the picked session's transport controls`() {
+        val controls = mockk<MediaController.TransportControls>(relaxed = true)
+        val playing = session("b.playing", 3)
+        every { playing.transportControls } returns controls
+        dispatcher.activeMediaControllers = { listOf(session("a.paused", 2), playing) }
+        assertTrue(dispatcher.dispatchMediaTransport(ActionDispatcher.MediaTransport.NEXT).success)
+        assertTrue(dispatcher.dispatchMediaTransport(ActionDispatcher.MediaTransport.PREVIOUS).success)
+        verifyOrder {
+            controls.skipToNext()
+            controls.skipToPrevious()
+        }
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test fun `next with no running player fails, an idle stock session does not count`() {
+        dispatcher.activeMediaControllers = { listOf(session("com.byd.mediacenter", 1)) }
+        val result = dispatcher.dispatchMediaTransport(ActionDispatcher.MediaTransport.NEXT)
+        assertFalse(result.success)
+        assertEquals("Нет запущенного плеера", result.reason)
+    }
 }

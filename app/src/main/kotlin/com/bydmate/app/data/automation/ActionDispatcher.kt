@@ -746,6 +746,35 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         else DispatchResult(false, appStrings.get(R.string.dispatch_media_key_failed, target.packageName))
     }
 
+    /** Track and play/pause steps the media_key action does not offer (the Alice bridge). */
+    enum class MediaTransport { NEXT, PREVIOUS, PLAY_PAUSE }
+
+    /**
+     * Next / previous track to the session [dispatchMediaKey] would pick, through its transport
+     * controls; play/pause becomes the explicit PAUSE when a player is playing, else PLAY. Never a
+     * global media key, for the same reason as [dispatchMediaKey].
+     */
+    fun dispatchMediaTransport(op: MediaTransport): DispatchResult {
+        val controllers = runCatching { activeMediaControllers() }.getOrDefault(emptyList())
+            .filterNot { isIdleStockSession(it) }
+        if (op == MediaTransport.PLAY_PAUSE) {
+            val playing = controllers.any { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+            return dispatchMediaKey(ActionDef(command = "", displayName = "media", kind = "media_key",
+                payload = if (playing) "pause" else "play"))
+        }
+        val index = KnobPlayPause.pickTarget(
+            controllers.map { KnobPlayPause.SessionSnapshot(it.packageName, it.playbackState?.state) })
+            ?: return DispatchResult(false, appStrings.get(R.string.dispatch_media_no_session))
+        val target = controllers[index]
+        val ok = runCatching {
+            if (op == MediaTransport.NEXT) target.transportControls.skipToNext()
+            else target.transportControls.skipToPrevious()
+        }.isSuccess
+        Log.i(TAG, "media transport $op -> ${target.packageName} ok=$ok")
+        return if (ok) DispatchResult(true)
+        else DispatchResult(false, appStrings.get(R.string.dispatch_media_key_failed, target.packageName))
+    }
+
     private fun isIdleStockSession(c: MediaController): Boolean {
         val state = c.playbackState?.state
         return c.packageName == MEDIACENTER_PKG &&

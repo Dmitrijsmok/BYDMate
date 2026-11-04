@@ -38,6 +38,7 @@ class AlicePollingPermissionTest {
     private val settings = mockk<SettingsRepository>()
     private val actionDispatcher = mockk<ActionDispatcher>(relaxed = true)
     private val aperture = mockk<AliceApertureController>(relaxed = true)
+    private val apps = mockk<AliceAppActionDispatcher>(relaxed = true)
     private val loop = mockk<SharedAdaptiveLoop>()
     private lateinit var manager: AlicePollingManager
 
@@ -82,7 +83,7 @@ class AlicePollingPermissionTest {
     }
 
     private fun runOnce(): Map<String, JSONObject> {
-        manager = AlicePollingManager(OkHttpClient(), settings, loop, AliceBridgeExecutor(actionDispatcher, aperture))
+        manager = AlicePollingManager(OkHttpClient(), settings, loop, AliceBridgeExecutor(actionDispatcher, aperture, apps))
         manager.start()
         val ack = acks.poll(10, TimeUnit.SECONDS)
         assertNotNull("the worker got no ack", ack)
@@ -103,7 +104,7 @@ class AlicePollingPermissionTest {
             assertEquals(id, AliceBridgeRouter.NAVIGATION_DISABLED, results.getValue(id).getString("error"))
         }
         coVerify(exactly = 0) { actionDispatcher.dispatch(any(), any()) }
-        confirmVerified(actionDispatcher, aperture)
+        confirmVerified(actionDispatcher, aperture, apps)
     }
 
     @Test fun `with vehicle control on the commands run as gated ActionDispatcher steps`() {

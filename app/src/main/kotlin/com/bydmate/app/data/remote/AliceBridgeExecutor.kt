@@ -18,6 +18,7 @@ import javax.inject.Singleton
 class AliceBridgeExecutor @Inject constructor(
     private val actionDispatcher: ActionDispatcher,
     private val apertureController: AliceApertureController,
+    private val appDispatcher: AliceAppActionDispatcher,
 ) : AliceBridgeActions {
 
     /** The latest poll of the car, fed by [AlicePollingManager]. */
@@ -35,11 +36,9 @@ class AliceBridgeExecutor @Inject constructor(
     override suspend fun navigation(command: AliceBridgeCommand): Result<Unit> =
         AliceBridgeRouter.failure(AliceBridgeRouter.UNSUPPORTED_ACTION)
 
-    override suspend fun app(command: AliceBridgeCommand): Result<Unit> =
-        AliceBridgeRouter.failure(AliceBridgeRouter.UNSUPPORTED_ACTION)
+    override suspend fun app(command: AliceBridgeCommand): Result<Unit> = appDispatcher.app(command, latestData)
 
-    override suspend fun media(command: AliceBridgeCommand): Result<Unit> =
-        AliceBridgeRouter.failure(AliceBridgeRouter.UNSUPPORTED_ACTION)
+    override suspend fun media(command: AliceBridgeCommand): Result<Unit> = appDispatcher.media(command, latestData)
 
     /** Automotive questions only; the answer is spoken by the BYDMate agent like an automation's
      *  agent_query. */
