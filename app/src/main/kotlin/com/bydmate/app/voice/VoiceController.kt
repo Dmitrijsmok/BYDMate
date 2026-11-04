@@ -11,6 +11,8 @@ import com.bydmate.app.data.automation.DispatchResult
 import com.bydmate.app.data.automation.VoiceFireResult
 import com.bydmate.app.R
 import com.bydmate.app.data.local.entity.ActionDef
+import com.bydmate.app.data.remote.AliceAppResolver
+import com.bydmate.app.data.remote.AliceAppTarget
 import com.bydmate.app.diagnostics.Trace
 import com.bydmate.app.diagnostics.TraceArea
 import com.bydmate.app.ui.overlay.ListeningOverlay
@@ -64,6 +66,8 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
     private val echoFilter: SelfEchoFilter = SelfEchoFilter(),
     private val userPhrases: VoiceUserPhrases = VoiceUserPhrases(),
     private val autoVoiceDuck: AutoVoiceDuck = AutoVoiceDuck.OFF,
+    // The offline «открой <приложение>» resolves through the app table Alice uses; null = off.
+    private val appResolver: AliceAppResolver? = null,
 ) {
     // Process-lifetime scope (@Singleton): intentionally never cancelled.
     private val scope = CoroutineScope(SupervisorJob())
@@ -673,39 +677,78 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         // AgentOrchestrator.expectsFollowUp.
         val followUp = runCatching { agentOrchestrator.expectsFollowUp() }.getOrDefault(false)
         val res = if (followUp) Resolution.None(VoiceRefusal.AGENT_FOLLOWUP_WINDOW) else resolve(command)
-        val localReply = if (!followUp && res is Resolution.None) {
-            // Fallback after the built-in dictionary (VehicleQuestion): GigaAM-clipped read-only
-            // vehicle questions stay local. Anything ambiguous continues to the agent path.
-            LocalVehicleQuery.answer(command, gate.vehicleSnapshot())
-        } else {
-            null
-        }
-        if (localReply != null) heard(decodeMs, "local_query")
-        else heard(decodeMs, res.route, (res as? Resolution.None)?.reason)
+        if (!followUp && res is Resolution.None && routeLocally(command, decodeMs)) return
+        heard(decodeMs, res.route, (res as? Resolution.None)?.reason)
         _state.value = VoiceUiState.Thinking
-        when {
-            localReply != null -> {
-                earcon.ok()
-                _state.value = VoiceUiState.AgentAnswer(localReply.text)
-                record(
-                    VoiceJournalEntry(
-                        transcript = command,
-                        route = VoiceJournalEntry.Route.NLU,
-                        detail = withDecodeMs(command, decodeMs),
-                        outcome = VoiceJournalEntry.Outcome.OK,
-                        answer = localReply.text,
-                        asrMs = decodeMs,
-                    ),
-                    "Local vehicle query: kind=${localReply.kind} transcript=\"$command\"",
-                )
-                announce("Голос", localReply.text, localReply.text)
-            }
-            res is Resolution.None -> {
+        when (res) {
+            is Resolution.None -> {
                 turn = turn.copy(agentReason = res.reason)
                 agentFallback(command, decodeMs)
             }
             else -> apply(res, command, decodeMs)
         }
+    }
+
+    /**
+     * The local fallbacks after a dictionary miss, before the agent: a GigaAM-clipped read-only
+     * vehicle question ([LocalVehicleQuery]), then «открой <приложение>» with a name of the app
+     * table the agent and Alice share ([localAppLaunch]). Anything else, ambiguous included,
+     * continues to the agent path. True when one of them ran.
+     */
+    private suspend fun routeLocally(command: String, decodeMs: Long): Boolean {
+        val localReply = LocalVehicleQuery.answer(command, gate.vehicleSnapshot())
+        if (localReply != null) {
+            heard(decodeMs, "local_query")
+            _state.value = VoiceUiState.Thinking
+            earcon.ok()
+            _state.value = VoiceUiState.AgentAnswer(localReply.text)
+            record(
+                VoiceJournalEntry(
+                    transcript = command,
+                    route = VoiceJournalEntry.Route.NLU,
+                    detail = withDecodeMs(command, decodeMs),
+                    outcome = VoiceJournalEntry.Outcome.OK,
+                    answer = localReply.text,
+                    asrMs = decodeMs,
+                ),
+                "Local vehicle query: kind=${localReply.kind} transcript=\"$command\"",
+            )
+            announce("Голос", localReply.text, localReply.text)
+            return true
+        }
+        val app = localAppLaunch(command) ?: return false
+        heard(decodeMs, "local_app")
+        _state.value = VoiceUiState.Thinking
+        val result = actionDispatcher.dispatch(app.action, data = gate.vehicleSnapshot())
+        reportDispatch(result, app.label, "local_app ${app.detail}", command, decodeMs)
+        return true
+    }
+
+    /** What the offline «открой <приложение>» runs: [action], journaled as [label]. */
+    private class LocalAppLaunch(val action: ActionDef, val label: String, val detail: String)
+
+    /**
+     * The offline «открой <приложение>» ([LocalAppLaunchQuery]) as the action that opens it here,
+     * or null: not such a phrase, not a name of the table, or the app is not installed (then the
+     * agent gets the phrase, as before).
+     */
+    private fun localAppLaunch(command: String): LocalAppLaunch? {
+        val resolver = appResolver ?: return null
+        val hit = LocalAppLaunchQuery.match(command) ?: return null
+        val target = hit.target
+        if (target is AliceAppTarget.Settings) {
+            val payload = JSONObject().put("section", target.section).toString()
+            return LocalAppLaunch(ActionDef("", "Настройки", "system_settings", payload),
+                "app:settings:${target.section}", "section=${target.section}")
+        }
+        val pkg = runCatching { resolver.packageFor(target) }.getOrNull()
+        if (pkg == null) {
+            Log.i(TAG, "Local app: \"${hit.name}\" is not installed, the phrase goes to the agent")
+            return null
+        }
+        val payload = JSONObject().put("packageName", pkg).toString()
+        return LocalAppLaunch(ActionDef("", "Запуск ${hit.name}", "app_launch", payload),
+            "app:open:${hit.name}", "app=${hit.name} pkg=$pkg")
     }
 
     /** Trace event of the phrase: where it went (never what was said); the cause of the turn. */
