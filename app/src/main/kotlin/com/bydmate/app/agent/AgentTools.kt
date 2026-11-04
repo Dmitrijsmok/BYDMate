@@ -13,6 +13,7 @@ import com.bydmate.app.data.automation.ActionValidationError
 import com.bydmate.app.data.automation.AutomationEngine
 import com.bydmate.app.data.automation.ConfirmOverlayManager
 import com.bydmate.app.data.automation.DispatchResult
+import com.bydmate.app.data.automation.NavigatorAppNames
 import com.bydmate.app.data.automation.PlaceGeometry
 import com.bydmate.app.data.automation.PowerStateRuleMigration
 import com.bydmate.app.data.automation.RouteNavigatorDiscovery
@@ -718,9 +719,10 @@ class AgentTools @Inject constructor(
         put(tool(
             "launch_app",
             "Запустить установленное приложение по названию. Понимает русские названия штатных " +
-                "приложений машины: навигатор, яндекс карты, музыка, камера, видеорегистратор, " +
+                "приложений машины: навигатор (приложение, выбранное в настройках), яндекс навигатор, " +
+                "яндекс карты, 2гис, waze, google maps, музыка, камера, видеорегистратор, " +
                 "браузер, ютуб, настройки машины, файлы, режимы вождения, часовой, АБРП, " +
-                "медиацентр, телефон.",
+                "медиацентр, телефон. Названное приложение открывается именно оно, а не навигатор из настроек.",
             JSONObject().put("name", JSONObject().put("type", "string")
                 .put("description", "Название приложения, как на домашнем экране")),
             listOf("name"),
@@ -2274,7 +2276,9 @@ class AgentTools @Inject constructor(
         val needle = name.lowercase()
         // Alias hit: resolve to the first candidate package present in the launcher list, so an
         // alias never launches an app this car does not have; miss falls through to label match.
-        val candidates = if (needle == NAVIGATOR_ALIAS) chosenNavigatorPackages(apps) else APP_ALIASES[needle]
+        // Navigation apps go through the shared name table and resolver (manual package, builds).
+        val navigator = NavigatorAppNames.of(name)
+        val candidates = if (navigator != null) navigatorPackages(navigator, apps) else APP_ALIASES[needle]
         val aliasMatch = candidates?.firstNotNullOfOrNull { pkg ->
             apps.firstOrNull { it.second == pkg }
         }
@@ -2289,12 +2293,14 @@ class AgentTools @Inject constructor(
         }
     }
 
-    /** "навигатор" = the app chosen in «Навигатор для маршрутов» (#334), resolved the way routes
-     *  are: the manual package, the app's installed variants (by package or launcher label), then
-     *  Yandex Navigator's, so a chosen app that is not installed falls back the way routes do. */
-    private fun chosenNavigatorPackages(apps: List<Pair<String, String>>): List<String> =
+    /** A navigation app name ([NavigatorAppNames]) as candidate packages, resolved the way routes
+     *  are: the manual package, the app's builds (by package or launcher label). "навигатор" is the
+     *  app chosen in «Навигатор для маршрутов» (#334), then Yandex Navigator's packages, so a chosen
+     *  app that is not installed falls back the way routes do; a named app stays that app. */
+    private fun navigatorPackages(navigator: String, apps: List<Pair<String, String>>): List<String> =
         RouteNavigatorResolver.launchCandidates(
-            RouteNavigatorResolver.choice(context), navigator = null,
+            RouteNavigatorResolver.choice(context),
+            navigator = navigator.takeUnless { it == NavigatorAppNames.DEFAULT },
             launcher = apps.map { (label, pkg) -> RouteNavigatorDiscovery.LauncherApp(pkg, label) },
         )
 
@@ -3085,21 +3091,13 @@ class AgentTools @Inject constructor(
         // Any wheel below this is clearly deflated (Leopard 3 cold placard ~250 kPa).
         private const val TIRE_WARN_MIN_KPA = 210
 
-        // Yandex Maps ships under several package names; reuse the navigation list so the
-        // alias never drifts from the guidance-source set.
-        private val YANDEX_MAPS_PACKAGES = NavPackages.YANDEX_MAPS.toList()
-
-        // Bare "навигатор" is not in APP_ALIASES: it follows the route-navigator setting.
-        private const val NAVIGATOR_ALIAS = "навигатор"
-
         // RU aliases for stock DiLink apps whose launcher labels are Chinese/English and thus
         // unreachable by label match. Values are candidate packages in priority order; an alias
         // fires only when one of them is actually installed on this car (fleet cars differ).
         // App store and fridge app are excluded deliberately (user decision, 2026-07-05).
+        // Navigation apps (навигатор, яндекс карты, waze, google maps, ...) are not here: they go
+        // through NavigatorAppNames, shared with the offline voice path.
         internal val APP_ALIASES: Map<String, List<String>> = mapOf(
-            "яндекс навигатор" to listOf("ru.yandex.yandexnavi"),
-            "яндекс карты" to YANDEX_MAPS_PACKAGES,
-            "карты" to YANDEX_MAPS_PACKAGES,
             "музыка" to listOf("ru.yandex.music"),
             "яндекс музыка" to listOf("ru.yandex.music"),
             "камера" to listOf("com.byd.avc"),

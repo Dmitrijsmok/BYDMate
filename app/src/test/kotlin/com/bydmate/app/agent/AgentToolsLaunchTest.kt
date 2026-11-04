@@ -323,6 +323,42 @@ class AgentToolsLaunchTest {
         assertEquals("ru.yandex.yandexnavi", launchedPackage("яндекс навигатор", navigatorFixture))
     }
 
+    // Requirement: an explicit Google Maps opens Google Maps, not the Waze chosen in settings.
+    // Its Russian launcher label is a bare «Карты», so a label match alone never found it.
+    @Test fun launch_app_google_maps_opens_google_maps_when_waze_is_chosen() = runTest {
+        chooseNavigator("waze")
+        val apps = navigatorFixture + ("Карты" to "com.google.android.apps.maps")
+        assertEquals("com.google.android.apps.maps", launchedPackage("Google Maps", apps))
+        assertEquals("com.google.android.apps.maps", launchedPackage("гугл карты", apps))
+    }
+
+    // Fork e62d92f3: the ReVanced (MicroG) build answers to the Google Maps name.
+    @Test fun launch_app_alias_google_maps_revanced_resolves_package() = runTest {
+        assertEquals("app.revanced.android.apps.maps",
+            launchedPackage("Google Maps", listOf("Maps" to "app.revanced.android.apps.maps")))
+    }
+
+    // Requirement: an explicit Waze opens Waze whatever is chosen.
+    @Test fun launch_app_waze_opens_waze_when_yandex_is_chosen() = runTest {
+        chooseNavigator("yandex")
+        assertEquals("com.waze", launchedPackage("вейз", navigatorFixture))
+    }
+
+    // «навигация» is the chosen app too (fork 64da6949).
+    @Test fun launch_app_navigation_follows_the_chosen_app() = runTest {
+        chooseNavigator("dgis")
+        assertEquals("ru.dublgis.dgismobile", launchedPackage("навигация", navigatorFixture))
+    }
+
+    // A named app that is missing is not replaced by the Navigator or by Google Maps' «Карты».
+    @Test fun launch_app_yandex_maps_name_never_opens_google_maps() = runTest {
+        val t = tools().apply { launcherAppsProvider = { listOf("Карты" to "com.google.android.apps.maps") } }
+        val out = JSONObject(t.execute(AgentToolCall("1", "launch_app", """{"name":"яндекс карты"}""")))
+        assertFalse(out.has("ok"))
+        assertTrue(out.getString("error").contains("приложение не найдено"))
+        coVerify(exactly = 0) { dispatcher.dispatch(any(), any()) }
+    }
+
     // (b) partial unambiguous match -> launches Settings.
     @Test fun launch_app_partial_unambiguous_launches() = runTest {
         val captured = slot<ActionDef>()
