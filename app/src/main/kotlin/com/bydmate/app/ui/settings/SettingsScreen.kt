@@ -3735,25 +3735,30 @@ private fun VoiceSettingsContent(
                 onSelect = { viewModel.setAgentGender(genderIds[it]) },
             )
             SettingDivider()
-            // #190/#200: the map app every route/search command opens (voice agent and automation).
-            val routeNavigatorIds = listOf(
-                com.bydmate.app.data.automation.RouteNavigatorUris.YANDEX,
-                com.bydmate.app.data.automation.RouteNavigatorUris.DGIS,
-                com.bydmate.app.data.automation.RouteNavigatorUris.MAPS,
-                com.bydmate.app.data.automation.RouteNavigatorUris.WAZE,
-            )
+            // #190/#200: the map app every route/search command opens (voice agent and automation),
+            // offered from the apps this head unit has.
+            val routeNavigatorIds = state.routeNavigatorOptions
             SettingChipRow(
                 title = stringResource(R.string.settings_route_navigator_label),
                 description = stringResource(R.string.settings_route_navigator_hint),
-                options = listOf(
-                    stringResource(R.string.settings_route_navigator_yandex),
-                    stringResource(R.string.settings_route_navigator_dgis),
-                    stringResource(R.string.settings_route_navigator_maps),
-                    stringResource(R.string.settings_route_navigator_waze),
-                ),
+                options = routeNavigatorIds.map { routeNavigatorLabel(it) },
                 selectedIndex = routeNavigatorIds.indexOf(state.routeNavigator).coerceAtLeast(0),
                 onSelect = { viewModel.setRouteNavigator(routeNavigatorIds[it]) },
             )
+            SettingHint(
+                if (state.routeNavigatorResolvedPackage.isNotBlank()) {
+                    stringResource(R.string.settings_route_navigator_resolved, state.routeNavigatorResolvedPackage)
+                } else {
+                    stringResource(R.string.settings_route_navigator_resolved_missing)
+                },
+            )
+            SettingsTextField(
+                label = stringResource(R.string.settings_route_navigator_package_label),
+                value = state.routeNavigatorPackage,
+                onValueChange = { viewModel.setRouteNavigatorPackage(it) },
+                keyboardType = KeyboardType.Uri,
+            )
+            SettingHint(stringResource(R.string.settings_route_navigator_package_hint))
         }
     }
 
@@ -4632,6 +4637,17 @@ private fun SectionHeader(text: String, onHelp: (() -> Unit)? = null) {
         if (onHelp != null) SettingHelpBadge(onHelp)
     }
 }
+
+/** The chip label of a «Навигатор для маршрутов» app id. */
+@Composable
+private fun routeNavigatorLabel(id: String): String = stringResource(
+    when (id) {
+        com.bydmate.app.data.automation.RouteNavigatorUris.DGIS -> R.string.settings_route_navigator_dgis
+        com.bydmate.app.data.automation.RouteNavigatorUris.MAPS -> R.string.settings_route_navigator_maps
+        com.bydmate.app.data.automation.RouteNavigatorUris.WAZE -> R.string.settings_route_navigator_waze
+        else -> R.string.settings_route_navigator_yandex
+    },
+)
 
 @Composable
 private fun SettingsTextField(

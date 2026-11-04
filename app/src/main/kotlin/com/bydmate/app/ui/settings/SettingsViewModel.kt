@@ -297,6 +297,12 @@ data class SettingsUiState(
     val agentGender: String = "m",
     /** #190: which map app the navigate action opens — "yandex" (default) or "dgis". */
     val routeNavigator: String = com.bydmate.app.data.automation.RouteNavigatorUris.YANDEX,
+    /** The apps «Навигатор для маршрутов» offers: the installed ones (every app when none was detected). */
+    val routeNavigatorOptions: List<String> = com.bydmate.app.data.automation.RouteNavigatorUris.ALL,
+    /** Exact package of a non-standard build of the chosen app, as typed; blank = detected. */
+    val routeNavigatorPackage: String = "",
+    /** The package routes actually go to: the manual one, else the detected one; blank = none found. */
+    val routeNavigatorResolvedPackage: String = "",
     /** Long-term facts the agent remembered about the driver (DriverMemory). */
     val agentMemoryFacts: List<String> = emptyList(),
     // Wave J: multi-provider LLM connections (OpenRouter / z.ai / custom)
@@ -475,6 +481,10 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
 
     private var automationButtonKeys: Set<Int> = emptySet()
 
+    /** Packages each map app is installed under, from the last [loadRouteNavigator]. Declared
+     *  before init: loadSettings may run there on Main.immediate and must not be overwritten. */
+    private var installedNavigators: Map<String, List<String>> = emptyMap()
+
     init {
         loadSettings()
         viewModelScope.launch {
@@ -640,10 +650,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 .getString("agent_persona", null) ?: AgentPersona.NAVIGATOR.id
             val agentGender = appContext.getSharedPreferences("voice", Context.MODE_PRIVATE)
                 .getString("agent_gender", "m") ?: "m"
-            val routeNavigator = com.bydmate.app.data.automation.RouteNavigatorUris.normalize(
-                appContext.getSharedPreferences(
-                    com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
-                ).getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null))
+            val route = loadRouteNavigator()
 
             // Wave J: multi-provider LLM connections
             val zaiApiKey = settingsRepository.getString(SettingsRepository.KEY_ZAI_API_KEY, "")
@@ -708,7 +715,10 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     agentName = agentName,
                     agentPersona = agentPersona,
                     agentGender = agentGender,
-                    routeNavigator = routeNavigator,
+                    routeNavigator = route.navigator,
+                    routeNavigatorOptions = route.options,
+                    routeNavigatorPackage = route.manualPackage,
+                    routeNavigatorResolvedPackage = route.resolvedPackage,
                     agentMemoryFacts = driverMemory.facts(),
                     zaiApiKey = zaiApiKey,
                     customName = customName,
@@ -1733,19 +1743,87 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
             .edit().putString("agent_persona", id).apply()
     }
 
+    private data class RouteNavigatorSetting(
+        val navigator: String, val options: List<String>, val manualPackage: String, val resolvedPackage: String,
+    )
+
+    /**
+     * The «Навигатор для маршрутов» block as stored, with the installed apps detected once. A
+     * saved app that is no longer installed (and has no manual package) reads, and is saved, as
+     * the first installed one, so the setting never points at an app the car does not have.
+     */
+    private fun loadRouteNavigator(): RouteNavigatorSetting {
+        val prefs = appContext.getSharedPreferences(
+            com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
+        )
+        val saved = com.bydmate.app.data.automation.RouteNavigatorUris.normalize(
+            prefs.getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null))
+        val manual = prefs.getString(
+            com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, null).orEmpty()
+        installedNavigators = runCatching {
+            com.bydmate.app.data.automation.RouteNavigatorDiscovery.discover(appContext.packageManager)
+        }.getOrDefault(emptyMap())
+        val options = routeNavigatorOptions(installedNavigators, saved, manual)
+        val navigator = if (saved in options) saved else options.first()
+        if (navigator != saved) {
+            prefs.edit()
+                .putString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, navigator)
+                .apply()
+        }
+        return RouteNavigatorSetting(navigator, options, manual, resolvedNavigatorPackage(navigator, manual))
+    }
+
+    /** What routes to [navigator] are pinned to: [manual] as given, else its detected package. */
+    private fun resolvedNavigatorPackage(navigator: String, manual: String): String =
+        manual.trim().ifEmpty { installedNavigators[navigator]?.firstOrNull().orEmpty() }
+
     /**
      * Picks the map app the navigate action opens (#190, #200): "yandex" (default), "dgis" or "maps".
      * Persisted in the same SharedPreferences("voice") file as the other agent settings, which
      * is where [com.bydmate.app.data.automation.ActionDispatcher] reads it on every route.
+     * A manual package belongs to the app it was entered for, so switching apps clears it.
      */
     fun setRouteNavigator(value: String) {
         val normalized = com.bydmate.app.data.automation.RouteNavigatorUris.normalize(value)
-        _uiState.update { it.copy(routeNavigator = normalized) }
-        appContext.getSharedPreferences(
+        val changed = normalized != _uiState.value.routeNavigator
+        _uiState.update {
+            val manual = if (changed) "" else it.routeNavigatorPackage
+            it.copy(
+                routeNavigator = normalized,
+                routeNavigatorPackage = manual,
+                routeNavigatorResolvedPackage = resolvedNavigatorPackage(normalized, manual),
+            )
+        }
+        val editor = appContext.getSharedPreferences(
             com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
         ).edit()
             .putString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, normalized)
-            .apply()
+        if (changed) editor.remove(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE)
+        editor.apply()
+    }
+
+    /**
+     * The exact package of a non-standard build of the chosen app (vendor, ReVanced, another
+     * store). Used as given by the dispatcher, without an "installed" check that could miss a
+     * vendor APK; blank goes back to detection.
+     */
+    fun setRouteNavigatorPackage(value: String) {
+        val manual = value.trim()
+        _uiState.update {
+            it.copy(
+                routeNavigatorPackage = value,
+                routeNavigatorResolvedPackage = resolvedNavigatorPackage(it.routeNavigator, manual),
+            )
+        }
+        val editor = appContext.getSharedPreferences(
+            com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
+        ).edit()
+        if (manual.isEmpty()) {
+            editor.remove(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE)
+        } else {
+            editor.putString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, manual)
+        }
+        editor.apply()
     }
 
     /**
@@ -1984,6 +2062,11 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     appContext.getSharedPreferences(
                         com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
                     ).getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null)))
+                val manualNavigatorPackage = appContext.getSharedPreferences(
+                    com.bydmate.app.data.automation.RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE
+                ).getString(com.bydmate.app.data.automation.RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, null)
+                appendLine("route_navigator_package=${manualNavigatorPackage.orEmpty()} " +
+                    "resolved=${_uiState.value.routeNavigatorResolvedPackage}")
                 val secureSettingsGranted = appContext.checkSelfPermission(
                     android.Manifest.permission.WRITE_SECURE_SETTINGS
                 ) == android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -3324,6 +3407,19 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
 
 /** Human-readable name for [android.content.pm.PackageManager.getApplicationEnabledSetting] values. */
 /** Localized text for a [TelegramSinkException.key]; an unknown key is shown as is. */
+/**
+ * The apps «Навигатор для маршрутов» offers: the installed ones ([installed] from
+ * RouteNavigatorDiscovery.discover), plus the [saved] one while a manual package stands for it.
+ * Every app when none was detected, so a head unit the detection misreads still lets the driver
+ * choose. Pure.
+ */
+internal fun routeNavigatorOptions(installed: Map<String, List<String>>, saved: String, manualPackage: String): List<String> {
+    val all = com.bydmate.app.data.automation.RouteNavigatorUris.ALL
+    val detected = all.filter { installed[it].orEmpty().isNotEmpty() }
+    if (detected.isEmpty()) return all
+    return all.filter { it in detected || (it == saved && manualPackage.isNotBlank()) }
+}
+
 internal fun telegramErrorText(context: Context, key: String): String {
     if (key.startsWith("HTTP:")) return context.getString(R.string.settings_tg_error_http, key.removePrefix("HTTP:"))
     val res = when (TelegramError.entries.firstOrNull { it.name == key }) {

@@ -1487,6 +1487,10 @@
     <string name="settings_route_navigator_maps">Яндэкс Карты</string>
     <string name="settings_route_navigator_waze">Waze</string>
     <string name="settings_route_navigator_hint">Якую праграму адкрываць для маршрутаў і пошуку на карце</string>
+    <string name="settings_route_navigator_resolved">Выкарыстоўваецца пакет: %1$s</string>
+    <string name="settings_route_navigator_resolved_missing">Усталяваны пакет для выбранага навігатара не знойдзены</string>
+    <string name="settings_route_navigator_package_label">Пакет навігатара (неабавязкова)</string>
+    <string name="settings_route_navigator_package_hint">Для нестандартнай зборкі ўкажыце дакладны пакет, напрыклад ru.yandex.yandexnavi.inhouse. Пуста — усталяваная праграма вызначаецца аўтаматычна</string>
     <string name="settings_agent_memory_title">Памяць пра кіроўцу</string>
     <string name="settings_agent_memory_hint">Агент запамінае імя і ўстойлівыя перавагі, калі вы яму пра гэта кажаце. Скажыце «забудзь …», каб прыбраць адзін факт</string>
     <string name="settings_agent_memory_empty">Пакуль нічога не запомнена</string>

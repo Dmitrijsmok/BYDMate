@@ -16,6 +16,13 @@ object RouteNavigatorUris {
     const val PREFS_NAME = "voice"
     const val KEY_ROUTE_NAVIGATOR = "route_navigator"
 
+    /**
+     * Optional exact package of a non-standard build of the chosen app (vendor, ReVanced, other
+     * store). When set it is used as given for that app; blank means the installed package is
+     * found by [RouteNavigatorDiscovery].
+     */
+    const val KEY_ROUTE_NAVIGATOR_PACKAGE = "route_navigator_package"
+
     const val YANDEX = "yandex"
     const val DGIS = "dgis"
 
@@ -32,6 +39,9 @@ object RouteNavigatorUris {
     const val YANDEX_PACKAGE = "ru.yandex.yandexnavi"
     const val DGIS_PACKAGE = "ru.dublgis.dgismobile"
     const val WAZE_PACKAGE = "com.waze"
+
+    /** Every settings value, in the order the settings screen lists them. */
+    val ALL: List<String> = listOf(YANDEX, DGIS, MAPS, WAZE)
 
     /** Log/diagnostic names of the three deep links. */
     const val MODE_SEARCH = "search"

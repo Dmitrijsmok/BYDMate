@@ -1312,6 +1312,10 @@
     <string name="settings_route_navigator_maps">Yandex Maps</string>
     <string name="settings_route_navigator_waze">Waze</string>
     <string name="settings_route_navigator_hint">Qual aplicativo abre para rotas e busca no mapa</string>
+    <string name="settings_route_navigator_resolved">Pacote em uso: %1$s</string>
+    <string name="settings_route_navigator_resolved_missing">Nenhum pacote instalado foi encontrado para o navegador selecionado</string>
+    <string name="settings_route_navigator_package_label">Pacote do navegador (opcional)</string>
+    <string name="settings_route_navigator_package_hint">Para uma versão personalizada, informe o pacote exato, por exemplo ru.yandex.yandexnavi.inhouse. Deixe vazio para detectar automaticamente o aplicativo instalado</string>
     <string name="settings_agent_memory_title">Memória sobre o motorista</string>
     <string name="settings_agent_memory_hint">O agente memoriza o nome e as preferências constantes quando você lhe diz isso. Diga “esqueça …” para remover um fato</string>
     <string name="settings_agent_memory_empty">Nada memorizado ainda</string>

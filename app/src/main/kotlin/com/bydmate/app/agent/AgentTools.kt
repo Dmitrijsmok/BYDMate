@@ -15,6 +15,8 @@ import com.bydmate.app.data.automation.ConfirmOverlayManager
 import com.bydmate.app.data.automation.DispatchResult
 import com.bydmate.app.data.automation.PlaceGeometry
 import com.bydmate.app.data.automation.PowerStateRuleMigration
+import com.bydmate.app.data.automation.RouteNavigatorDiscovery
+import com.bydmate.app.data.automation.RouteNavigatorResolver
 import com.bydmate.app.data.automation.RouteNavigatorUris
 import com.bydmate.app.data.automation.RuleDraftValidator
 import com.bydmate.app.data.automation.RuleInserts
@@ -305,18 +307,22 @@ class AgentTools @Inject constructor(
         // to (#200), so that is the app whose arrival proves it: waiting for the Navigator on
         // a Maps route (explicit app="maps" or Maps chosen in settings) fails a working route.
         // The same goes for a route pinned to 2GIS or Waze (#305).
+        // A pinned package (a manual one from settings or a vendor variant included) is the one
+        // to wait for whichever app it is.
         val maps = actionDispatcher.willOpenMaps(payload)
-        val pinned = if (maps) null else actionDispatcher.willOpenPinned(payload)
+        val pinned = actionDispatcher.willOpenPinned(payload)
         val surfaced: (Long) -> Boolean = when {
-            maps -> mapsForegroundCheck
             pinned != null -> { since -> pinnedForegroundCheck(since, pinned) }
+            maps -> mapsForegroundCheck
             else -> naviForegroundCheck
         }
         val appName = when {
             maps -> "Яндекс Карты"
-            pinned == RouteNavigatorUris.DGIS_PACKAGE -> "2ГИС"
-            pinned == RouteNavigatorUris.WAZE_PACKAGE -> "Waze"
-            else -> "Навигатор"
+            else -> when (pinned?.let(RouteNavigatorDiscovery::navigatorOf)) {
+                RouteNavigatorUris.DGIS -> "2ГИС"
+                RouteNavigatorUris.WAZE -> "Waze"
+                else -> "Навигатор"
+            }
         }
         val result = actionDispatcher.dispatch(
             ActionDef(command = "", displayName = displayName, kind = "navigate",
@@ -2267,7 +2273,7 @@ class AgentTools @Inject constructor(
         val needle = name.lowercase()
         // Alias hit: resolve to the first candidate package present in the launcher list, so an
         // alias never launches an app this car does not have; miss falls through to label match.
-        val candidates = if (needle == NAVIGATOR_ALIAS) chosenNavigatorPackages() else APP_ALIASES[needle]
+        val candidates = if (needle == NAVIGATOR_ALIAS) chosenNavigatorPackages(apps) else APP_ALIASES[needle]
         val aliasMatch = candidates?.firstNotNullOfOrNull { pkg ->
             apps.firstOrNull { it.second == pkg }
         }
@@ -2282,21 +2288,14 @@ class AgentTools @Inject constructor(
         }
     }
 
-    /** "навигатор" = the app chosen in «Навигатор для маршрутов» (#334); the Yandex Navigator is the
-     *  last candidate, so a chosen app that is not installed falls back the way routes do. */
-    private fun chosenNavigatorPackages(): List<String> {
-        val chosen = RouteNavigatorUris.normalize(
-            runCatching {
-                context.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
-                    .getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null)
-            }.getOrNull())
-        val preferred = when (chosen) {
-            RouteNavigatorUris.MAPS -> YANDEX_MAPS_PACKAGES
-            RouteNavigatorUris.DGIS, RouteNavigatorUris.WAZE -> listOf(RouteNavigatorUris.packageOf(chosen))
-            else -> emptyList()
-        }
-        return preferred + RouteNavigatorUris.YANDEX_PACKAGE
-    }
+    /** "навигатор" = the app chosen in «Навигатор для маршрутов» (#334), resolved the way routes
+     *  are: the manual package, the app's installed variants (by package or launcher label), then
+     *  Yandex Navigator's, so a chosen app that is not installed falls back the way routes do. */
+    private fun chosenNavigatorPackages(apps: List<Pair<String, String>>): List<String> =
+        RouteNavigatorResolver.launchCandidates(
+            RouteNavigatorResolver.choice(context), navigator = null,
+            launcher = apps.map { (label, pkg) -> RouteNavigatorDiscovery.LauncherApp(pkg, label) },
+        )
 
     private suspend fun launchAppTool(args: JSONObject): String {
         val name = args.optString("name").trim()

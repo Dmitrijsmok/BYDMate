@@ -301,6 +301,22 @@ class AgentToolsLaunchTest {
         assertEquals("ru.yandex.yandexnavi", launchedPackage("навигатор", launcherFixture))
     }
 
+    // A vendor build of the chosen app under its own package is found by its launcher label.
+    @Test fun launch_app_navigator_finds_a_vendor_build_by_its_label() = runTest {
+        chooseNavigator("waze")
+        assertEquals("com.vendor.navi.w", launchedPackage("навигатор", launcherFixture + ("Waze" to "com.vendor.navi.w")))
+    }
+
+    // The manual package from settings goes first, as routes use it.
+    @Test fun launch_app_navigator_prefers_the_manual_package() = runTest {
+        val prefs = mockk<SharedPreferences>()
+        every { prefs.getString("route_navigator", null) } returns "waze"
+        every { prefs.getString("route_navigator_package", null) } returns "com.vendor.waze"
+        every { context.getSharedPreferences("voice", Context.MODE_PRIVATE) } returns prefs
+        assertEquals("com.vendor.waze",
+            launchedPackage("навигатор", navigatorFixture + ("Waze Vendor" to "com.vendor.waze")))
+    }
+
     // Guard: the explicit name keeps meaning Yandex whatever is chosen.
     @Test fun launch_app_yandex_navigator_name_stays_yandex_when_waze_is_chosen() = runTest {
         chooseNavigator("waze")

@@ -252,6 +252,79 @@ class ActionDispatcherNavigateTest {
         assertEquals(null, dispatcher.willOpenPinned(org.json.JSONObject("""{"shortcut":"home"}""")))
     }
 
+    /** Field build 64023: Waze was installed, but the getLaunchIntentForPackage probe said it was
+     *  not and the route went to Yandex. A package that exists is installed, launch intent or not. */
+    @Test fun waze_installed_without_a_launcher_entry_is_not_reported_missing() = runTest {
+        selectNavigator("waze")
+        shadowOf(app.packageManager).installPackage(android.content.pm.PackageInfo().apply { packageName = "com.waze" })
+
+        val res = dispatcher.dispatch(actionDef("""{"lat":57.0,"lon":36.0}"""), null)
+        assertTrue(res.success)
+        assertEquals(null, res.reason)
+        val intent = shadowOf(app).nextStartedActivity
+        assertEquals("waze://?ll=57.0,36.0&navigate=yes", intent.dataString)
+        assertEquals("com.waze", intent.`package`)
+    }
+
+    /** A vendor build under its own package is found by its launcher label and the route goes there. */
+    @Test fun waze_vendor_build_is_found_by_its_label() = runTest {
+        selectNavigator("waze")
+        installLauncherApp("com.vendor.navi.w", "Waze")
+
+        val res = dispatcher.dispatch(actionDef("""{"lat":57.0,"lon":36.0}"""), null)
+        assertTrue(res.success)
+        assertEquals(null, res.reason)
+        assertEquals("com.vendor.navi.w", shadowOf(app).nextStartedActivity.`package`)
+        assertEquals("com.vendor.navi.w", dispatcher.willOpenPinned(org.json.JSONObject("""{"lat":57.0,"lon":36.0}""")))
+    }
+
+    /** The manual package from settings is authoritative: no probe, no false fallback (fork e9110fc5). */
+    @Test fun waze_manual_package_is_authoritative_and_does_not_false_fallback() = runTest {
+        selectNavigator("waze")
+        setManualPackage("com.vendor.waze")
+
+        val res = dispatcher.dispatch(actionDef("""{"lat":57.0,"lon":36.0}"""), null)
+        assertTrue(res.success)
+        assertEquals(null, res.reason)
+        val intent = shadowOf(app).nextStartedActivity
+        assertEquals("com.vendor.waze", intent.`package`)
+        assertEquals("waze://?ll=57.0,36.0&navigate=yes", intent.dataString)
+    }
+
+    /** A manual package belongs to the chosen app: a command naming Maps does not go into it. */
+    @Test fun manual_package_does_not_take_an_explicit_maps_command() = runTest {
+        selectNavigator("waze")
+        setManualPackage("com.vendor.waze")
+
+        dispatcher.dispatch(actionDef("""{"app":"maps","lat":57.0,"lon":36.0}"""), null)
+        val intent = shadowOf(app).nextStartedActivity
+        assertEquals("yandexmaps://maps.yandex.ru/?rtext=~57.0,36.0&rtt=auto", intent.dataString)
+        assertEquals(null, intent.`package`)
+    }
+
+    /** With Yandex chosen, a manual package pins its links, which otherwise resolve by scheme. */
+    @Test fun yandex_manual_package_pins_routes_and_home() = runTest {
+        selectNavigator(RouteNavigatorUris.YANDEX)
+        setManualPackage("ru.yandex.yandexnavi.vendor")
+
+        dispatcher.dispatch(actionDef("""{"lat":57.0,"lon":36.0}"""), null)
+        val route = shadowOf(app).nextStartedActivity
+        assertEquals("yandexnavi://build_route_on_map?lat_to=57.0&lon_to=36.0", route.dataString)
+        assertEquals("ru.yandex.yandexnavi.vendor", route.`package`)
+
+        dispatcher.dispatch(actionDef("""{"shortcut":"home"}"""), null)
+        assertEquals("ru.yandex.yandexnavi.vendor", shadowOf(app).nextStartedActivity.`package`)
+    }
+
+    /** A Navigator installed only as a store variant gets the Home/Work action, not the absent canonical one. */
+    @Test fun home_shortcut_goes_to_the_installed_navigator_variant() = runTest {
+        installLauncherApp("ru.yandex.yandexnavi.rustore", "Навигатор")
+
+        dispatcher.dispatch(actionDef("""{"shortcut":"home"}"""), null)
+        assertEquals("ru.yandex.yandexnavi.rustore", shadowOf(app).nextStartedActivity.`package`)
+        assertEquals("ru.yandex.yandexnavi.rustore", dispatcher.willOpenPinned(org.json.JSONObject("""{"shortcut":"home"}""")))
+    }
+
     // --- willOpenMaps: what AgentTools asks to pick the right foreground-verification app ---
 
     @Test fun willOpenMaps_true_for_explicit_app_maps() {
@@ -280,8 +353,23 @@ class ActionDispatcherNavigateTest {
             .edit().putString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, value).commit()
     }
 
-    /** The dispatcher probes for 2GIS with getLaunchIntentForPackage, so the shadow needs a
-     *  launcher activity for that package, not just an installed-package entry. */
+    private fun setManualPackage(pkg: String) {
+        app.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            .edit().putString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, pkg).commit()
+    }
+
+    /** A launcher entry of [pkg] labelled [label]. */
+    private fun installLauncherApp(pkg: String, label: String) {
+        val component = android.content.ComponentName(pkg, "$pkg.Main")
+        val pm = shadowOf(app.packageManager)
+        pm.addActivityIfNotPresent(component).nonLocalizedLabel = label
+        pm.addIntentFilterForActivity(
+            component,
+            android.content.IntentFilter(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_LAUNCHER) },
+        )
+    }
+
+    /** A launcher activity for 2GIS (the dispatcher finds the package either way: it exists). */
     private fun installDgis() {
         val pm = shadowOf(app.packageManager)
         pm.addActivityIfNotPresent(

@@ -1464,6 +1464,86 @@ class SettingsViewModelTest {
         assertEquals("waze", reread.uiState.value.routeNavigator)
     }
 
+    /** A manual package belongs to the app it was typed for (fork cac1ceab). */
+    @Test fun `switching navigator clears a manual package that belonged to the previous provider`() = runTest {
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        vm.setRouteNavigator("waze")
+        vm.setRouteNavigatorPackage("com.vendor.waze")
+        assertEquals("com.vendor.waze", vm.uiState.value.routeNavigatorResolvedPackage)
+        vm.setRouteNavigator(RouteNavigatorUris.DGIS)
+
+        assertEquals(RouteNavigatorUris.DGIS, vm.uiState.value.routeNavigator)
+        assertEquals("", vm.uiState.value.routeNavigatorPackage)
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        assertEquals(
+            null,
+            ctx.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, null)
+        )
+    }
+
+    /** Settings offer the apps the car has; a saved one that is gone moves to an installed one. */
+    @Test fun `only installed navigators are offered and a stale choice moves to an installed one`() = runTest {
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        org.robolectric.Shadows.shadowOf(ctx.packageManager)
+            .installPackage(android.content.pm.PackageInfo().apply { packageName = "com.waze" })
+        ctx.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, RouteNavigatorUris.DGIS).commit()
+
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf(RouteNavigatorUris.WAZE), vm.uiState.value.routeNavigatorOptions)
+        assertEquals(RouteNavigatorUris.WAZE, vm.uiState.value.routeNavigator)
+        assertEquals("com.waze", vm.uiState.value.routeNavigatorResolvedPackage)
+        assertEquals(
+            RouteNavigatorUris.WAZE,
+            ctx.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, null)
+        )
+    }
+
+    /** A manual package keeps its app on offer and is what the settings say routes use. */
+    @Test fun `a manual package keeps its navigator and is shown as the package in use`() = runTest {
+        val ctx: Context = ApplicationProvider.getApplicationContext()
+        org.robolectric.Shadows.shadowOf(ctx.packageManager)
+            .installPackage(android.content.pm.PackageInfo().apply { packageName = "ru.yandex.yandexnavi" })
+        ctx.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .putString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR, RouteNavigatorUris.WAZE)
+            .putString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, "com.vendor.waze")
+            .commit()
+
+        val vm = buildViewModel()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf(RouteNavigatorUris.YANDEX, RouteNavigatorUris.WAZE), vm.uiState.value.routeNavigatorOptions)
+        assertEquals(RouteNavigatorUris.WAZE, vm.uiState.value.routeNavigator)
+        assertEquals("com.vendor.waze", vm.uiState.value.routeNavigatorPackage)
+        assertEquals("com.vendor.waze", vm.uiState.value.routeNavigatorResolvedPackage)
+
+        vm.setRouteNavigatorPackage("  ")
+        assertEquals("", vm.uiState.value.routeNavigatorResolvedPackage)
+        assertEquals(
+            null,
+            ctx.getSharedPreferences(RouteNavigatorUris.PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(RouteNavigatorUris.KEY_ROUTE_NAVIGATOR_PACKAGE, null)
+        )
+    }
+
+    @Test fun `every navigator is offered when none was detected`() {
+        assertEquals(RouteNavigatorUris.ALL, routeNavigatorOptions(emptyMap(), RouteNavigatorUris.YANDEX, ""))
+        assertEquals(
+            RouteNavigatorUris.ALL,
+            routeNavigatorOptions(RouteNavigatorUris.ALL.associateWith { emptyList<String>() }, RouteNavigatorUris.WAZE, "x"),
+        )
+        assertEquals(
+            listOf(RouteNavigatorUris.DGIS),
+            routeNavigatorOptions(mapOf(RouteNavigatorUris.DGIS to listOf("ru.dublgis.dgismobile")), RouteNavigatorUris.WAZE, ""),
+        )
+    }
+
     /** The dump header must carry the choice: it is the only place a user log shows it. */
     @Test fun `the diagnostic header reports the chosen route navigator`() = runTest {
         val vm = buildViewModel()
