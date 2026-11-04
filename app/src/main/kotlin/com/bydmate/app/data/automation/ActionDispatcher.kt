@@ -19,6 +19,7 @@ import android.util.Log
 import android.view.KeyEvent
 import androidx.core.app.NotificationCompat
 import com.bydmate.app.R
+import com.bydmate.app.agent.AgentTools
 import com.bydmate.app.cluster.ClusterMode
 import com.bydmate.app.cluster.ClusterVoiceControl
 import com.bydmate.app.data.autoservice.SentinelDecoder
@@ -994,11 +995,17 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         return voiceActions.get().speak(text)
     }
 
-    /** "agent_query": run the payload prompt through an isolated agent turn, speak the answer. */
+    /** "agent_query": run the payload prompt through an isolated agent turn, speak the answer. A
+     *  payload with permissions (the Alice bridge, see [AgentQueryPermissions]) keeps the turn's
+     *  tools within them; a rule's payload has none and gets the full detached set. */
     private suspend fun dispatchAgentQuery(action: ActionDef): DispatchResult {
-        val prompt = parsePayload(action.payload)?.optString("prompt")?.trim().orEmpty()
+        val payload = parsePayload(action.payload)
+        val prompt = payload?.optString("prompt")?.trim().orEmpty()
         if (prompt.isEmpty()) return DispatchResult(false, appStrings.get(R.string.dispatch_agent_query_prompt_missing))
-        return voiceActions.get().agentQuery(prompt)
+        val denied = AgentQueryPermissions.from(payload)
+            ?.let { AgentTools.deniedTools(vehicleControl = it.vehicleControl, navigation = it.navigation) }
+            .orEmpty()
+        return voiceActions.get().agentQuery(prompt, denied)
     }
 
     /**

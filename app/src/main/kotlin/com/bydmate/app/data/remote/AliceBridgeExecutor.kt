@@ -2,6 +2,7 @@ package com.bydmate.app.data.remote
 
 import com.bydmate.app.agent.AgentTools
 import com.bydmate.app.data.automation.ActionDispatcher
+import com.bydmate.app.data.automation.AgentQueryPermissions
 import com.bydmate.app.data.automation.DispatchResult
 import com.bydmate.app.data.local.entity.ActionDef
 import org.json.JSONObject
@@ -56,14 +57,16 @@ class AliceBridgeExecutor @Inject constructor(
     override suspend fun media(command: AliceBridgeCommand): Result<Unit> = appDispatcher.media(command, latestData)
 
     /** Automotive questions only; the answer is spoken by the BYDMate agent like an automation's
-     *  agent_query. */
-    override suspend fun query(command: AliceBridgeCommand): Result<Unit> {
+     *  agent_query. The permissions ride along: with one off, the agent turn gets no tool of that
+     *  class (AgentTools.deniedTools), so a question cannot drive or route the car either. */
+    override suspend fun query(command: AliceBridgeCommand, permissions: AliceBridgePermissions): Result<Unit> {
         val prompt = command.text
         if (prompt.isEmpty()) return AliceBridgeRouter.failure("missing_agent_query")
         if (!AliceLocalCommandRouter.isAutomotiveAgentQuery(prompt)) {
             return AliceBridgeRouter.failure("agent_query_outside_automotive_domain")
         }
-        val payload = JSONObject().put("prompt", prompt).toString()
+        val payload = AgentQueryPermissions(permissions.vehicleControl, permissions.navigation)
+            .writeTo(JSONObject().put("prompt", prompt)).toString()
         return actionDispatcher.dispatch(ActionDef("", ALICE, "agent_query", payload), latestData)
             .asResult("agent_query_failed")
     }

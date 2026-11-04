@@ -13,13 +13,13 @@ internal enum class AliceCommandKind {
     APP,
     MEDIA,
 
-    /** A question about the car for the BYDMate agent. */
+    /** A question about the car for the BYDMate agent; its agent turn is held to the permissions. */
     QUERY,
     UNSUPPORTED,
 }
 
 /** The two «Алиса может …» switches of the Smart Home settings; both off unless the owner turns them on. */
-internal data class AliceBridgePermissions(val vehicleControl: Boolean = false, val navigation: Boolean = false)
+data class AliceBridgePermissions(val vehicleControl: Boolean = false, val navigation: Boolean = false)
 
 /** The executing side of [AliceBridgeRouter], one entry per [AliceCommandKind]. */
 interface AliceBridgeActions {
@@ -27,13 +27,15 @@ interface AliceBridgeActions {
     suspend fun navigation(command: AliceBridgeCommand): Result<Unit>
     suspend fun app(command: AliceBridgeCommand): Result<Unit>
     suspend fun media(command: AliceBridgeCommand): Result<Unit>
-    suspend fun query(command: AliceBridgeCommand): Result<Unit>
+    /** [permissions] limit the tools of the agent turn the question starts. */
+    suspend fun query(command: AliceBridgeCommand, permissions: AliceBridgePermissions): Result<Unit>
 }
 
 /**
  * The single dispatch point of the Alice bridge: every command is classified here and a vehicle
  * or navigation command whose permission is off is answered [VEHICLE_CONTROL_DISABLED] /
- * [NAVIGATION_DISABLED] without reaching [AliceBridgeActions] at all. Pure.
+ * [NAVIGATION_DISABLED] without reaching [AliceBridgeActions] at all. A question reaches the agent
+ * with the permissions, so its tools cannot do what this router refuses. Pure.
  */
 internal object AliceBridgeRouter {
     const val VEHICLE_CONTROL_DISABLED = "vehicle_control_disabled"
@@ -70,7 +72,7 @@ internal object AliceBridgeRouter {
             if (permissions.navigation) actions.navigation(command) else failure(NAVIGATION_DISABLED)
         AliceCommandKind.APP -> actions.app(command)
         AliceCommandKind.MEDIA -> actions.media(command)
-        AliceCommandKind.QUERY -> actions.query(command)
+        AliceCommandKind.QUERY -> actions.query(command, permissions)
         AliceCommandKind.UNSUPPORTED -> failure(UNSUPPORTED_ACTION)
     }
 

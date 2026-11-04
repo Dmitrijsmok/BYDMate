@@ -81,6 +81,16 @@ class VoiceAutomationActionsAgentQueryTest {
         verify(exactly = 1) { tts.speak("Солнечно") }
     }
 
+    // An Alice question with a permission off: the denied tools go to the detached turn as they are.
+    @Test fun `denied tools reach the detached agent turn`() = runTest {
+        val orch = mockk<AgentOrchestrator>()
+        val denied = setOf("vehicle_control", "navigate_to")
+        coEvery { orch.askDetached("какой заряд", denied) } returns AgentResult.Answer("80 процентов", emptyList())
+        val (actions, _) = makeActions(orchestrator = orch)
+        assertTrue(actions.agentQuery("какой заряд", denied).success)
+        coVerify(exactly = 1) { orch.askDetached("какой заряд", denied) }
+    }
+
     @Test fun `agent disabled maps to failure with reason`() = runTest {
         val orch = mockk<AgentOrchestrator>()
         coEvery { orch.askDetached(any()) } returns AgentResult.Disabled

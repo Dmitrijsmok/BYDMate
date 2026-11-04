@@ -3,6 +3,7 @@ package com.bydmate.app.data.automation
 import android.app.NotificationManager
 import android.content.Context
 import com.bydmate.app.R
+import com.bydmate.app.agent.AgentTools
 import com.bydmate.app.cluster.ClusterMode
 import com.bydmate.app.cluster.ClusterVoiceControl
 import com.bydmate.app.data.local.entity.ActionDef
@@ -74,6 +75,26 @@ class ActionDispatcherVoiceActionsTest {
         val r = d.dispatch(ActionDef(command = "", displayName = "Запрос агенту",
             kind = "agent_query", payload = """{"prompt":"расскажи сводку погоды"}"""), data = null)
         assertTrue(r.success)
+    }
+
+    // The Alice bridge forwards its two permissions: with both off the agent turn gets neither
+    // the car-control nor the navigation tools; a rule's payload (above) carries none and keeps all.
+    @Test fun `agent_query with the bridge permissions passes the denied tools on`() = runTest {
+        val voice = mockk<VoiceAutomationActions>()
+        coEvery { voice.agentQuery(any(), any()) } returns DispatchResult(true)
+        val d = makeDispatcher(voice)
+        fun payload(vehicle: Boolean, navigation: Boolean) =
+            AgentQueryPermissions(vehicle, navigation).writeTo(org.json.JSONObject().put("prompt", "какой заряд")).toString()
+
+        d.dispatch(ActionDef("", "Alice", kind = "agent_query", payload = payload(vehicle = false, navigation = false)), null)
+        coVerify { voice.agentQuery("какой заряд", AgentTools.CAR_CONTROL_TOOLS + AgentTools.NAVIGATION_TOOLS) }
+        d.dispatch(ActionDef("", "Alice", kind = "agent_query", payload = payload(vehicle = true, navigation = false)), null)
+        coVerify { voice.agentQuery("какой заряд", AgentTools.NAVIGATION_TOOLS) }
+        d.dispatch(ActionDef("", "Alice", kind = "agent_query", payload = payload(vehicle = true, navigation = true)), null)
+        coVerify { voice.agentQuery("какой заряд", emptySet()) }
+        // A permissions value that is not an object fails closed.
+        d.dispatch(ActionDef("", "Alice", kind = "agent_query", payload = """{"prompt":"какой заряд","permissions":"all"}"""), null)
+        coVerify(exactly = 2) { voice.agentQuery("какой заряд", AgentTools.CAR_CONTROL_TOOLS + AgentTools.NAVIGATION_TOOLS) }
     }
 
     @Test fun `empty payload text fails without reaching the coordinator`() = runTest {

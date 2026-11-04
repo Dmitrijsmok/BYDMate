@@ -932,6 +932,15 @@ class AgentTools @Inject constructor(
             Result.failure(e)
         }
 
+    /** [schemas] minus [deniedTools]: what a restricted detached turn offers the model. */
+    suspend fun schemas(includeAutomationTools: Boolean, deniedTools: Set<String>): JSONArray =
+        withoutTools(schemas(includeAutomationTools), deniedTools)
+
+    /** [execute] that also refuses [deniedTools], even when the model calls one it was never
+     *  offered (a name from an older turn, or invented): the schemas are not the only fence. */
+    suspend fun execute(call: AgentToolCall, allowAutomationTools: Boolean, deniedTools: Set<String>): String =
+        if (call.name in deniedTools) deniedToolError(call.name) else execute(call, allowAutomationTools)
+
     suspend fun execute(call: AgentToolCall, allowAutomationTools: Boolean = true): String {
         val args = runCatchingCancellable { JSONObject(call.arguments.ifBlank { "{}" }) }
             .getOrElse { return BAD_ARGS_ERROR }
@@ -3066,6 +3075,49 @@ class AgentTools @Inject constructor(
         internal val AUTOMATION_TOOLS = setOf(
             "run_automation", "create_automation", "set_automation_enabled",
             "remember_fact", "forget_fact")
+
+        /** Tools that act on the car, or on something outside the car through it (a phone call, an
+         *  automation that runs vehicle steps): withheld from a turn whose caller may not control
+         *  the car, see [deniedTools]. create_automation is here too, though detached turns never
+         *  get it anyway (it is in [AUTOMATION_TOOLS]). */
+        internal val CAR_CONTROL_TOOLS = setOf(
+            "vehicle_control", "set_sentry", "set_hotspot", "set_screen", "split_screen",
+            "run_automation", "set_automation_enabled", "create_automation", "call_contact")
+
+        /** Tools that open a route, a map search or a point, or leave the current screen for the
+         *  home screen: withheld from a turn whose caller may not navigate. */
+        internal val NAVIGATION_TOOLS = setOf("navigate_to", "search_on_map", "show_point_on_map", "go_home")
+
+        /** Every other tool: readings, statistics, weather, search, route info, apps and media. A
+         *  new tool must be added to exactly one of the three sets (AgentToolsDeniedToolsTest). */
+        internal val ALWAYS_ALLOWED_TOOLS = setOf(
+            "get_vehicle_state", "query_trips", "query_charges", "get_stats_summary", "get_weather",
+            "where_am_i", "web_search", "get_route_info", "find_chargers", "range_to_destination",
+            "media_volume", "play_music", "youtube", "launch_app", "set_cluster_projection",
+            "list_automations", "list_places", "create_place", "remember_fact", "forget_fact",
+            "add_charge", "end_conversation")
+
+        /** The tools a restricted caller's turn may not use: the Alice bridge with its «may control
+         *  the car» / «may navigate» permissions. Both on = nothing denied, as for every other
+         *  caller (whose turns never pass a denied set at all). */
+        fun deniedTools(vehicleControl: Boolean, navigation: Boolean): Set<String> =
+            (if (vehicleControl) emptySet() else CAR_CONTROL_TOOLS) + (if (navigation) emptySet() else NAVIGATION_TOOLS)
+
+        /** [schemas] without the tools named in [denied]; entries without a function name stay. */
+        internal fun withoutTools(schemas: JSONArray, denied: Set<String>): JSONArray {
+            if (denied.isEmpty()) return schemas
+            return JSONArray().apply {
+                for (i in 0 until schemas.length()) {
+                    val entry = schemas.opt(i)
+                    val name = (entry as? JSONObject)?.optJSONObject("function")?.optString("name").orEmpty()
+                    if (name !in denied) put(entry)
+                }
+            }
+        }
+
+        internal fun deniedToolError(name: String): String =
+            JSONObject().put("error", "инструмент $name запрещён для этого запроса: " +
+                "разрешение на это действие выключено в настройках").toString()
 
         private const val DAY_MS = 24L * 3600_000
         private const val PERIOD_ERROR =

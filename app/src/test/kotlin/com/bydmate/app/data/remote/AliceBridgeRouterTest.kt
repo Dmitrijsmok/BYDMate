@@ -9,6 +9,7 @@ class AliceBridgeRouterTest {
 
     private class RecordingActions : AliceBridgeActions {
         val calls = mutableListOf<String>()
+        val queryPermissions = mutableListOf<AliceBridgePermissions>()
         private fun record(kind: String, command: AliceBridgeCommand): Result<Unit> {
             calls += "$kind:${command.action.ifEmpty { command.rawCommand }}"
             return Result.success(Unit)
@@ -17,7 +18,10 @@ class AliceBridgeRouterTest {
         override suspend fun navigation(command: AliceBridgeCommand) = record("navigation", command)
         override suspend fun app(command: AliceBridgeCommand) = record("app", command)
         override suspend fun media(command: AliceBridgeCommand) = record("media", command)
-        override suspend fun query(command: AliceBridgeCommand) = record("query", command)
+        override suspend fun query(command: AliceBridgeCommand, permissions: AliceBridgePermissions): Result<Unit> {
+            queryPermissions += permissions
+            return record("query", command)
+        }
     }
 
     private val vehicleCommands = listOf(
@@ -79,6 +83,20 @@ class AliceBridgeRouterTest {
             assertTrue(command.toString(), run(command, AliceBridgePermissions(), actions).isSuccess)
         }
         assertEquals(alwaysAllowed.map { (command, kind) -> "$kind:${command.action}" }, actions.calls)
+    }
+
+    // The question itself needs no permission, but its agent turn must not get around them.
+    @Test fun `an agent question carries the permissions to the agent turn`() {
+        val actions = RecordingActions()
+        val question = AliceBridgeCommand("q", action = "agent.query", text = "какой заряд батареи")
+        val all = listOf(
+            AliceBridgePermissions(),
+            AliceBridgePermissions(vehicleControl = true),
+            AliceBridgePermissions(navigation = true),
+            AliceBridgePermissions(vehicleControl = true, navigation = true),
+        )
+        all.forEach { assertTrue(run(question, it, actions).isSuccess) }
+        assertEquals(all, actions.queryPermissions)
     }
 
     @Test fun `unknown actions are refused without executing anything`() {

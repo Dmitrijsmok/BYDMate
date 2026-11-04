@@ -2,6 +2,7 @@ package com.bydmate.app.data.remote
 
 import com.bydmate.app.agent.AgentTools
 import com.bydmate.app.data.automation.ActionDispatcher
+import com.bydmate.app.data.automation.AgentQueryPermissions
 import com.bydmate.app.data.automation.DispatchResult
 import com.bydmate.app.data.local.entity.ActionDef
 import com.bydmate.app.data.loop.SharedAdaptiveLoop
@@ -135,6 +136,28 @@ class AlicePollingPermissionTest {
         assertEquals(AliceBridgeRouter.VEHICLE_CONTROL_DISABLED, results.getValue("v1").getString("error"))
         coVerify { agentTools.navigateDirect("Рига", false, "") }
         coVerify(exactly = 0) { actionDispatcher.dispatch(any(), any()) }
+    }
+
+    // An agent question needs no permission, but its turn is held to them: the agent_query payload
+    // carries both flags, and with them off ActionDispatcher hands the agent a denied tool set.
+    @Test fun `an agent question carries the permissions in its agent_query payload`() {
+        val question = JSONObject().put("commands", org.json.JSONArray()
+            .put(command("q1", "agent.query").put("text", "какой заряд батареи"))).toString()
+        val payloads = mutableListOf<String?>()
+        coEvery { actionDispatcher.dispatch(any(), any()) } answers {
+            payloads += firstArg<ActionDef>().takeIf { it.kind == "agent_query" }?.payload
+            DispatchResult(true)
+        }
+        permissions(vehicle = false, navigation = false)
+        assertEquals(true, runOnce(question).getValue("q1").getBoolean("success"))
+        manager.stop()
+        permissions(vehicle = true, navigation = false)
+        acks.clear()
+        assertEquals(true, runOnce(question.replace("q1", "q2")).getValue("q2").getBoolean("success"))
+
+        val parsed = payloads.map { AgentQueryPermissions.from(JSONObject(it!!)) }
+        assertEquals(listOf(AgentQueryPermissions(false, false), AgentQueryPermissions(true, false)), parsed)
+        assertEquals("какой заряд батареи", JSONObject(payloads.first()!!).getString("prompt"))
     }
 
     @Test fun `upstream raw command without timestamps runs after an empty poll and is acked by id`() {

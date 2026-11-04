@@ -150,9 +150,11 @@ class AgentOrchestrator @Inject constructor(
     /** Automation-origin agent turn: single prompt, throwaway message list. Never touches the
      *  shared [history] or [lastAnswerAt] (no follow-up window, no context bleed into the live
      *  conversation), and refuses automation-management tools (see AgentTools.AUTOMATION_TOOLS).
+     *  [deniedTools] (a restricted caller: the Alice bridge with a permission off) are neither
+     *  offered to the model nor executed; empty for an automation, which keeps the full set.
      *  A live ask() in flight wins: tryLock instead of queueing, so a scheduled morning summary
      *  can never barge into the middle of a real dialog. */
-    suspend fun askDetached(userText: String): AgentResult {
+    suspend fun askDetached(userText: String, deniedTools: Set<String> = emptySet()): AgentResult {
         if (!mutex.tryLock()) return AgentResult.Error("агент занят")
         try {
             if (!settingsRepository.isAgentEnabled()) return AgentResult.Disabled
@@ -160,8 +162,11 @@ class AgentOrchestrator @Inject constructor(
             val text = userText.trim()
             if (text.isEmpty()) return AgentResult.Disabled
             val messages = mutableListOf<AgentMessage>(AgentMessage.User(withTimeTag(text)))
-            return runLoop(messages, systemMessages(includeMemory = false), tools.schemas(includeAutomationTools = false),
-                allowAutomationTools = false, onSentence = null, onFiller = null, onTerminal = {})
+            val schemas = if (deniedTools.isEmpty()) tools.schemas(includeAutomationTools = false)
+            else tools.schemas(includeAutomationTools = false, deniedTools = deniedTools)
+            return runLoop(messages, systemMessages(includeMemory = false), schemas,
+                allowAutomationTools = false, onSentence = null, onFiller = null, onTerminal = {},
+                deniedTools = deniedTools)
         } finally {
             mutex.unlock()
         }
@@ -204,6 +209,7 @@ class AgentOrchestrator @Inject constructor(
         onSentence: ((String) -> Unit)?,
         onFiller: ((String) -> Unit)?,
         onTerminal: () -> Unit,
+        deniedTools: Set<String> = emptySet(),
     ): AgentResult {
         val startedAt = nowMs()
         val rounds = intArrayOf(0)
@@ -213,7 +219,7 @@ class AgentOrchestrator @Inject constructor(
         try {
             val result = runLoopTraced(
                 messages, systemMessages, toolSchemas, allowAutomationTools, onSentence, onFiller, onTerminal,
-                rounds, tracer,
+                rounds, tracer, deniedTools,
             )
             outcome = when (result) {
                 is AgentResult.Answer -> "answer"
@@ -253,6 +259,7 @@ class AgentOrchestrator @Inject constructor(
         onTerminal: () -> Unit,
         rounds: IntArray,
         tracer: AgentTrace,
+        deniedTools: Set<String>,
     ): AgentResult {
         val outcomes = mutableListOf<AgentToolOutcome>()
         val callCounts = mutableMapOf<String, Int>()
@@ -328,7 +335,11 @@ class AgentOrchestrator @Inject constructor(
                 callCounts[key] = seen + 1
                 val toolStart = nowMs()
                 val toolEvent = tracer.toolStarted(call)
-                val res = withContext(Trace.causedBy(toolEvent)) { tools.execute(call, allowAutomationTools) }
+                val res = withContext(Trace.causedBy(toolEvent)) {
+                    // A denied set is a restricted caller's; everyone else keeps the unchanged call.
+                    if (deniedTools.isEmpty()) tools.execute(call, allowAutomationTools)
+                    else tools.execute(call, allowAutomationTools, deniedTools)
+                }
                 // ok = the tool JSON has no "error" key; unparseable output counts as ok
                 // (free-form success payloads like web_search results are not errors).
                 val ok = runCatching { !JSONObject(res).has("error") }.getOrDefault(true)
