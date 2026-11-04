@@ -325,7 +325,7 @@ class VoiceControllerAgentFallbackTest {
         Thread.sleep(500)
 
         assertEquals(1, answerCount.get())
-        assertEquals("Не понял: «навигатор»", answerText.get())
+        assertEquals("Не понял: «расскажи анекдот»", answerText.get())
     }
 
     @Test fun `agent Error shows the block orb dialog with the agent message exactly once`() {
@@ -345,7 +345,7 @@ class VoiceControllerAgentFallbackTest {
         Thread.sleep(500)
 
         assertEquals(1, answerCount.get())
-        assertEquals("Услышал: «навигатор». Отказ: нет сети", answerText.get())
+        assertEquals("Услышал: «расскажи анекдот». Отказ: нет сети", answerText.get())
     }
 
     // NOTE: "blank final transcript shows the not-understood orb dialog exactly once" and
