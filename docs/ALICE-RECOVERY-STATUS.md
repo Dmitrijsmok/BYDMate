@@ -73,6 +73,14 @@ Use its semantic/app-dispatch behavior as the specification. Do not blindly copy
 
 ## 2. Music ducking: Alice 4.8 behavior carried into 5.3
 
+> **Superseded in DiLink 3 build 1.1.3 (2026-11-05).** Field 1.1.1/1.1.2: Alice in Yandex Browser
+> speaks on the same STREAM_MUSIC, so the volume duck to index 4 made her inaudible / quieter on
+> every press. External Alice now holds a transient may-duck audio focus
+> (`AudioCapture.holdFocusForExternalAssistant`, `ALICE_EXTERNAL_FOCUS` in the log) for the same
+> lifecycle (idempotent, 60 s safety timeout, released on leaving Yandex) and never changes the
+> media volume. The music player lowers or pauses itself. The section below is history.
+
+
 Field confirmation date: 2026-09-18.
 
 User initially suspected that ducking was missing, then tested with loud music and confirmed that the music really became quieter while speaking/listening to the assistant.

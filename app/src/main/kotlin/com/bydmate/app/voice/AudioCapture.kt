@@ -1,6 +1,8 @@
 package com.bydmate.app.voice
 
 import android.content.SharedPreferences
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
@@ -32,6 +34,8 @@ class AudioCapture(
             MediaRecorder.AudioSource.DEFAULT,              // 0
         )
         internal const val DUCK_VOLUME_INDEX = 1
+        // The external-Alice volume duck of 1.1.x; only restoreStuckDuck() still needs it, to
+        // unstick a volume such a build left at this index.
         internal const val EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX = 4
         private const val TAG = "AudioCapture"
         // Pre-duck media volume survives process death here; restoreStuckDuck() reads it
@@ -158,23 +162,42 @@ class AudioCapture(
         return saved
     }
 
-    /** Milder, reversible duck used while the external Yandex Alice route owns the mic button. */
-    internal fun duckMusicForExternalAssistant(): Int? = synchronized(duckLock) {
-        if (!audioManager.isMusicActive) return null
-        val saved = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        if (saved <= EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX) return null
-        if (!runCatching {
-                audioManager.setStreamVolume(
-                    AudioManager.STREAM_MUSIC,
-                    EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX,
-                    0,
+    /**
+     * Audio focus held while the external Yandex Alice route owns the mic button, instead of a
+     * STREAM_MUSIC volume duck: Alice in Yandex Browser speaks on that same stream, so the old
+     * duck to index 4 made her voice as quiet as the music (field 1.1.1/1.1.2: Alice inaudible,
+     * quieter on every press). A transient may-duck focus lowers or pauses the music player
+     * itself; Alice takes the focus over when she speaks and plays at the user's volume. Its own
+     * listener keeps it apart from the capture focus, which is requested with a null listener.
+     */
+    @Volatile private var externalAssistantFocus: AudioFocusRequest? = null
+
+    /** True when the focus is held after the call (granted now or already held). */
+    fun holdFocusForExternalAssistant(): Boolean = synchronized(duckLock) {
+        if (externalAssistantFocus != null) return true
+        val request = runCatching {
+            AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
                 )
-            }.isSuccess) return null
-        duckDepth++
-        pendingRestore = saved
-        prefs.edit().putInt(KEY_PRE_DUCK_VOLUME, saved).apply()
-        Log.i(TAG, "duckExternalAlice: $saved -> $EXTERNAL_ASSISTANT_DUCK_VOLUME_INDEX")
-        saved
+                .setOnAudioFocusChangeListener { }
+                .build()
+        }.getOrNull() ?: return false
+        val granted = runCatching { audioManager.requestAudioFocus(request) }
+            .getOrNull() == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        if (granted) externalAssistantFocus = request
+        Log.i(TAG, "externalAssistantFocus: hold granted=$granted")
+        granted
+    }
+
+    fun releaseExternalAssistantFocus(): Unit = synchronized(duckLock) {
+        val request = externalAssistantFocus ?: return
+        externalAssistantFocus = null
+        runCatching { audioManager.abandonAudioFocusRequest(request) }
+        Log.i(TAG, "externalAssistantFocus: released")
     }
 
     /** Restore the media volume captured by duckMusic(), or the explicit mid-session override. No-op if nothing was ducked. */
