@@ -1385,6 +1385,8 @@
     <string name="settings_voice_model_unpacking">Распакоўка… %1$d%%</string>
     <string name="voice_listening">Слухаю</string>
     <string name="voice_thinking">Думаю</string>
+    <string name="voice_mic_opening">Уключаю мікрафон…</string>
+    <string name="voice_mic_silent">Мікрафон маўчыць: магчыма, яго заняла іншая праграма</string>
     <string name="voice_error_model_missing">Галасавая мадэль не загружана. Спампуйце яе ў Наладах, раздзел Голас-агент.</string>
     <string name="voice_block_park_required">Патрэбны паркінг</string>
 

@@ -980,21 +980,55 @@ class VoiceControllerSessionTest {
     private fun stubbedContext(): Context = mockk<Context>(relaxed = true).also {
         every { it.getString(R.string.voice_listening) } returns "Слушаю"
         every { it.getString(R.string.voice_thinking) } returns "Думаю"
+        every { it.getString(R.string.voice_mic_opening) } returns MIC_OPENING
+        every { it.getString(R.string.voice_mic_silent) } returns MIC_SILENT
         every { it.getString(R.string.voice_error_model_missing) } returns modelMissingMsg
     }
 
-    @Test fun `starting a continuous session shows the listening overlay`() {
+    @Test fun `the overlay says listening only once the microphone delivers a signal`() {
         val fakeAsr = FakeContinuousAsr(ready = true)
         val dispatcher = mockk<ActionDispatcher>(relaxed = true)
-        val controller = makeController(fakeAsr, dispatcher, context = stubbedContext())
+        val rawFrames = MutableSharedFlow<ShortArray>(extraBufferCapacity = 32)
+        val audioCapture = mockk<AudioCapture>(relaxed = true).also { it.stubFrames(rawFrames) }
+        val controller = makeController(fakeAsr, dispatcher, audioCapture = audioCapture, context = stubbedContext())
         val shown = Collections.synchronizedList(mutableListOf<String>())
+        val updates = Collections.synchronizedList(mutableListOf<String>())
         controller.showListeningOverlay = { text -> shown.add(text) }
+        controller.updateListeningOverlay = { text -> updates.add(text) }
 
         controller.onPttPressed()
         awaitTrue { controller.listening.value }
-
         awaitTrue { shown.isNotEmpty() }
-        assertEquals(listOf("Слушаю"), shown)
+        assertEquals(listOf(MIC_OPENING), shown)
+        awaitSubscribed(rawFrames)
+
+        rawFrames.tryEmit(ShortArray(1600))
+        rawFrames.tryEmit(ShortArray(1600) { 5 })
+        awaitTrue { updates.isNotEmpty() }
+        assertEquals(listOf("Слушаю"), updates)
+        controller.onPttPressed()
+        awaitTrue { !controller.listening.value }
+    }
+
+    @Test fun `a microphone that delivers only digital silence is reported as held`() {
+        val fakeAsr = FakeContinuousAsr(ready = true)
+        val dispatcher = mockk<ActionDispatcher>(relaxed = true)
+        val rawFrames = MutableSharedFlow<ShortArray>(extraBufferCapacity = 32)
+        val audioCapture = mockk<AudioCapture>(relaxed = true).also { it.stubFrames(rawFrames) }
+        val controller = makeController(fakeAsr, dispatcher, audioCapture = audioCapture, context = stubbedContext())
+        val updates = Collections.synchronizedList(mutableListOf<String>())
+        controller.updateListeningOverlay = { text -> updates.add(text) }
+
+        controller.onPttPressed()
+        awaitTrue { controller.listening.value }
+        awaitSubscribed(rawFrames)
+        repeat(16) { rawFrames.tryEmit(ShortArray(1600)) }
+
+        awaitTrue { updates.isNotEmpty() }
+        assertEquals(listOf(MIC_SILENT), updates)
+        assertTrue(controller.listening.value)
+        controller.onPttPressed()
+        awaitTrue { !controller.listening.value }
     }
 
     @Test fun `an utterance flips the overlay to thinking then back to listening`() {
@@ -1096,6 +1130,7 @@ class VoiceControllerSessionTest {
         val enContext = mockk<Context>(relaxed = true).also {
             every { it.getString(R.string.voice_listening) } returns "Listening"
             every { it.getString(R.string.voice_thinking) } returns "Thinking"
+            every { it.getString(R.string.voice_mic_opening) } returns "Opening the microphone…"
             every { it.getString(R.string.voice_error_model_missing) } returns "Voice model is not downloaded."
         }
         val controller = makeController(fakeAsr, dispatcher, journal = journal, context = enContext)
@@ -1106,7 +1141,7 @@ class VoiceControllerSessionTest {
 
         awaitTrue { controller.listening.value }
         awaitTrue { shown.isNotEmpty() }
-        assertEquals(listOf("Listening"), shown)
+        assertEquals(listOf("Opening the microphone…"), shown)
         assertTrue(journal.entries.value.none { it.refusal == VoiceRefusal.MODEL_MISSING })
     }
 
@@ -2151,7 +2186,7 @@ class VoiceControllerSessionTest {
         awaitStartedAfterWarmUp(controller)
         awaitSubscribed(asr.events)
 
-        assertEquals("Слушаю", updates.first())
+        assertEquals(MIC_OPENING, updates.first())
         verify(exactly = 1) { earcon.ok() }
         controller.onPttPressed()
         awaitTrue { !controller.listening.value }
@@ -2204,15 +2239,19 @@ class VoiceControllerSessionTest {
         controller.onPttPressed()
 
         // Same as before the Android 10 change: the cue and the listening state on the press
-        // itself, no warm-up job, the pill opens as «Слушаю» and never shows «Думаю».
+        // itself, no warm-up job, the pill opens as «Включаю микрофон…» (then «Слушаю» on the first
+        // live frame) and never shows «Думаю».
         assertTrue(controller.listening.value)
         verify(exactly = 1) { earcon.ok() }
         assertNull(controller.warmupJobForTest())
         awaitSubscribed(asr.events)
         awaitTrue { shown.isNotEmpty() }
-        assertEquals(listOf("Слушаю"), shown)
+        assertEquals(listOf(MIC_OPENING), shown)
         assertEquals(0, asr.warmUps.get())
         controller.onPttPressed()
         awaitTrue { !controller.listening.value }
     }
 }
+
+private const val MIC_OPENING = "Включаю микрофон…"
+private const val MIC_SILENT = "Микрофон молчит"

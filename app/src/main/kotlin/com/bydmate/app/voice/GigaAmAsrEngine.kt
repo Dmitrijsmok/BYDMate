@@ -232,7 +232,10 @@ internal class GigaAmAsrEngine @Suppress("LongParameterList") constructor(
             if (warmVad) prewarmNextVad()
             var speaking = false
             var silentMs = 0L
-            val preRoll = if (preRollMs > 0) SpeechPreRoll(preRollMs * SAMPLE_RATE / 1000) else null
+            val preRoll = if (preRollMs > 0) {
+                val prepend = preRollMs * SAMPLE_RATE / 1000
+                SpeechPreRoll(prepend + VAD_ONSET_LAG_SAMPLES, maxPrepend = prepend)
+            } else null
             pcm.collect { shorts ->
                 val frame = FloatArray(shorts.size) { i -> shorts[i] / 32768f }
                 vad.acceptWaveform(frame)
@@ -277,5 +280,9 @@ internal class GigaAmAsrEngine @Suppress("LongParameterList") constructor(
         internal const val VAD_MIN_SILENCE_SEC = 0.8f
         internal const val VAD_MIN_SPEECH_SEC = 0.25f
         internal const val VAD_MAX_SPEECH_SEC = 15.0f
+        // How far the frame Silero reports speech in can lie after its native segment start:
+        // the minimum speech duration, two 512-sample windows of onset padding, one 100 ms
+        // capture frame. The pre-roll history covers it so the full pre-roll lands before the start.
+        internal const val VAD_ONSET_LAG_SAMPLES = (VAD_MIN_SPEECH_SEC * SAMPLE_RATE).toInt() + 2 * 512 + 1600
     }
 }

@@ -1233,6 +1233,8 @@
     <string name="settings_voice_model_unpacking">Unpacking… %1$d%%</string>
     <string name="voice_listening">Listening</string>
     <string name="voice_thinking">Thinking</string>
+    <string name="voice_mic_opening">Opening the microphone…</string>
+    <string name="voice_mic_silent">The microphone is silent: another app may be using it</string>
     <string name="voice_error_model_missing">Voice model is not downloaded. Get it in Settings, Voice agent section.</string>
     <string name="voice_block_park_required">Park required</string>
 

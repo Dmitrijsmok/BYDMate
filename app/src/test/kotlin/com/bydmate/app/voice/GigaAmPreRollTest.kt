@@ -61,7 +61,9 @@ class GigaAmPreRollTest {
         val recognizer = Recognizer()
         val engine = GigaAmAsrEngine(manager(), { recognizer }, { vad }, preRollMs = 400)
         val events = engine.transcribe(pcm(6)).toList()
-        assertArrayEquals(FloatArray(8000) { (1600 + it) / 32768f }, recognizer.decoded.single(), 0f)
+        // The full 400 ms (6400 samples) lands before the native start 7200, not just what is
+        // left of 400 ms counted back from the detection frame.
+        assertArrayEquals(FloatArray(8800) { (800 + it) / 32768f }, recognizer.decoded.single(), 0f)
         assertEquals(1, events.filterIsInstance<ContinuousAsrEvent.SpeechStart>().size)
         assertEquals(listOf(100L, 200L, 300L, 400L, 100L),
             events.filterIsInstance<ContinuousAsrEvent.SilenceTick>().map { it.silentMs })
@@ -89,8 +91,8 @@ class GigaAmPreRollTest {
         val engine = GigaAmAsrEngine(manager(), { recognizer }, { Vad() }, preRollMs = 400)
         engine.transcribe(pcm(12)).toList()
         assertEquals(2, recognizer.decoded.size)
-        assertArrayEquals(FloatArray(8000) { (1600 + it) / 32768f }, recognizer.decoded[0], 0f)
-        assertArrayEquals(FloatArray(8000) { (11200 + it) / 32768f }, recognizer.decoded[1], 0f)
+        assertArrayEquals(FloatArray(8800) { (800 + it) / 32768f }, recognizer.decoded[0], 0f)
+        assertArrayEquals(FloatArray(8800) { (10400 + it) / 32768f }, recognizer.decoded[1], 0f)
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
