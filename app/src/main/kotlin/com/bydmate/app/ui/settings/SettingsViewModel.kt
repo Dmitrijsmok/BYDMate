@@ -2652,6 +2652,11 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 }
             } catch (e: Exception) { appendLine("(failed to gather assistant package state: ${e.message})") }
 
+            appendLine("--- contacts ---")
+            try {
+                com.bydmate.app.agent.ContactsDiagnostics.lines(appContext).forEach { appendLine(it) }
+            } catch (e: Exception) { appendLine("(failed to gather contacts state: ${e.message})") }
+
             // Both daemon sections come from one detached probe (see gatherHelperDiagnostics).
             val helperDiag = gatherHelperDiagnostics()
 
