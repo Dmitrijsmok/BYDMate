@@ -146,6 +146,21 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         Log.i(TAG, "ALICE_EXTERNAL_FOCUS end reason=${reason} released=${held}")
     }
 
+    /** The pill follows the real microphone: "Слушаю" on its first signal, a warning when Android
+     *  hands the session nothing but silence (the mic is held by another app). */
+    private fun onMicLiveness(event: MicLiveness.Event, traceId: Long) {
+        val (text, trace) = when (event) {
+            MicLiveness.Event.LIVE -> R.string.voice_listening to "mic-live"
+            MicLiveness.Event.SILENT -> R.string.voice_mic_silent to "mic-silent"
+        }
+        Log.i(TAG, "microphone: $trace")
+        Trace.event(TraceArea.VOICE, trace, by = traceId)
+        scope.launch {
+            if (event == MicLiveness.Event.LIVE && _state.value != VoiceUiState.Listening) return@launch
+            runCatching { updateListeningOverlay(appStrings.get(text)) }
+        }
+    }
+
     /**
      * Provider hand-off: never let Yandex Alice start while Local BYDMate still owns
      * AudioRecord or TTS.
@@ -382,7 +397,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             Trace.event(TraceArea.VOICE, "warm-wait", "ms" to waitedMs, "warm" to warm, by = cause)
             // Cancelled meanwhile (stopForExternalAssistant: the Alice hand-off) = no local session.
             if (gate.isEnabled() && currentCoroutineContext().isActive) {
-                runCatching { updateListeningOverlay(appStrings.get(R.string.voice_listening)) }
+                runCatching { updateListeningOverlay(appStrings.get(R.string.voice_mic_opening)) }
                 startContinuousSession(cause)
             } else {
                 runCatching { hideListeningOverlay() }
@@ -429,7 +444,10 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             val duckLease = if (askFirmwareDuck) {
                 runCatching { autoVoiceDuck.activate(audioCapture::duckMusic, audioCapture::restoreMusic) }.getOrNull()
             } else null
-            runCatching { showListeningOverlay(appStrings.get(R.string.voice_listening)) }
+            // "Слушаю" only once the capture delivers a real signal (MicLiveness below): until
+            // then the pill says the mic is opening, so the driver does not talk into nothing.
+            runCatching { showListeningOverlay(appStrings.get(R.string.voice_mic_opening)) }
+            val micLiveness = MicLiveness() // capture thread only
             var lastEventMs = System.currentTimeMillis()
             var wasAudible = false   // capture thread only
             var replyPathWarmupStarted = false
@@ -474,6 +492,8 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                         Log.i(TAG, it)
                         Trace.event(TraceArea.VOICE, "echo-tail", "result" to it.removePrefix("echo tail: "))
                     }
+                    micLiveness.onFrame(samples, samples.size * MS_PER_SECOND / MIC_SAMPLE_RATE)
+                        ?.let { onMicLiveness(it, traceId) }
                     gated
                 }
                     .filter { frame ->
@@ -1314,6 +1334,8 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
 
     companion object {
         private const val TAG = "VoiceController"
+        private const val MS_PER_SECOND = 1000L
+        private const val MIC_SAMPLE_RATE = 16000L
 
         // Longest value one logcat summary field may carry (an automation name, an utterance).
         private const val LOG_FIELD_CHARS = 200

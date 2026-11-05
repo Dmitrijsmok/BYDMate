@@ -87,4 +87,22 @@ class SpeechPreRollTest {
         fresh.speechStart()
         assertArrayEquals(pcm(0, 200), fresh.finish(100, pcm(100, 100)), 0f)
     }
+
+    @Test fun `a longer history prepends at most maxPrepend samples right before the native start`() {
+        val roll = SpeechPreRoll(13024, maxPrepend = 6400)
+        roll.append(pcm(0, 16000))
+        roll.speechStart()
+        // Native start 5000 samples before the detection frame end, as Silero reports it.
+        assertArrayEquals(pcm(4600, 8400), roll.finish(11000, pcm(11000, 2000)), 0f)
+    }
+
+    @Test fun `maxPrepend never reaches past the previous utterance`() {
+        val roll = SpeechPreRoll(13024, maxPrepend = 6400)
+        roll.append(pcm(0, 6000))
+        roll.speechStart()
+        roll.finish(4000, pcm(4000, 2000))
+        roll.append(pcm(6000, 4000))
+        roll.speechStart()
+        assertArrayEquals(pcm(6000, 4000), roll.finish(9000, pcm(9000, 1000)), 0f)
+    }
 }

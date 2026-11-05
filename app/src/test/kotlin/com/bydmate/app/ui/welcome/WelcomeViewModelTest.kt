@@ -23,6 +23,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -197,5 +198,17 @@ class WelcomeViewModelTest {
         coVerify { settingsRepository.setString(SettingsRepository.KEY_DC_TARIFF, "20") }
         coVerify(exactly = 0) { settingsRepository.setString(SettingsRepository.KEY_TRIP_COST_TARIFF, any()) }
         assertTrue(vm.uiState.value.isComplete)
+    }
+
+    @Test
+    fun `battery capacity has no preset and blocks the tariff step until a positive value is entered`() {
+        val vm = viewModel()
+        assertEquals("", vm.uiState.value.batteryCapacity)
+        assertFalse(vm.uiState.value.batteryCapacityValid)
+
+        vm.setBatteryCapacity("0")
+        assertFalse(vm.uiState.value.batteryCapacityValid)
+        vm.setBatteryCapacity("60,48")
+        assertTrue(vm.uiState.value.batteryCapacityValid)
     }
 }

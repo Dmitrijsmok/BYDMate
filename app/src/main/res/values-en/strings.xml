@@ -576,7 +576,7 @@
     <string name="welcome_language_title">App language</string>
     <string name="welcome_next_button">Next</string>
     <string name="welcome_battery_section_title">Battery</string>
-    <string name="welcome_battery_capacity_hint">Check your car\'s specifications. Leopard 3: 72.9 kWh (BEV) or 31.8 kWh (PHEV)</string>
+    <string name="welcome_battery_capacity_hint">Enter your car\'s usable battery capacity from its specifications, in kWh. Required to continue</string>
     <string name="welcome_tariff_section_title">Tariffs</string>
     <string name="welcome_tariff_home_label">Home AC charge (%1$s/kWh)</string>
     <string name="welcome_tariff_dc_label">Fast DC charge (%1$s/kWh)</string>
@@ -1233,6 +1233,8 @@
     <string name="settings_voice_model_unpacking">Unpacking… %1$d%%</string>
     <string name="voice_listening">Listening</string>
     <string name="voice_thinking">Thinking</string>
+    <string name="voice_mic_opening">Opening the microphone…</string>
+    <string name="voice_mic_silent">The microphone is silent: another app may be using it</string>
     <string name="voice_error_model_missing">Voice model is not downloaded. Get it in Settings, Voice agent section.</string>
     <string name="voice_block_park_required">Park required</string>
 

@@ -10,6 +10,7 @@ import com.bydmate.app.data.local.HistoryImporter
 import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.data.repository.TripRepository
+import com.bydmate.app.data.repository.parseNumericSetting
 import com.bydmate.app.service.TrackingService
 import com.bydmate.app.util.appLocalizedContext
 import com.bydmate.app.util.applyAppLanguage
@@ -36,7 +37,11 @@ data class WelcomeUiState(
     val importStatus: String? = null,
     val isComplete: Boolean = false,
     val adbCheck: AdbCheck = AdbCheck.NotChecked,
-)
+) {
+    /** The tariff step goes on only with the owner's own battery capacity (no preset). */
+    val batteryCapacityValid: Boolean
+        get() = batteryCapacity.parseNumericSetting()?.let { it > 0.0 } == true
+}
 
 /** State of the wizard's advisory ADB check. */
 enum class AdbCheck { NotChecked, Checking, Failed, Ok }

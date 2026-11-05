@@ -49,10 +49,11 @@ class HistoryImporterFutureRowRereadTest {
     @Test
     fun `a row skipped as future is imported once after the clock catches up`() = runTest {
         val nowSec = System.currentTimeMillis() / 1000L
-        // Just beyond the skew now; the real clock passes it during the sleep below.
+        // Just beyond the skew now; the real clock passes it during the sleep below. The margin
+        // must outlast the first sync on a cold, loaded CI JVM (2 s did not, at whole seconds).
         val row = BydTripRecord(
-            id = 601L, startTimestamp = nowSec + HistoryImporter.FUTURE_SKEW_SEC + 2,
-            endTimestamp = nowSec + HistoryImporter.FUTURE_SKEW_SEC + 2 + 1800L,
+            id = 601L, startTimestamp = nowSec + HistoryImporter.FUTURE_SKEW_SEC + CLOCK_MARGIN_SEC,
+            endTimestamp = nowSec + HistoryImporter.FUTURE_SKEW_SEC + CLOCK_MARGIN_SEC + 1800L,
             duration = 1800L, tripKm = 12.0, electricityKwh = 2.0,
         )
         var watermark = nowSec - 3600L
@@ -72,7 +73,7 @@ class HistoryImporterFutureRowRereadTest {
         importer().syncFromEnergyData()
         coVerify(exactly = 0) { tripRepository.insertTrip(any()) }
 
-        Thread.sleep(3_000) // the head unit clock is corrected: the row is no longer in the future
+        Thread.sleep((CLOCK_MARGIN_SEC + 1) * 1000) // the clock is corrected: the row is no longer in the future
 
         importer().syncFromEnergyData()
         coVerify(exactly = 1) { tripRepository.insertTrip(any()) }
@@ -82,3 +83,5 @@ class HistoryImporterFutureRowRereadTest {
         assertEquals(0, third.trips)
     }
 }
+
+private const val CLOCK_MARGIN_SEC = 5L

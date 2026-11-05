@@ -517,7 +517,7 @@
     <string name="welcome_language_title">应用语言</string>
     <string name="welcome_next_button">下一步</string>
     <string name="welcome_battery_section_title">电池</string>
-    <string name="welcome_battery_capacity_hint">请以车辆参数为准。钛3：72.9 kWh（纯电）或 31.8 kWh（插混）</string>
+    <string name="welcome_battery_capacity_hint">请按车辆参数填写电池可用容量（kWh），填写后才能继续</string>
     <string name="welcome_tariff_section_title">电价</string>
     <string name="welcome_tariff_home_label">家充电价（%1$s/kWh）</string>
     <string name="welcome_tariff_dc_label">快充电价（%1$s/kWh）</string>
@@ -1348,6 +1348,8 @@
     <string name="settings_voice_model_unpacking">解压中… %1$d%%</string>
     <string name="voice_listening">聆听中</string>
     <string name="voice_thinking">思考中</string>
+    <string name="voice_mic_opening">正在打开麦克风…</string>
+    <string name="voice_mic_silent">麦克风无声：可能被其他应用占用</string>
     <string name="voice_error_model_missing">语音模型尚未下载。请在设置的语音助手部分下载。</string>
     <string name="voice_block_park_required">需要挂入 P 挡</string>
 

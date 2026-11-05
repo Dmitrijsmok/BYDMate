@@ -569,7 +569,7 @@
     <string name="welcome_language_title">Idioma do aplicativo</string>
     <string name="welcome_next_button">Próximo</string>
     <string name="welcome_battery_section_title">Bateria</string>
-    <string name="welcome_battery_capacity_hint">Confira nas especificações do carro. Leopard 3: 72,9 kWh (BEV) ou 31,8 kWh (PHEV)</string>
+    <string name="welcome_battery_capacity_hint">Informe a capacidade útil da bateria do seu carro, conforme as especificações, em kWh. Obrigatório para continuar</string>
     <string name="welcome_tariff_section_title">Tarifas</string>
     <string name="welcome_tariff_home_label">Carregamento residencial AC (%1$s/kWh)</string>
     <string name="welcome_tariff_dc_label">Carregamento rápido DC (%1$s/kWh)</string>
@@ -1388,6 +1388,8 @@
     <string name="settings_voice_model_unpacking">Descompactando… %1$d%%</string>
     <string name="voice_listening">Ouvindo</string>
     <string name="voice_thinking">Pensando</string>
+    <string name="voice_mic_opening">Ligando o microfone…</string>
+    <string name="voice_mic_silent">O microfone está mudo: outro app pode estar usando</string>
     <string name="voice_error_model_missing">O modelo de voz não está baixado. Baixe-o em Configurações, seção Agente de voz.</string>
     <string name="voice_block_park_required">É necessário estar em P</string>
     <string name="settings_asr_gigaam_title">Reconhecimento de fala</string>
