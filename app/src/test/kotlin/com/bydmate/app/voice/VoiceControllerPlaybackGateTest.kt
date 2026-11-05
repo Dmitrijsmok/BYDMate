@@ -390,12 +390,14 @@ class VoiceControllerPlaybackGateTest {
                 "voice  mic-gated #5",
                 "voice  tts-end #6",
                 "voice  mic-open after_ms=200 #7",
-                "voice  heard route=nlu #8 by=#2",
+                // The first frame with a signal (silence frames here are digital zeros).
+                "voice  mic-live #8 by=#2",
+                "voice  heard route=nlu #9 by=#2",
             ),
-            events.take(8),
+            events.take(9),
         )
-        assertTrue(events[8], events[8].startsWith("voice  result route=nlu outcome="))
-        assertTrue(events[8], events[8].endsWith(" #9 by=#8"))
+        assertTrue(events[9], events[9].startsWith("voice  result route=nlu outcome="))
+        assertTrue(events[9], events[9].endsWith(" #10 by=#9"))
         assertTrue(events.none { it.contains("закрой") })
     }
 
