@@ -23,6 +23,15 @@ object A11yRecoveryGate {
     const val MIN_INTERVAL_MS = 10 * 60 * 1000L
     const val MAX_QUICK_ATTEMPTS = 2
 
+    /**
+     * The grant run that calls for the force-stop recovery: still not granted although the daemon
+     * answered at least one re-assert. Only all-false answers mean a broken daemon path. Requiring
+     * every answer OK left the key dead after a restart where one of two re-asserts hit the
+     * reconnecting daemon (field 1.1.5: reasserts=[true,false], no recovery until a hard reboot).
+     */
+    fun daemonReachedButUnbound(granted: Boolean, reasserts: List<Boolean>): Boolean =
+        !granted && reasserts.any { it }
+
     fun shouldAttempt(lastAttemptElapsedMs: Long, nowElapsedMs: Long, failStreak: Int): Boolean =
         failStreak < MAX_QUICK_ATTEMPTS ||
             lastAttemptElapsedMs == 0L ||
