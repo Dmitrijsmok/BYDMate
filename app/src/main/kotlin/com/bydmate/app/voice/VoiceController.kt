@@ -84,7 +84,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
     // Android 10 head units: the press is waiting for the ASR warm-up (startContinuousSessionWhenWarm).
     @Volatile private var warmupJob: Job? = null
     private val externalAliceDuckLock = Any()
-    @Volatile private var externalAliceDuckSaved: Int? = null
+    @Volatile private var externalAliceFocusHeld = false
     private val externalAliceDuckGeneration = AtomicInteger(0)
     @Volatile private var routingJob: Job? = null
     @Volatile private var cancellableAskJob: Job? = null
@@ -112,15 +112,19 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
      */
     fun sessionActive(): Boolean = listening.value || busy.get()
 
-    /** Preserve the field-proven hand-off used by the physical mic-button Alice route. */
+    /**
+     * Music hand-off for the physical mic-button Alice route: audio focus for the whole external
+     * assistant lifecycle (see [AudioCapture.holdFocusForExternalAssistant]), never a volume duck,
+     * which silenced Alice herself. Repeated triggers keep the one focus and only refresh the
+     * safety timeout.
+     */
     fun beginExternalAssistantAudio() {
-        val saved = synchronized(externalAliceDuckLock) {
-            externalAliceDuckSaved ?: runCatching {
-                audioCapture.duckMusicForExternalAssistant()
-            }.getOrNull()?.also { externalAliceDuckSaved = it }
+        val held = synchronized(externalAliceDuckLock) {
+            externalAliceFocusHeld || runCatching { audioCapture.holdFocusForExternalAssistant() }
+                .getOrDefault(false).also { externalAliceFocusHeld = it }
         }
         val generation = externalAliceDuckGeneration.incrementAndGet()
-        Log.i(TAG, "ALICE_EXTERNAL_DUCK begin saved=${saved} generation=${generation}")
+        Log.i(TAG, "ALICE_EXTERNAL_FOCUS begin held=${held} generation=${generation}")
         scope.launch {
             delay(EXTERNAL_ALICE_DUCK_TIMEOUT_MS)
             if (externalAliceDuckGeneration.get() == generation) {
@@ -132,14 +136,14 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
     fun endExternalAssistantAudio() = endExternalAliceDuck("launcher_finish")
 
     private fun endExternalAliceDuck(reason: String) {
-        val saved = synchronized(externalAliceDuckLock) {
-            val value = externalAliceDuckSaved
-            externalAliceDuckSaved = null
+        val held = synchronized(externalAliceDuckLock) {
+            val value = externalAliceFocusHeld
+            externalAliceFocusHeld = false
             value
         }
         externalAliceDuckGeneration.incrementAndGet()
-        if (saved != null) runCatching { audioCapture.restoreMusic(saved) }
-        Log.i(TAG, "ALICE_EXTERNAL_DUCK end reason=${reason} restored=${saved != null}")
+        if (held) runCatching { audioCapture.releaseExternalAssistantFocus() }
+        Log.i(TAG, "ALICE_EXTERNAL_FOCUS end reason=${reason} released=${held}")
     }
 
     /**
