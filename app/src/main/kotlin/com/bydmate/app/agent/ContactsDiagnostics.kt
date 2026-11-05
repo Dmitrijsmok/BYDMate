@@ -26,7 +26,31 @@ object ContactsDiagnostics {
         }
         add("$BT_CALL_PACKAGE providers: ${btCallProviders(context)}")
         add("phonebook-like providers: ${phonebookProviders(context)}")
+        BT_PHONEBOOK_PROBES.forEach { add("probe $it: ${probe(context, Uri.parse(it))}") }
     }
+
+    /**
+     * The Bluetooth app's exported phonebook-like provider (seen on DiLink 3) and a few likely
+     * paths under it: whether a query is answered, its column names and row count. No row is read.
+     */
+    private val BT_PHONEBOOK_PROBES = listOf(
+        "content://com.android.bluetooth.contactprovider",
+        "content://com.android.bluetooth.contactprovider/contacts",
+        "content://com.android.bluetooth.contactprovider/phonebook",
+        "content://com.android.bluetooth.contactprovider/pb",
+        "content://com.android.bluetooth.contactprovider/calllog",
+    )
+
+    private fun probe(context: Context, uri: Uri): String = runCatching {
+        val perm = context.packageManager.resolveContentProvider(uri.authority.orEmpty(), 0)
+            ?.let { "read=${it.readPermission ?: "-"}" } ?: "unresolved"
+        val result = context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+            "rows=${c.count} columns=${c.columnNames.joinToString(",")}"
+        } ?: "null cursor"
+        "$perm $result"
+    }.getOrElse { "error ${it.javaClass.simpleName}: ${it.message?.take(MAX_ERROR_CHARS)}" }
+
+    private const val MAX_ERROR_CHARS = 160
 
     private fun count(context: Context, uri: Uri): String = runCatching {
         context.contentResolver.query(uri, arrayOf("_id"), null, null, null)?.use { it.count.toString() }
