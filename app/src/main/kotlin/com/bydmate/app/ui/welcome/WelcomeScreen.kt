@@ -213,6 +213,7 @@ private fun TariffStep(state: WelcomeUiState, viewModel: WelcomeViewModel) {
                 }
                 Button(
                     onClick = { viewModel.nextStep() },
+                    enabled = state.batteryCapacityValid,
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = AccentGreen)

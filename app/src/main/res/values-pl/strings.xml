@@ -657,7 +657,7 @@
     <string name="welcome_language_title">Język aplikacji</string>
     <string name="welcome_next_button">Dalej</string>
     <string name="welcome_battery_section_title">Akumulator</string>
-    <string name="welcome_battery_capacity_hint">Sprawdź w danych technicznych auta. Leopard 3: 72,9 kWh (BEV) lub 31,8 kWh (PHEV)</string>
+    <string name="welcome_battery_capacity_hint">Podaj użyteczną pojemność baterii swojego auta z danych technicznych, w kWh. Wymagane, aby przejść dalej</string>
     <string name="welcome_tariff_section_title">Taryfy</string>
     <string name="welcome_tariff_home_label">Ładowanie w domu (%1$s/kWh)</string>
     <string name="welcome_tariff_dc_label">Szybkie ładowanie DC (%1$s/kWh)</string>

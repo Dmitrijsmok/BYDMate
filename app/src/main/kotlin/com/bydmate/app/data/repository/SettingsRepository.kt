@@ -194,7 +194,12 @@ open class SettingsRepository @Inject constructor(
         // legacy, unused since field-fix wave (agent uses KEY_OPENROUTER_MODEL)
         const val KEY_AGENT_MODEL = "agent_model"
 
-        const val DEFAULT_BATTERY_CAPACITY = "72.9"
+        // No preset capacity: every owner enters their own car's (the first-run wizard requires
+        // it). The fork used to ship the author's Leopard 3 value, wrong for an ATTO 3.
+        const val DEFAULT_BATTERY_CAPACITY = ""
+        // Only for callers that need a number before anything was entered (an upgrade with the
+        // setting cleared by hand); never shown as a default.
+        internal const val FALLBACK_BATTERY_CAPACITY_KWH = 72.9
         const val DEFAULT_HOME_TARIFF = "0.20"
         const val DEFAULT_DC_TARIFF = "0.73"
         const val DEFAULT_UNITS = "km"
@@ -264,7 +269,8 @@ open class SettingsRepository @Inject constructor(
         settingsDao.setAll(values.map { (k, v) -> SettingEntity(k, v) })
 
     suspend fun getBatteryCapacity(): Double =
-        getString(KEY_BATTERY_CAPACITY, DEFAULT_BATTERY_CAPACITY).parseNumericSetting() ?: 72.9
+        getString(KEY_BATTERY_CAPACITY, DEFAULT_BATTERY_CAPACITY).parseNumericSetting()
+            ?.takeIf { it > 0.0 } ?: FALLBACK_BATTERY_CAPACITY_KWH
 
     suspend fun getHomeTariff(): Double =
         getString(KEY_HOME_TARIFF, DEFAULT_HOME_TARIFF).parseNumericSetting() ?: 0.20

@@ -657,7 +657,7 @@
     <string name="welcome_language_title">Язык приложения</string>
     <string name="welcome_next_button">Далее</string>
     <string name="welcome_battery_section_title">Батарея</string>
-    <string name="welcome_battery_capacity_hint">Сверьте с паспортом машины. Leopard 3: 72,9 кВт·ч (BEV) или 31,8 кВт·ч (PHEV)</string>
+    <string name="welcome_battery_capacity_hint">Укажите полезную ёмкость батареи вашей машины из её паспорта, в кВт·ч. Без неё дальше не пройти</string>
     <string name="welcome_tariff_section_title">Тарифы</string>
     <string name="welcome_tariff_home_label">Домашняя зарядка (%1$s/кВт·ч)</string>
     <string name="welcome_tariff_dc_label">Быстрая зарядка DC (%1$s/кВт·ч)</string>

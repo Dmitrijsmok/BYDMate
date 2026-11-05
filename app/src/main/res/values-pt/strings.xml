@@ -569,7 +569,7 @@
     <string name="welcome_language_title">Idioma do aplicativo</string>
     <string name="welcome_next_button">Próximo</string>
     <string name="welcome_battery_section_title">Bateria</string>
-    <string name="welcome_battery_capacity_hint">Confira nas especificações do carro. Leopard 3: 72,9 kWh (BEV) ou 31,8 kWh (PHEV)</string>
+    <string name="welcome_battery_capacity_hint">Informe a capacidade útil da bateria do seu carro, conforme as especificações, em kWh. Obrigatório para continuar</string>
     <string name="welcome_tariff_section_title">Tarifas</string>
     <string name="welcome_tariff_home_label">Carregamento residencial AC (%1$s/kWh)</string>
     <string name="welcome_tariff_dc_label">Carregamento rápido DC (%1$s/kWh)</string>

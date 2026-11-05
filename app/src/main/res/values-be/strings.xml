@@ -657,7 +657,7 @@
     <string name="welcome_language_title">Мова праграмы</string>
     <string name="welcome_next_button">Далей</string>
     <string name="welcome_battery_section_title">Батарэя</string>
-    <string name="welcome_battery_capacity_hint">Звярыце з пашпартам машыны. Leopard 3: 72,9 кВт·гадз (BEV) або 31,8 кВт·гадз (PHEV)</string>
+    <string name="welcome_battery_capacity_hint">Укажыце карысную ёмістасць батарэі вашай машыны з яе пашпарта, у кВт·гадз. Без яе далей не прайсці</string>
     <string name="welcome_tariff_section_title">Тарыфы</string>
     <string name="welcome_tariff_home_label">Хатняя зарадка (%1$s/кВт·гадз)</string>
     <string name="welcome_tariff_dc_label">Хуткая зарадка DC (%1$s/кВт·гадз)</string>
