@@ -2199,18 +2199,19 @@ class TrackingService : Service(), LocationListener {
         // parks the component in mBindingServices and skips it on every settings rewrite until a
         // package update, force-stop or reboot (AOSP Q updateServicesLocked, "wait for the binding").
         // The daemon's remove+re-add then reports success while the framework never binds. Name the
-        // state only when every re-assert succeeded (daemon path healthy) and the service still is
-        // not running - all-false re-asserts mean a broken daemon, not a stuck framework.
+        // state when the daemon answered at least one re-assert (daemon path reachable) and the
+        // service still is not running - all-false re-asserts mean a broken daemon, not a stuck framework.
         val last = GrantSelfHeal.history().lastOrNull { it.name == "star a11y" }
         last?.let {
             Trace.event(TraceArea.APP, "a11y-grant", "reason" to it.reason, "granted" to it.granted,
                 "tries" to it.tries, "reasserts" to AutostartTrace.reasserts(it.reasserts))
         }
-        val daemonOkButUnbound = last != null && !last.granted &&
-            last.reasserts.isNotEmpty() && last.reasserts.all { it }
+        val daemonOkButUnbound = last != null &&
+            A11yRecoveryGate.daemonReachedButUnbound(last.granted, last.reasserts)
         if (android.os.Build.VERSION.SDK_INT <= 29 && daemonOkButUnbound && !starServiceRunning()) {
             Log.w(TAG, "star a11y stuck in binding state ($reason): daemon re-asserted the setting " +
-                "${last.reasserts.size}x OK but the framework did not bind (AOSP Q mBindingServices)")
+                "(${last.reasserts.count { it }}/${last.reasserts.size} OK) but the framework did not bind " +
+                "(AOSP Q mBindingServices)")
             startA11yStuckWatch()
             // Only in-framework way out: IActivityManager.forceStopPackage on ourselves, which runs
             // PackageMonitor.onHandleForceStop and clears mBindingServices. The daemon does it and

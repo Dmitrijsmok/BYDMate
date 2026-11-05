@@ -103,4 +103,13 @@ class A11yRecoveryGateTest {
         A11yRecoveryGate.markBound(prefs)
         io.mockk.verify { editor.putInt(A11yRecoveryGate.KEY_FAIL_STREAK, 0); editor.apply() }
     }
+
+    @Test
+    fun `recovery is due when the daemon answered at least one re-assert and the grant is missing`() {
+        assertTrue(A11yRecoveryGate.daemonReachedButUnbound(false, listOf(true, false)))
+        assertTrue(A11yRecoveryGate.daemonReachedButUnbound(false, listOf(true, true)))
+        assertFalse(A11yRecoveryGate.daemonReachedButUnbound(false, listOf(false, false)))
+        assertFalse(A11yRecoveryGate.daemonReachedButUnbound(false, emptyList()))
+        assertFalse(A11yRecoveryGate.daemonReachedButUnbound(true, listOf(true, false)))
+    }
 }
