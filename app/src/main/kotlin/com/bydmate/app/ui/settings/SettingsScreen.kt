@@ -4110,6 +4110,9 @@ private fun VoiceSettingsContent(
         )
     }
 
+    // «Мои контакты»: the name → number list voice calls use (the car's phonebook is not readable).
+    MyContactsCard()
+
     // Contacts permission (call_contact tool)
     if (SHOW_CONTACTS_PERMISSION_REQUEST) {
         Card(

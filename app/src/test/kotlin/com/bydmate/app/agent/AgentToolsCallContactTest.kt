@@ -70,7 +70,7 @@ class AgentToolsCallContactTest {
     @Test fun permission_denied_reports_error() = runTest {
         every { contactLookup.hasPermission() } returns false
         val out = JSONObject(tools().execute(call("call_contact", """{"name":"Мама"}""")))
-        assertEquals("звонок по имени пока недоступен: нет доступа к контактам", out.getString("error"))
+        assertEquals(JSONObject(AgentTools.NOT_IN_MY_CONTACTS).getString("error"), out.getString("error"))
         coVerify(exactly = 0) { contactLookup.findByName(any()) }
     }
 
@@ -78,7 +78,7 @@ class AgentToolsCallContactTest {
         every { contactLookup.hasPermission() } returns true
         coEvery { contactLookup.findByName("Никто") } returns emptyList()
         val out = JSONObject(tools().execute(call("call_contact", """{"name":"Никто"}""")))
-        assertEquals("контакт не найден", out.getString("error"))
+        assertEquals(JSONObject(AgentTools.NOT_IN_MY_CONTACTS).getString("error"), out.getString("error"))
     }
 
     // П7 origin-based defense: kind="call" is always dangerous, so the single match now
@@ -158,5 +158,42 @@ class AgentToolsCallContactTest {
             }
         }
         assertTrue(found)
+    }
+
+    // --- «Мои контакты» (the car's phonebook is not readable, field 1.1.6) ---
+
+    private fun ownContacts(vararg contacts: MyContact) {
+        coEvery { settingsRepository.getString(SettingsRepository.KEY_MY_CONTACTS, "") } returns
+            MyContactsCodec.encode(contacts.toList())
+    }
+
+    @Test fun own_contact_in_another_case_form_is_called_after_confirm_without_the_phonebook() = runTest {
+        ownContacts(MyContact("Жена", phone, listOf("ивета")))
+        every { gate.vehicleSnapshot() } returns null
+        coEvery { dispatcher.dispatch(any(), any()) } returns DispatchResult(true)
+        val t = tools()
+        t.confirmScope = CoroutineScope(Dispatchers.Unconfined)
+        t.confirmGate = { _, _, _, onConfirm, _ -> onConfirm(); true }
+        val raw = t.execute(call("call_contact", """{"name":"жене"}"""))
+        assertFalse(raw.contains(phone))
+        coVerify { dispatcher.dispatch(match { JSONObject(it.payload!!).getString("phone") == phone }, null) }
+        coVerify(exactly = 0) { contactLookup.hasPermission() }
+    }
+
+    @Test fun two_own_contacts_with_the_same_name_return_names_only() = runTest {
+        ownContacts(MyContact("Андрей Иванов", "+70001112233"), MyContact("Андрей Петров", "+70004445566"))
+        val raw = tools().execute(call("call_contact", """{"name":"Андрей"}"""))
+        assertEquals(2, JSONObject(raw).getJSONArray("matches").length())
+        assertFalse(raw.contains("+7000"))
+    }
+
+    @Test fun a_dictated_number_is_dialed_after_confirm() = runTest {
+        every { gate.vehicleSnapshot() } returns null
+        coEvery { dispatcher.dispatch(any(), any()) } returns DispatchResult(true)
+        val t = tools()
+        t.confirmScope = CoroutineScope(Dispatchers.Unconfined)
+        t.confirmGate = { _, _, _, onConfirm, _ -> onConfirm(); true }
+        t.execute(call("call_contact", """{"name":"+371 2839 7625"}"""))
+        coVerify { dispatcher.dispatch(match { JSONObject(it.payload!!).getString("phone") == "+37128397625" }, null) }
     }
 }

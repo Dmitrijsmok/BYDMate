@@ -1408,6 +1408,17 @@
 
     <!-- call_contact tool: contacts permission row -->
     <string name="settings_voice_contacts_label">Доступ к контактам</string>
+    <string name="settings_my_contacts_title">Мои контакты</string>
+    <string name="settings_my_contacts_desc">Кому звонить голосом: «позвони жене»</string>
+    <string name="settings_my_contacts_add">Добавить</string>
+    <string name="settings_my_contacts_hint">Телефонная книга машины недоступна приложениям, поэтому для звонка по имени добавьте контакт сюда. В «Как ещё называю» перечислите через запятую другие имена и как их слышит распознавание. Номер набирается только после подтверждения на экране. Можно и продиктовать номер: «позвони 2 8 3 9…».</string>
+    <string name="settings_my_contacts_dialog_title">Контакт</string>
+    <string name="settings_my_contacts_name">Имя</string>
+    <string name="settings_my_contacts_phone">Номер</string>
+    <string name="settings_my_contacts_aliases">Как ещё называю (через запятую)</string>
+    <string name="settings_my_contacts_save">Сохранить</string>
+    <string name="settings_my_contacts_delete">Удалить</string>
+    <string name="settings_my_contacts_cancel">Отмена</string>
     <string name="settings_voice_contacts_description">Нужен для звонка контакту по имени голосом</string>
     <string name="settings_voice_contacts_granted">Разрешено</string>
     <string name="settings_voice_contacts_grant">Разрешить</string>

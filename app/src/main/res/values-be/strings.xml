@@ -1404,6 +1404,17 @@
 
     <!-- call_contact tool: contacts permission row -->
     <string name="settings_voice_contacts_label">Доступ да кантактаў</string>
+    <string name="settings_my_contacts_title">Мае кантакты</string>
+    <string name="settings_my_contacts_desc">Каму званіць голасам: «патэлефануй жонцы»</string>
+    <string name="settings_my_contacts_add">Дадаць</string>
+    <string name="settings_my_contacts_hint">Тэлефонная кніга машыны недаступная праграмам, таму для званка па імені дадайце кантакт сюды. У «Як яшчэ называю» пералічыце праз коску іншыя імёны і як іх чуе распазнаванне. Нумар набіраецца толькі пасля пацверджання на экране. Можна і прадыктаваць нумар.</string>
+    <string name="settings_my_contacts_dialog_title">Кантакт</string>
+    <string name="settings_my_contacts_name">Імя</string>
+    <string name="settings_my_contacts_phone">Нумар</string>
+    <string name="settings_my_contacts_aliases">Як яшчэ называю (праз коску)</string>
+    <string name="settings_my_contacts_save">Захаваць</string>
+    <string name="settings_my_contacts_delete">Выдаліць</string>
+    <string name="settings_my_contacts_cancel">Скасаваць</string>
     <string name="settings_voice_contacts_description">Патрэбны для званка кантакту па імені голасам</string>
     <string name="settings_voice_contacts_granted">Дазволена</string>
     <string name="settings_voice_contacts_grant">Дазволіць</string>
