@@ -1252,6 +1252,17 @@
 
     <!-- call_contact tool: contacts permission row -->
     <string name="settings_voice_contacts_label">Contacts access</string>
+    <string name="settings_my_contacts_title">My contacts</string>
+    <string name="settings_my_contacts_desc">Who to call by voice: “call my wife”</string>
+    <string name="settings_my_contacts_add">Add</string>
+    <string name="settings_my_contacts_hint">The car\'s phonebook is not readable by apps, so add a contact here to call it by name. In “Other names” list, separated by commas, the other names you use and how recognition hears them. The number is dialed only after you confirm on screen. You can also dictate a number.</string>
+    <string name="settings_my_contacts_dialog_title">Contact</string>
+    <string name="settings_my_contacts_name">Name</string>
+    <string name="settings_my_contacts_phone">Number</string>
+    <string name="settings_my_contacts_aliases">Other names (comma separated)</string>
+    <string name="settings_my_contacts_save">Save</string>
+    <string name="settings_my_contacts_delete">Delete</string>
+    <string name="settings_my_contacts_cancel">Cancel</string>
     <string name="settings_voice_contacts_description">Needed to call a contact by name using voice</string>
     <string name="settings_voice_contacts_granted">Granted</string>
     <string name="settings_voice_contacts_grant">Grant</string>

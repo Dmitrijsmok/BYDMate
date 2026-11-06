@@ -1367,6 +1367,17 @@
 
     <!-- call_contact tool: contacts permission row -->
     <string name="settings_voice_contacts_label">通讯录访问权限</string>
+    <string name="settings_my_contacts_title">我的联系人</string>
+    <string name="settings_my_contacts_desc">语音呼叫的对象：“给妻子打电话”</string>
+    <string name="settings_my_contacts_add">添加</string>
+    <string name="settings_my_contacts_hint">车机电话簿无法被应用读取，如需按姓名拨号，请在此添加联系人。在“其他称呼”中用逗号分隔填写其他叫法以及识别可能听成的名字。号码仅在屏幕确认后拨出。也可以直接口述号码。</string>
+    <string name="settings_my_contacts_dialog_title">联系人</string>
+    <string name="settings_my_contacts_name">姓名</string>
+    <string name="settings_my_contacts_phone">号码</string>
+    <string name="settings_my_contacts_aliases">其他称呼（逗号分隔）</string>
+    <string name="settings_my_contacts_save">保存</string>
+    <string name="settings_my_contacts_delete">删除</string>
+    <string name="settings_my_contacts_cancel">取消</string>
     <string name="settings_voice_contacts_description">用于按姓名语音拨打联系人</string>
     <string name="settings_voice_contacts_granted">已授权</string>
     <string name="settings_voice_contacts_grant">授权</string>

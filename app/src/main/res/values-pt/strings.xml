@@ -1402,6 +1402,17 @@
     <string name="settings_voice_button_current">Atual: %1$s</string>
     <string name="settings_voice_a11y_hint">O acionamento pelo botão do volante requer o serviço de acessibilidade (ativado automaticamente na seção Tela).</string>
     <string name="settings_voice_contacts_label">Acesso aos contatos</string>
+    <string name="settings_my_contacts_title">Meus contatos</string>
+    <string name="settings_my_contacts_desc">Para quem ligar por voz: “ligue para minha esposa”</string>
+    <string name="settings_my_contacts_add">Adicionar</string>
+    <string name="settings_my_contacts_hint">A agenda do carro não pode ser lida por apps, então adicione aqui o contato para ligar pelo nome. Em “Outros nomes”, liste separados por vírgula outros nomes e como o reconhecimento os ouve. O número só é discado depois da confirmação na tela. Você também pode ditar um número.</string>
+    <string name="settings_my_contacts_dialog_title">Contato</string>
+    <string name="settings_my_contacts_name">Nome</string>
+    <string name="settings_my_contacts_phone">Número</string>
+    <string name="settings_my_contacts_aliases">Outros nomes (separados por vírgula)</string>
+    <string name="settings_my_contacts_save">Salvar</string>
+    <string name="settings_my_contacts_delete">Excluir</string>
+    <string name="settings_my_contacts_cancel">Cancelar</string>
     <string name="settings_voice_contacts_description">Necessário para ligar para um contato pelo nome por voz</string>
     <string name="settings_voice_contacts_granted">Concedido</string>
     <string name="settings_voice_contacts_grant">Conceder</string>

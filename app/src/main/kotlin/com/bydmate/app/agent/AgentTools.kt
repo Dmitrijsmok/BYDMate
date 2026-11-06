@@ -469,11 +469,12 @@ class AgentTools @Inject constructor(
         ))
         put(tool(
             "call_contact",
-            "Позвонить контакту из телефонной книги по имени. Если совпадений несколько, " +
-                "задай ровно один уточняющий вопрос, какой контакт нужен.",
+            "Позвонить контакту по имени (список «Мои контакты» в настройках) или по продиктованному " +
+                "номеру. Если совпадений несколько, задай ровно один уточняющий вопрос, какой контакт нужен.",
             JSONObject().put("name", JSONObject()
                 .put("type", "string")
-                .put("description", "Имя контакта, как записано в телефонной книге")),
+                .put("description", "Имя контакта в именительном падеже, как его назвал водитель, " +
+                    "или номер цифрами, если водитель продиктовал номер")),
             listOf("name"),
         ))
         put(tool(
@@ -1269,23 +1270,35 @@ class AgentTools @Inject constructor(
     private suspend fun callContact(args: JSONObject): String {
         val name = args.optString("name").trim()
         if (name.isEmpty()) return """{"error":"не указано имя"}"""
+        MyContactMatcher.dialableNumber(name)?.let { number ->
+            return confirmDangerous(callAction(number, number), "Звонок: $number")
+        }
+        val own = runCatchingCancellable {
+            MyContactMatcher.find(name, MyContactsCodec.decode(
+                settingsRepository.getString(SettingsRepository.KEY_MY_CONTACTS, "")))
+        }.getOrDefault(emptyList())
+        when {
+            own.size == 1 -> own.first().let { return confirmDangerous(callAction(it.name, it.phone), "Звонок: ${it.name}") }
+            own.size > 1 -> return JSONObject().put("matches", JSONArray(own.map { it.name })).toString()
+        }
         val hasPermission = runCatchingCancellable { contactLookup.hasPermission() }.getOrDefault(false)
-        if (!hasPermission) return """{"error":"звонок по имени пока недоступен: нет доступа к контактам"}"""
+        if (!hasPermission) return NOT_IN_MY_CONTACTS
         val matches = runCatchingCancellable { contactLookup.findByName(name) }
             .getOrElse { return """{"error":"не удалось прочитать контакты"}""" }
         return when {
-            matches.isEmpty() -> """{"error":"контакт не найден"}"""
+            matches.isEmpty() -> NOT_IN_MY_CONTACTS
             matches.size == 1 -> {
                 val m = matches.first()
-                val action = ActionDef(
-                    command = "", displayName = m.name, kind = "call",
-                    payload = JSONObject().put("phone", m.phone).put("autoDial", true).toString(),
-                )
-                return confirmDangerous(action, "Звонок: ${m.name}")
+                return confirmDangerous(callAction(m.name, m.phone), "Звонок: ${m.name}")
             }
             else -> JSONObject().put("matches", JSONArray(matches.map { it.name })).toString()
         }
     }
+
+    private fun callAction(label: String, phone: String) = ActionDef(
+        command = "", displayName = label, kind = "call",
+        payload = JSONObject().put("phone", phone).put("autoDial", true).toString(),
+    )
 
     // --- web_search ---
 
@@ -3126,6 +3139,11 @@ class AgentTools @Inject constructor(
     private fun round1(v: Double): Double = Math.round(v * 10.0) / 10.0
 
     companion object {
+        /** The car's phonebook is not readable (field 1.1.6), so a name that is not in «Мои контакты»
+         *  ends here; the text tells the driver where to add it. Keeps the "контакт не найден" code. */
+        internal const val NOT_IN_MY_CONTACTS =
+            """{"error":"контакт не найден в «Моих контактах»: добавьте его в Настройках, раздел Голос"}"""
+
         /** Tools withheld from automation-origin sessions. run_automation reaches fireVoiceRule
          *  (which bypasses cooldown by design), so a rule whose agent_query action calls it could
          *  recurse into itself with no engine-level brake; the memory tools are withheld because

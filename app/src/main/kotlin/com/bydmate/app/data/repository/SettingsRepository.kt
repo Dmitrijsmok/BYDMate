@@ -31,6 +31,8 @@ open class SettingsRepository @Inject constructor(
 ) {
     companion object {
         const val KEY_BATTERY_CAPACITY = "battery_capacity_kwh"
+        /** «Мои контакты»: JSON list of {name, phone, aliases} for voice calls (MyContactsCodec). */
+        const val KEY_MY_CONTACTS = "my_contacts"
         const val KEY_HOME_TARIFF = "home_tariff"
         const val KEY_DC_TARIFF = "dc_tariff"
         const val KEY_UNITS = "units" // "km" or "miles"

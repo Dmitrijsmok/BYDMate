@@ -1404,6 +1404,17 @@
 
     <!-- call_contact tool: contacts permission row -->
     <string name="settings_voice_contacts_label">Dostęp do kontaktów</string>
+    <string name="settings_my_contacts_title">Moje kontakty</string>
+    <string name="settings_my_contacts_desc">Do kogo dzwonić głosem: „zadzwoń do żony”</string>
+    <string name="settings_my_contacts_add">Dodaj</string>
+    <string name="settings_my_contacts_hint">Książka telefoniczna auta nie jest dostępna dla aplikacji, więc aby dzwonić po imieniu, dodaj kontakt tutaj. W „Inne nazwy” wpisz po przecinku inne imiona i to, jak słyszy je rozpoznawanie. Numer jest wybierany dopiero po potwierdzeniu na ekranie. Możesz też podyktować numer.</string>
+    <string name="settings_my_contacts_dialog_title">Kontakt</string>
+    <string name="settings_my_contacts_name">Imię</string>
+    <string name="settings_my_contacts_phone">Numer</string>
+    <string name="settings_my_contacts_aliases">Inne nazwy (po przecinku)</string>
+    <string name="settings_my_contacts_save">Zapisz</string>
+    <string name="settings_my_contacts_delete">Usuń</string>
+    <string name="settings_my_contacts_cancel">Anuluj</string>
     <string name="settings_voice_contacts_description">Potrzebny, żeby zadzwonić do kontaktu po imieniu głosem</string>
     <string name="settings_voice_contacts_granted">Przyznany</string>
     <string name="settings_voice_contacts_grant">Przyznaj</string>
