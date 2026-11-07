@@ -158,7 +158,9 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         Log.i(TAG, "microphone: $trace")
         Trace.event(TraceArea.VOICE, trace, by = traceId)
         scope.launch {
-            if (event == MicLiveness.Event.LIVE && _state.value != VoiceUiState.Listening) return@launch
+            // Only while the pill says "listening": a mid-session change must not overwrite
+            // "thinking" or an answer.
+            if (_state.value != VoiceUiState.Listening) return@launch
             runCatching { updateListeningOverlay(appStrings.get(text)) }
             if (event == MicLiveness.Event.SILENT) reportMicHolder(traceId)
         }
@@ -170,7 +172,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         val holder = withTimeoutOrNull(MIC_HOLDER_LOOKUP_MS) { runCatching { micHolder.holder() }.getOrNull() }
         Log.i(TAG, "microphone holder: ${holder ?: "(unknown)"}")
         Trace.event(TraceArea.VOICE, "mic-holder", "app" to (holder ?: "unknown"), by = traceId)
-        if (holder == null || !_listening.value) return
+        if (holder == null || !_listening.value || _state.value != VoiceUiState.Listening) return
         runCatching { updateListeningOverlay(appStrings.get(R.string.voice_mic_busy_by, holder)) }
         if (gate.ttsEnabled()) {
             val phrase = appStrings.get(R.string.voice_mic_busy_spoken, holder)

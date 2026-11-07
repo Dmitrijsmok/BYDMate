@@ -13,17 +13,22 @@ internal class MicLiveness(private val silentAfterMs: Long = SILENT_AFTER_MS) {
     private var silentReported = false
     private var zeroMs = 0L
 
-    /** [Event.LIVE] on the first frame with any signal, [Event.SILENT] once after [silentAfterMs]
-     *  of nothing but zeros before that; null otherwise. */
+    /** [Event.LIVE] on the first frame with signal (again after a silence), [Event.SILENT] once
+     *  per run of [silentAfterMs] of nothing but zeros, also when the mic went quiet mid-session
+     *  (field 1.1.7: live at the press, then 30 s of nothing while another app took the mic);
+     *  null otherwise. */
     fun onFrame(samples: ShortArray, frameMs: Long): Event? {
-        if (live) return null
         if (samples.any { it.toInt() != 0 }) {
+            zeroMs = 0L
+            silentReported = false
+            if (live) return null
             live = true
             return Event.LIVE
         }
         zeroMs += frameMs
         if (!silentReported && zeroMs >= silentAfterMs) {
             silentReported = true
+            live = false
             return Event.SILENT
         }
         return null

@@ -23,4 +23,15 @@ class MicLivenessTest {
         assertNull(mic.onFrame(zeros, 100))
         assertEquals(MicLiveness.Event.LIVE, mic.onFrame(noise, 100))
     }
+
+    @Test fun `a mic that goes quiet after live reports silent, then live again`() {
+        val mic = MicLiveness(silentAfterMs = 200)
+        assertEquals(MicLiveness.Event.LIVE, mic.onFrame(noise, 100))
+        assertNull(mic.onFrame(zeros, 100))
+        assertEquals(MicLiveness.Event.SILENT, mic.onFrame(zeros, 100))
+        assertNull(mic.onFrame(zeros, 100))
+        assertEquals(MicLiveness.Event.LIVE, mic.onFrame(noise, 100))
+        assertNull(mic.onFrame(zeros, 100))
+        assertNull(mic.onFrame(noise, 100))
+    }
 }
