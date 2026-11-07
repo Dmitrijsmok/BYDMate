@@ -570,15 +570,13 @@ fun main(args: Array<String>) {
                     true
                 }.getOrElse { reply?.writeInt(-1); reply?.writeInt(0); true }
 
-                HelperBinderProtocol.TX_AUDIO_RECORDERS -> runCatching {
-                    // Read-only, one bounded dumpsys; nothing from the caller is read.
-                    val lines = AudioRecordersDiag.parse(shExecBounded("dumpsys audio", maxBytes = 512 * 1024))
-                    android.util.Log.i("bydmate_helper", "TX_AUDIO_RECORDERS: ${lines.size} lines")
-                    reply?.writeInt(0)
-                    reply?.writeInt(lines.size)
-                    lines.forEach { reply?.writeString(it) }
-                    true
-                }.getOrElse { reply?.writeInt(-1); reply?.writeInt(0); true }
+                // Read-only diagnostics, fixed scripts; nothing from the caller is read.
+                HelperBinderProtocol.TX_AUDIO_RECORDERS -> writeLinesReply(reply, "TX_AUDIO_RECORDERS") {
+                    AudioRecordersDiag.parse(shExecBounded("dumpsys audio", maxBytes = 512 * 1024))
+                }
+                HelperBinderProtocol.TX_VOICE_ZONE_PROBE -> writeLinesReply(reply, "TX_VOICE_ZONE_PROBE") {
+                    VoiceZoneProbe.filter(shExecBounded(VoiceZoneProbe.SCRIPT, timeoutMs = 6000L, maxBytes = 1024 * 1024))
+                }
 
                 HelperBinderProtocol.TX_DISALLOW_NOTIFICATION_LISTENER -> runCatching {
                     // Our own listener only: the component is the protocol constant, nothing from
@@ -2106,6 +2104,20 @@ private var clusterDiagLastMs = Long.MIN_VALUE / 2
 private var clusterDiagCache: List<String>? = null
 private var clusterDiagReplayWhenDone = false
 private const val CLUSTER_DIAG_MIN_INTERVAL_MS = 60_000L
+
+/** Reply [status, count, strings] with [lines]; status -1 and no lines when they throw. */
+internal fun writeLinesReply(reply: android.os.Parcel?, tag: String, lines: () -> List<String>): Boolean {
+    runCatching(lines).onSuccess { out ->
+        android.util.Log.i("bydmate_helper", "$tag: ${out.size} lines")
+        reply?.writeInt(0)
+        reply?.writeInt(out.size)
+        out.forEach { reply?.writeString(it) }
+    }.onFailure {
+        reply?.writeInt(-1)
+        reply?.writeInt(0)
+    }
+    return true
+}
 
 /**
  * Bounded variant of [shExecMerged] for the read-only diagnostic snapshot: a dumpsys on an unknown
