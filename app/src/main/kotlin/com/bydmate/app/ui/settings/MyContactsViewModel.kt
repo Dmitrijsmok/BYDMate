@@ -6,6 +6,7 @@ import com.bydmate.app.agent.MyContact
 import com.bydmate.app.agent.MyContactsCodec
 import com.bydmate.app.data.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,7 +42,9 @@ class MyContactsViewModel @Inject constructor(
 
     private fun persist(list: List<MyContact>) {
         _contacts.value = list
-        viewModelScope.launch {
+        // NonCancellable: leaving Settings right after «Сохранить» clears this ViewModel, and the
+        // write must still land (field 1.1.7: a contact added, the call right after found nothing).
+        viewModelScope.launch(NonCancellable) {
             settingsRepository.setString(SettingsRepository.KEY_MY_CONTACTS, MyContactsCodec.encode(list))
         }
     }

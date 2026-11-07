@@ -2655,6 +2655,10 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
             appendLine("--- contacts ---")
             try {
                 com.bydmate.app.agent.ContactsDiagnostics.lines(appContext).forEach { appendLine(it) }
+                // «Мои контакты»: how many, never a name or a number.
+                val own = com.bydmate.app.agent.MyContactsCodec.decode(
+                    settingsRepository.getString(SettingsRepository.KEY_MY_CONTACTS, ""))
+                appendLine("my_contacts: ${own.size} aliases=${own.sumOf { it.aliases.size }}")
             } catch (e: Exception) { appendLine("(failed to gather contacts state: ${e.message})") }
 
             // Both daemon sections come from one detached probe (see gatherHelperDiagnostics).
