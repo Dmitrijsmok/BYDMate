@@ -2687,6 +2687,18 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 }
             } catch (e: Exception) { appendLine("(failed to gather mic & keys state: ${e.message})") }
 
+            // Where the stock assistant keeps its driver-voice zone (1.1.9 field request): two
+            // dumps, the car setting on and off, show which key moves. Read-only.
+            appendLine("--- voice zone probe ---")
+            try {
+                val zone = runCatching { helperClient.voiceZoneProbe() }.getOrNull()
+                when {
+                    zone == null -> appendLine("(unavailable)")
+                    zone.isEmpty() -> appendLine("(no voice-looking keys)")
+                    else -> zone.forEach { appendLine(it) }
+                }
+            } catch (e: Exception) { appendLine("(failed to gather voice zone probe: ${e.message})") }
+
             // Both daemon sections come from one detached probe (see gatherHelperDiagnostics).
             val helperDiag = gatherHelperDiagnostics()
 

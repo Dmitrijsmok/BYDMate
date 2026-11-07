@@ -625,6 +625,12 @@ object HelperBinderProtocol {
      */
     val TX_AUDIO_RECORDERS: Int = IBinder.FIRST_CALL_TRANSACTION + 65  // 66
 
+    /**
+     * Read-only: voice-looking keys of `settings list` (system/global/secure), `getprop` and the
+     * stock assistant's package state (VoiceZoneProbe). Reply: [status, count, strings].
+     */
+    val TX_VOICE_ZONE_PROBE: Int = IBinder.FIRST_CALL_TRANSACTION + 66  // 67
+
     /** TX_SET_AUTO_VOICE outcomes: called; no such method on this firmware; the audio service or
      *  the call threw. */
     const val AUTO_VOICE_APPLIED = 0

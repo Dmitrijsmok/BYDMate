@@ -467,6 +467,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             // then the pill says the mic is opening, so the driver does not talk into nothing.
             runCatching { showListeningOverlay(appStrings.get(R.string.voice_mic_opening)) }
             val micLiveness = MicLiveness() // capture thread only
+            val micLevel = MicLevelStats()
             var lastEventMs = System.currentTimeMillis()
             var wasAudible = false   // capture thread only
             var replyPathWarmupStarted = false
@@ -513,6 +514,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                     }
                     micLiveness.onFrame(samples, samples.size * MS_PER_SECOND / MIC_SAMPLE_RATE)
                         ?.let { onMicLiveness(it, traceId) }
+                    micLevel.onFrame(samples)
                     gated
                 }
                     .filter { frame ->
@@ -636,7 +638,9 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                 runCatching { hideListeningOverlay() }
                 sessionJob = null
                 // Before busy is released: a new session resets the reason.
-                Trace.event(TraceArea.VOICE, "session-stop", "reason" to (stopReason ?: "cancel"), by = traceId)
+                val level = micLevel.snapshot()
+                Trace.event(TraceArea.VOICE, "session-stop", "reason" to (stopReason ?: "cancel"),
+                    "frames" to level.frames, "rms_avg" to level.avg, "rms_peak" to level.peak, by = traceId)
                 busy.set(false)
             }
         }

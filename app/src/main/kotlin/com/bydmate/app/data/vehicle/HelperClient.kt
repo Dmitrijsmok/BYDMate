@@ -386,6 +386,9 @@ interface HelperClient {
     /** Who records from the mic now (TX_AUDIO_RECORDERS, read-only); null when the daemon can't say. */
     suspend fun audioRecorders(): List<String>? = null
 
+    /** Voice-zone probe lines (TX_VOICE_ZONE_PROBE, read-only); null when the daemon can't say. */
+    suspend fun voiceZoneProbe(): List<String>? = null
+
     /** Write [value] to Settings.Global [key] via `settings put global` under shell uid.
      *  Daemon-whitelisted to sentrymode_enabled_switch and enable_freeform_support. */
     suspend fun putGlobalSetting(key: String, value: Int): Boolean
@@ -857,6 +860,16 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
             val status = reply.readInt()
             val count = reply.readInt()
             if (status != 0 || count !in 0..MAX_AUDIO_RECORDER_LINES) return@transactParsed null
+            List(count) { reply.readString().orEmpty() }
+        }
+
+    // The daemon's script is bounded at 6 s (three settings tables, getprop, a package dump).
+    override suspend fun voiceZoneProbe(): List<String>? =
+        transactParsed(HelperBinderProtocol.TX_VOICE_ZONE_PROBE, { }, timeoutMs = VOICE_ZONE_PROBE_TIMEOUT_MS) { reply ->
+            if (reply.dataAvail() < 8) return@transactParsed null
+            val status = reply.readInt()
+            val count = reply.readInt()
+            if (status != 0 || count !in 0..MAX_VOICE_ZONE_LINES) return@transactParsed null
             List(count) { reply.readString().orEmpty() }
         }
 
@@ -1624,6 +1637,8 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
          *  default 2 s and report "no cluster display" on a merely slow head unit. */
         private const val LIST_DISPLAYS_TIMEOUT_MS = 5_000L
         private const val MAX_AUDIO_RECORDER_LINES = 64
+        private const val VOICE_ZONE_PROBE_TIMEOUT_MS = 8_000L
+        private const val MAX_VOICE_ZONE_LINES = 200
 
         /** TX_CLUSTER_WM_DIAG budget: two `dumpsys` calls under the daemon's own 4 s bound each,
          *  plus marshalling. Dump-only, so a generous budget costs nothing at runtime. */
