@@ -147,6 +147,12 @@ object VoiceModule {
         )
 
     @Provides @Singleton
+    fun provideMicHolderLookup(
+        @ApplicationContext ctx: Context,
+        helper: com.bydmate.app.data.vehicle.HelperClient,
+    ): MicHolderLookup = DaemonMicHolderLookup(helper, ctx)
+
+    @Provides @Singleton
     fun provideVoiceEarcon() = VoiceEarcon()
 
     @Provides @Singleton

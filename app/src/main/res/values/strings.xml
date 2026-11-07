@@ -1391,6 +1391,8 @@
     <string name="voice_thinking">Думаю</string>
     <string name="voice_mic_opening">Включаю микрофон…</string>
     <string name="voice_mic_silent">Микрофон молчит: возможно, его заняло другое приложение</string>
+    <string name="voice_mic_busy_by">Микрофон занят: %1$s. Нажимать снова бесполезно, пока оно его держит</string>
+    <string name="voice_mic_busy_spoken">Микрофон занят приложением %1$s</string>
     <string name="voice_error_model_missing">Голосовая модель не загружена. Скачайте её в Настройках, раздел Голос-агент.</string>
     <string name="voice_block_park_required">Требуется паркинг</string>
 

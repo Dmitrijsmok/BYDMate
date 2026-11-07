@@ -25,4 +25,15 @@ object AudioRecordersDiag {
         }
         return section.map { it.trim().take(MAX_LINE) }.take(MAX_LINES)
     }
+
+    private val PACKAGE = Regex("""pack(?:age)?\s*[:=]\s*([A-Za-z][\w.]*)""")
+    private val ACTIVE = Regex("""silenced\s*[:=]\s*false""", RegexOption.IGNORE_CASE)
+
+    /** Other apps' packages in [lines] ([parse] output), the ones Android lets record first:
+     *  a client that is not silenced is the one holding the mic. Our own package is skipped. */
+    fun holderPackages(lines: List<String>, ownPackage: String): List<String> =
+        lines.sortedByDescending { ACTIVE.containsMatchIn(it) }
+            .mapNotNull { PACKAGE.find(it)?.groupValues?.get(1) }
+            .filter { it != ownPackage }
+            .distinct()
 }

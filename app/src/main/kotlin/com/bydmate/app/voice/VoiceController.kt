@@ -68,6 +68,8 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
     private val autoVoiceDuck: AutoVoiceDuck = AutoVoiceDuck.OFF,
     // The offline «открой <приложение>» resolves through the app table Alice uses; null = off.
     private val appResolver: AliceAppResolver? = null,
+    // Names the app holding the mic when the session hears only silence (field 1.1.8).
+    private val micHolder: MicHolderLookup = MicHolderLookup { null },
 ) {
     // Process-lifetime scope (@Singleton): intentionally never cancelled.
     private val scope = CoroutineScope(SupervisorJob())
@@ -158,6 +160,21 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         scope.launch {
             if (event == MicLiveness.Event.LIVE && _state.value != VoiceUiState.Listening) return@launch
             runCatching { updateListeningOverlay(appStrings.get(text)) }
+            if (event == MicLiveness.Event.SILENT) reportMicHolder(traceId)
+        }
+    }
+
+    /** Silent mic: ask the daemon who records, then name it on the pill and say it aloud, so the
+     *  driver knows pressing again will not help until that app lets go. */
+    private suspend fun reportMicHolder(traceId: Long) {
+        val holder = withTimeoutOrNull(MIC_HOLDER_LOOKUP_MS) { runCatching { micHolder.holder() }.getOrNull() }
+        Log.i(TAG, "microphone holder: ${holder ?: "(unknown)"}")
+        Trace.event(TraceArea.VOICE, "mic-holder", "app" to (holder ?: "unknown"), by = traceId)
+        if (holder == null || !_listening.value) return
+        runCatching { updateListeningOverlay(appStrings.get(R.string.voice_mic_busy_by, holder)) }
+        if (gate.ttsEnabled()) {
+            val phrase = appStrings.get(R.string.voice_mic_busy_spoken, holder)
+            if (runCatching { ttsEngine.speak(phrase) }.getOrDefault(false)) noteOwnSpeech(phrase)
         }
     }
 
@@ -1335,6 +1352,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
     companion object {
         private const val TAG = "VoiceController"
         private const val MS_PER_SECOND = 1000L
+        private const val MIC_HOLDER_LOOKUP_MS = 6_000L
         private const val MIC_SAMPLE_RATE = 16000L
 
         // Longest value one logcat summary field may carry (an automation name, an utterance).
