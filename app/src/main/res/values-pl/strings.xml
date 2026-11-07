@@ -1387,6 +1387,8 @@
     <string name="voice_thinking">Myślę</string>
     <string name="voice_mic_opening">Włączam mikrofon…</string>
     <string name="voice_mic_silent">Mikrofon milczy: może używa go inna aplikacja</string>
+    <string name="voice_mic_busy_by">Mikrofon zajęty przez %1$s. Ponowne naciskanie nie pomoże, dopóki go trzyma</string>
+    <string name="voice_mic_busy_spoken">Mikrofon zajęty przez %1$s</string>
     <string name="voice_error_model_missing">Model głosowy nie jest pobrany. Pobierz go w Ustawieniach, sekcja Asystent głosowy.</string>
     <string name="voice_block_park_required">Wymagany parking</string>
 

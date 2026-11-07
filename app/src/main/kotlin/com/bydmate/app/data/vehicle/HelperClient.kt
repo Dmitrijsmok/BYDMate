@@ -383,6 +383,9 @@ interface HelperClient {
      */
     suspend fun listDisplays(): List<DisplayDevice>?
 
+    /** Who records from the mic now (TX_AUDIO_RECORDERS, read-only); null when the daemon can't say. */
+    suspend fun audioRecorders(): List<String>? = null
+
     /** Write [value] to Settings.Global [key] via `settings put global` under shell uid.
      *  Daemon-whitelisted to sentrymode_enabled_switch and enable_freeform_support. */
     suspend fun putGlobalSetting(key: String, value: Int): Boolean
@@ -846,6 +849,16 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
             val status = if (reply.dataAvail() >= 4) reply.readInt() else return@transactParsed false
             status == 0
         } ?: false
+
+    // Same bound as listDisplays: the daemon spawns a bounded `dumpsys audio`.
+    override suspend fun audioRecorders(): List<String>? =
+        transactParsed(HelperBinderProtocol.TX_AUDIO_RECORDERS, { }, timeoutMs = LIST_DISPLAYS_TIMEOUT_MS) { reply ->
+            if (reply.dataAvail() < 8) return@transactParsed null
+            val status = reply.readInt()
+            val count = reply.readInt()
+            if (status != 0 || count !in 0..MAX_AUDIO_RECORDER_LINES) return@transactParsed null
+            List(count) { reply.readString().orEmpty() }
+        }
 
     // LIST_DISPLAYS_TIMEOUT_MS, not the default 2s: the daemon spawns `dumpsys display`, whose
     // own bound is 4s, and a cold DiLink can take most of it.
@@ -1610,6 +1623,7 @@ open class HelperClientImpl @Inject constructor() : HelperClient {
          *  plus marshalling. Runs inside a projection attempt, so it must not sit on the
          *  default 2 s and report "no cluster display" on a merely slow head unit. */
         private const val LIST_DISPLAYS_TIMEOUT_MS = 5_000L
+        private const val MAX_AUDIO_RECORDER_LINES = 64
 
         /** TX_CLUSTER_WM_DIAG budget: two `dumpsys` calls under the daemon's own 4 s bound each,
          *  plus marshalling. Dump-only, so a generous budget costs nothing at runtime. */

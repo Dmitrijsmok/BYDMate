@@ -1390,6 +1390,8 @@
     <string name="voice_thinking">Pensando</string>
     <string name="voice_mic_opening">Ligando o microfone…</string>
     <string name="voice_mic_silent">O microfone está mudo: outro app pode estar usando</string>
+    <string name="voice_mic_busy_by">Microfone ocupado por %1$s. Apertar de novo não adianta enquanto ele o usa</string>
+    <string name="voice_mic_busy_spoken">O microfone está ocupado por %1$s</string>
     <string name="voice_error_model_missing">O modelo de voz não está baixado. Baixe-o em Configurações, seção Agente de voz.</string>
     <string name="voice_block_park_required">É necessário estar em P</string>
     <string name="settings_asr_gigaam_title">Reconhecimento de fala</string>

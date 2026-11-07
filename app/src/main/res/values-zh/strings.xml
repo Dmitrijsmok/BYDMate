@@ -1350,6 +1350,8 @@
     <string name="voice_thinking">思考中</string>
     <string name="voice_mic_opening">正在打开麦克风…</string>
     <string name="voice_mic_silent">麦克风无声：可能被其他应用占用</string>
+    <string name="voice_mic_busy_by">麦克风被 %1$s 占用。在它释放之前，再按也没有用</string>
+    <string name="voice_mic_busy_spoken">麦克风被 %1$s 占用</string>
     <string name="voice_error_model_missing">语音模型尚未下载。请在设置的语音助手部分下载。</string>
     <string name="voice_block_park_required">需要挂入 P 挡</string>
 

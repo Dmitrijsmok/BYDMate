@@ -570,6 +570,16 @@ fun main(args: Array<String>) {
                     true
                 }.getOrElse { reply?.writeInt(-1); reply?.writeInt(0); true }
 
+                HelperBinderProtocol.TX_AUDIO_RECORDERS -> runCatching {
+                    // Read-only, one bounded dumpsys; nothing from the caller is read.
+                    val lines = AudioRecordersDiag.parse(shExecBounded("dumpsys audio", maxBytes = 512 * 1024))
+                    android.util.Log.i("bydmate_helper", "TX_AUDIO_RECORDERS: ${lines.size} lines")
+                    reply?.writeInt(0)
+                    reply?.writeInt(lines.size)
+                    lines.forEach { reply?.writeString(it) }
+                    true
+                }.getOrElse { reply?.writeInt(-1); reply?.writeInt(0); true }
+
                 HelperBinderProtocol.TX_DISALLOW_NOTIFICATION_LISTENER -> runCatching {
                     // Our own listener only: the component is the protocol constant, nothing from
                     // the caller. Revokes the approval so the following allow makes NMS bind anew.
