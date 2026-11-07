@@ -615,6 +615,16 @@ object HelperBinderProtocol {
      */
     val TX_DISALLOW_NOTIFICATION_LISTENER: Int = IBinder.FIRST_CALL_TRANSACTION + 64  // 65
 
+    /**
+     * Read-only: who records from the microphone right now (`dumpsys audio`, RecordActivityMonitor
+     * section, parsed by [AudioRecordersDiag]). For the diagnostic dump when BYDMate's capture is
+     * silenced by another app.
+     *
+     * Request: (no args) -> Reply: [int status (0 ok, -1 failed), int count, count x String line]
+     * An old daemon without this handler makes transact return false → the client returns null.
+     */
+    val TX_AUDIO_RECORDERS: Int = IBinder.FIRST_CALL_TRANSACTION + 65  // 66
+
     /** TX_SET_AUTO_VOICE outcomes: called; no such method on this firmware; the audio service or
      *  the call threw. */
     const val AUTO_VOICE_APPLIED = 0

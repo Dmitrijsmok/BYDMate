@@ -2661,6 +2661,32 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 appendLine("my_contacts: ${own.size} aliases=${own.sumOf { it.aliases.size }}")
             } catch (e: Exception) { appendLine("(failed to gather contacts state: ${e.message})") }
 
+            // Who can take the wheel button and the mic away from us (1.1.8 field request):
+            // every enabled a11y service that filters keys gets the press, and Android 10 hands
+            // a concurrent capture digital silence, so both holders are named here.
+            appendLine("--- mic & keys ---")
+            try {
+                val a11y = appContext.getSystemService(Context.ACCESSIBILITY_SERVICE)
+                    as android.view.accessibility.AccessibilityManager
+                val keyFilters = a11y.getEnabledAccessibilityServiceList(
+                    android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+                    .filter { it.flags and
+                        android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS != 0 }
+                    .map { it.id ?: "?" }.distinct()
+                appendLine("key_filter_services: ${keyFilters.size} ${keyFilters.joinToString().ifEmpty { "-" }}")
+                val audio = appContext.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                val recs = audio.activeRecordingConfigurations
+                appendLine("recordings_local: ${recs.size} " + recs.joinToString { rc ->
+                    "src=${rc.clientAudioSource} session=${rc.clientAudioSessionId} silenced=${rc.isClientSilenced}"
+                }.ifEmpty { "-" })
+                val daemonRecs = runCatching { helperClient.audioRecorders() }.getOrNull()
+                when {
+                    daemonRecs == null -> appendLine("recorders_daemon: (unavailable)")
+                    daemonRecs.isEmpty() -> appendLine("recorders_daemon: (none)")
+                    else -> daemonRecs.forEach { appendLine("recorders_daemon: $it") }
+                }
+            } catch (e: Exception) { appendLine("(failed to gather mic & keys state: ${e.message})") }
+
             // Both daemon sections come from one detached probe (see gatherHelperDiagnostics).
             val helperDiag = gatherHelperDiagnostics()
 
