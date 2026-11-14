@@ -1623,7 +1623,8 @@ class SettingsViewModelTest {
                 .replace(Regex("(?m)^(app: \\S+) v\\S+ \\(code=\\d+\\)$"), "$1 v<version> (code=<code>)")
             val reference = javaClass.getResourceAsStream("/diagnostic-dump/reference-header.txt")!!
                 .bufferedReader().use { it.readText() }
-            assertEquals(reference, normalized)
+            // TEMPORARY (PR #18): print the actual header to regenerate the reference.
+            if (reference != normalized) throw AssertionError("ACTUAL_HEADER_BEGIN\n$normalized\nACTUAL_HEADER_END")
         } finally {
             java.util.TimeZone.setDefault(zone)
             io.mockk.unmockkObject(com.bydmate.app.cluster.ClusterProjectionManager)

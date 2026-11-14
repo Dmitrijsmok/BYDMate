@@ -124,6 +124,7 @@ class PollPushParityTest {
             "wiperRelay", "autoWipers", // rain
             "maxBatTemp", "minBatTemp", // avgBatTemp
             "windowRRGen3", // generation fallback for windowRR
+            "insideTempAlt", // fallback for insideTemp, chosen by the poll (withInsideTempFallback)
             // No snapshot property: they reach consumers through the event flow and the dump.
             "bsdLeft", "bsdRight",
             "soh", "lifetimeAvgPhm", "chargingType", "chargeBatteryVolt", "batteryType", "chargingCapacity",

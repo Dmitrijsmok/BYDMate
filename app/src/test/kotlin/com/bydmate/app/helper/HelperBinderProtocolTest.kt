@@ -54,5 +54,7 @@ private val WIRE_NUMBERS: Map<String, Int> by lazy {
         "TX_WRITE_BUFFER" to 57, "TX_HUD_SDK" to 58, "TX_SET_SCREEN_BACKLIGHT" to 59,
         "TX_SPLIT37_ROOT_STATE" to 60, "TX_SET_AUTO_VOICE" to 61, "TX_DTC_SCAN_START" to 62,
         "TX_DTC_SCAN_STATUS" to 63, "TX_DTC_ERASE_START" to 64, "TX_DISALLOW_NOTIFICATION_LISTENER" to 65,
+        // DiLink3 fork verbs (1.1.8, 1.1.9): read-only diagnostics, numbers shipped to cars.
+        "TX_AUDIO_RECORDERS" to 66, "TX_VOICE_ZONE_PROBE" to 67,
     )
 }

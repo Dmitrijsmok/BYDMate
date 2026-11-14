@@ -24,10 +24,14 @@ interface VehicleApi {
     suspend fun readWindowPassenger(): Int? = null
     suspend fun readWindowRearLeft(): Int? = null
     suspend fun readWindowRearRight(): Int? = null
-    suspend fun writeWindowDriver(percent: Int): Result<Unit> = windowUnsupported()
-    suspend fun writeWindowPassenger(percent: Int): Result<Unit> = windowUnsupported()
-    suspend fun writeWindowRearLeft(percent: Int): Result<Unit> = windowUnsupported()
-    suspend fun writeWindowRearRight(percent: Int): Result<Unit> = windowUnsupported()
+    suspend fun writeWindowDriver(percent: Int): Result<Unit> =
+        Result.failure(VehicleWriteError.Unsupported("window_percent"))
+    suspend fun writeWindowPassenger(percent: Int): Result<Unit> =
+        Result.failure(VehicleWriteError.Unsupported("window_percent"))
+    suspend fun writeWindowRearLeft(percent: Int): Result<Unit> =
+        Result.failure(VehicleWriteError.Unsupported("window_percent"))
+    suspend fun writeWindowRearRight(percent: Int): Result<Unit> =
+        Result.failure(VehicleWriteError.Unsupported("window_percent"))
 
     // Write entrypoint, wired to WriteAllowlist + HelperClient (Group C).
     // Failure reason available via Result.exceptionOrNull() as VehicleWriteError.
@@ -40,8 +44,6 @@ interface VehicleApi {
      */
     suspend fun driveWindow(pane: WindowPane, percent: Int): Result<Unit> =
         Result.failure(VehicleWriteError.Unsupported("window_step"))
-
-    private fun windowUnsupported(): Result<Unit> = Result.failure(VehicleWriteError.Unsupported("window_percent"))
 
     /** Rear seats whose heat this car has (#327). */
     suspend fun rearSeatHeatSides(): Set<RearSeat> = emptySet()
