@@ -215,6 +215,28 @@ class WriteAllowlistTest {
         assertEquals(2, al.find("drl_off")!!.valueMin)
     }
 
+    @Test fun `rear logo light is carved out of banned dev 1004, its read fids stay banned (383)`() {
+        assertTrue(
+            "rear logo write fid must be carved out of the dev 1004 ban",
+            (1004 to 1324621876) in WriteAllowlist.BANNED_DEV_FID_EXCEPTIONS,
+        )
+        for (readFid in listOf(880803910, 880803908, 880803888)) {
+            assertTrue("read fid $readFid must stay banned", WriteAllowlist.isBanned(1004, readFid))
+        }
+        val al = WriteAllowlist.loadProduction { "{}" }
+        for ((name, v) in listOf("rear_logo_light_on" to 1, "rear_logo_light_off" to 2)) {
+            val e = al.find(name)
+            assertNotNull(name, e)
+            assertEquals(1004, e!!.dev)
+            assertEquals(1324621876, e.writeFid)
+            assertEquals(v, e.valueMin)
+            assertEquals(v, e.valueMax)
+            assertEquals("lights", e.category)
+            assertTrue("$name is live-validated on Leopard 3 2026-11-06", e.validated)
+            assertNull(e.readbackFid)
+        }
+    }
+
     @Test fun `hazard is carved out of banned dev 1004`() {
         assertTrue(
             "hazard write fid must be carved out of the dev 1004 ban",
@@ -355,6 +377,41 @@ class WriteAllowlistTest {
         assertEquals(setOf(1, 2), values)
     }
 
+    // ── Spoiler up/down: dev 1023 carve-out for the command fid, values 1 and 2 only ──
+    @Test fun `spoiler command fid is carved out, its status config and position fids stay banned`() {
+        assertFalse(WriteAllowlist.isBanned(WriteAllowlist.SPOILER_DEV, WriteAllowlist.SPOILER_CMD_FID))
+        for (fid in listOf(
+            WriteAllowlist.SPOILER_STATUS_FID, WriteAllowlist.SPOILER_CONFIG_FID,
+            WriteAllowlist.SPOILER_POSITION_FID, 1276182580,
+        )) assertTrue("fid=$fid", WriteAllowlist.isBanned(1023, fid))
+    }
+
+    @Test fun `spoiler entries are dev 1023 unvalidated 1 up and 2 down`() {
+        val al = WriteAllowlist.loadProduction { "{}" }
+        for ((name, value) in listOf("spoiler_up" to 1, "spoiler_down" to 2)) {
+            val e = al.find(name) ?: error("missing $name")
+            assertEquals(1023, e.dev)
+            assertEquals(1276182582, e.writeFid)
+            assertEquals(value, e.valueMin); assertEquals(value, e.valueMax)
+            assertFalse("$name must be unvalidated", e.validated)
+        }
+    }
+
+    @Test fun `no other spoiler value opens up, whatever the source`() {
+        val fixture = """
+            {
+              "spoiler_any": { "featureId": 1276182582, "deviceType": 1023 },
+              "spoiler_zero": { "featureId": 1276182582, "deviceType": 1023, "value": 0 },
+              "spoiler_three": { "featureId": 1276182582, "deviceType": 1023, "value": 3 },
+              "spoiler_range": { "featureId": 1276182582, "deviceType": 1023, "valueMin": 1, "valueMax": 2 }
+            }
+        """.trimIndent()
+        val al = WriteAllowlist.loadProduction { fixture }
+        for (name in listOf("spoiler_any", "spoiler_zero", "spoiler_three", "spoiler_range")) assertNull(name, al.find(name))
+        val values = al.allEntries().filter { it.dev == 1023 && it.writeFid == 1276182582 }.map { it.valueMin }.toSet()
+        assertEquals(setOf(1, 2), values)
+    }
+
     // ── Battery warm-up (#311): dev 1009 carve-out for the write fid, values 1 and 2 only ──
     @Test fun `battery preheat write fid is the only dev 1009 carve-out, its read fids stay banned`() {
         assertFalse(WriteAllowlist.isBanned(1009, 1324617774))
@@ -486,7 +543,7 @@ class WriteAllowlistTest {
         assertTrue(WriteAllowlist.isBanned(1006, 734003229))
         assertTrue(WriteAllowlist.isBanned(1006, 555745294))
         val dev1023 = WriteAllowlist.BANNED_DEV_FID_EXCEPTIONS.filter { it.first == 1023 }.map { it.second }.toSet()
-        assertEquals(setOf(1330643002, 1069547536, 850427920, 850427928, 944767029, 1276260400, 1276174371), dev1023)
+        assertEquals(setOf(1330643002, 1069547536, 850427920, 850427928, 944767029, 1276260400, 1276174371, 1276182582, 1276182596), dev1023)
     }
 
     @Test fun `drive mode entries are single allowed values, rock unvalidated`() {

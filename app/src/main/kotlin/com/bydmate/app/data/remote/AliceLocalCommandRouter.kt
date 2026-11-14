@@ -98,7 +98,8 @@ internal object AliceLocalCommandRouter {
                 ?: AliceTextPlan.Failed("ac_temperature_unknown")
             is ParseResult.Volume -> AliceTextPlan.Volume(parsed.payload)
             is ParseResult.Navigator -> AliceTextPlan.OpenNavigator(parsed.app)
-            is ParseResult.Ask, ParseResult.Music, ParseResult.Unrecognized ->
+            // Home/Work routes reach Alice through its navigation action, not the vehicle text.
+            is ParseResult.Navigate, is ParseResult.Ask, ParseResult.Music, ParseResult.Unrecognized ->
                 AliceTextPlan.Failed("unsupported_vehicle_command")
         }
     }

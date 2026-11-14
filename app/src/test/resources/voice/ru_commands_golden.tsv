@@ -252,7 +252,6 @@ utterance	expected	category	danger
 открой навигатор	NAVIGATOR	misc	
 открой карту	UNRECOGNIZED	misc	
 открой настройки	UNRECOGNIZED	misc	
-поехали домой	UNRECOGNIZED	misc	
 сколько у меня останется заряда когда я доеду до точки	UNRECOGNIZED	misc	
 так ну ка проверим как ты работаешь	UNRECOGNIZED	misc	
 выключайся	UNRECOGNIZED	misc	
@@ -688,3 +687,31 @@ utterance	expected	category	danger
 включи проекцию	UNRECOGNIZED	hud	
 выключи проекцию на приборке	UNRECOGNIZED	hud	
 худ	UNRECOGNIZED	hud	
+включи обдув в лицо	吹面	climate	
+обдув на лицо	吹面	climate	
+сделай обдув в лицо и ноги	吹面吹脚	climate	
+включи обдув в лицо и в ноги	吹面吹脚	climate	
+включи обдув в ноги	吹脚	climate	
+обдув на ноги	吹脚	climate	
+включи обдув в ноги и на стекло	吹脚除霜	climate	
+включи обдув на стекло	除霜	climate	
+обдув на лобовое стекло	除霜	climate	
+поехали домой	NAVIGATE:home	navigation	
+едем домой	NAVIGATE:home	navigation	
+маршрут домой	ROUTE:home	navigation	
+проложи маршрут домой	ROUTE:home	navigation	
+построй маршрут домой	ROUTE:home	navigation	
+поехали на работу	NAVIGATE:work	navigation	
+едем на работу	NAVIGATE:work	navigation	
+маршрут на работу	ROUTE:work	navigation	
+проложи маршрут на работу	ROUTE:work	navigation	
+построй маршрут на работу	ROUTE:work	navigation	
+навигация	NAVIGATOR	navigation	
+включи навигацию	NAVIGATOR	navigation	
+поехали	UNRECOGNIZED	navigation	
+домой	UNRECOGNIZED	navigation	
+работа	UNRECOGNIZED	navigation	
+включи музыку	UNRECOGNIZED	navigation	
+запусти радио	UNRECOGNIZED	navigation	
+поехали в магазин	UNRECOGNIZED	navigation	
+маршрут	UNRECOGNIZED	navigation	

@@ -33,15 +33,19 @@ class NativeParsReader @Inject constructor(
      * Batch request for one poll tick, built against [table] — the snapshot of
      * [FidAddresses] this fetch works from. Same entries in the same order, so the reply
      * still lines up with [FidMap.entries] index by index. A HYBRID car gets [FidMap.hybrid]
-     * appended at its compiled addresses; the EV part is untouched either way.
+     * appended at the addresses of [hybrid] (null on any other car); the EV part is untouched
+     * either way.
      */
-    private fun batchItems(table: ResolvedFidTable, hybrid: Boolean): List<BatchReadItem> {
+    private fun batchItems(table: ResolvedFidTable, hybrid: ResolvedFidTable?): List<BatchReadItem> {
         val items = FidMap.entries.map {
             val address = table.address(it.field)
             BatchReadItem(it.transact, address.device, address.fid)
         }
-        if (!hybrid) return items
-        return items + FidMap.hybrid.map { BatchReadItem(it.transact, it.device, it.fid) }
+        if (hybrid == null) return items
+        return items + FidMap.hybrid.map {
+            val address = hybrid.address(it.field)
+            BatchReadItem(it.transact, address.device, address.fid)
+        }
     }
 
     /**
@@ -62,8 +66,9 @@ class NativeParsReader @Inject constructor(
      */
     override suspend fun fetch(): DiParsData? {
         val table = FidAddresses.table
-        // One read of the kind per fetch, so the request and its decoding agree.
-        val hybrid = vehicleKind.kind.value == VehicleKind.HYBRID
+        // One read of the kind per fetch, so the request and its decoding agree; the hybrid
+        // table is snapshotted with it for the same reason.
+        val hybrid = FidAddresses.hybrid.takeIf { vehicleKind.kind.value == VehicleKind.HYBRID }
         return when (gate.mode()) {
             BatchMode.ACTIVE -> fetchViaBatch(table, hybrid) ?: fetchViaAdb(table, hybrid)
             BatchMode.OFF -> fetchViaAdb(table, hybrid)
@@ -79,7 +84,7 @@ class NativeParsReader @Inject constructor(
                         // any state a returned snapshot depends on (see stickyDriveMode).
                         assembleSnapshot(
                             withInsideTempFallback(
-                                decodeBatch(batchRaw, table, hybrid),
+                                decodeBatch(batchRaw, table, hybrid != null),
                                 okBatchWord(batchRaw, insideTempIndex),
                             ),
                             windowRrRawFromBatch(batchRaw),
@@ -92,10 +97,10 @@ class NativeParsReader @Inject constructor(
         }
     }
 
-    private suspend fun fetchViaBatch(table: ResolvedFidTable, hybrid: Boolean): DiParsData? {
+    private suspend fun fetchViaBatch(table: ResolvedFidTable, hybrid: ResolvedFidTable?): DiParsData? {
         val pairs = helperClient.readBatch(batchItems(table, hybrid)) ?: return null
         return assembleSnapshot(
-            withInsideTempFallback(decodeBatch(pairs, table, hybrid), okBatchWord(pairs, insideTempIndex)),
+            withInsideTempFallback(decodeBatch(pairs, table, hybrid != null), okBatchWord(pairs, insideTempIndex)),
             windowRrRawFromBatch(pairs),
         )
     }
@@ -163,7 +168,7 @@ class NativeParsReader @Inject constructor(
             "TechPanel",
             "tech: soc=${raw("soc")} remain=${raw("batteryRemainKwh")} " +
                 "ins=${raw("insulationKohm")} mF=${raw("motorTempFront")} mR=${raw("motorTempRear")} " +
-                "iF=${raw("inverterTempFront")} iR=${raw("inverterTempRear")} " +
+                "iF=${raw("inverterTempFront")} iR=${raw("inverterTempRear")} ext=${raw("exteriorTemp")} " +
                 "V=${raw("hvVoltage")} I=${raw("hvCurrent")} " +
                 "chg=${raw("bmsMaxChargeKw")} dis=${raw("bmsMaxDischargeKw")} " +
                 "tmax=${raw("maxBatTemp")} tmin=${raw("minBatTemp")} " +
@@ -181,7 +186,7 @@ class NativeParsReader @Inject constructor(
     }
 
 
-    private suspend fun fetchViaAdb(table: ResolvedFidTable, hybrid: Boolean): DiParsData? {
+    private suspend fun fetchViaAdb(table: ResolvedFidTable, hybrid: ResolvedFidTable?): DiParsData? {
         if (!autoservice.isAvailable()) return null
 
         // Decoded values keyed by FidEntry.field.
@@ -218,7 +223,7 @@ class NativeParsReader @Inject constructor(
             }
             decoded[entry.field] = value
         }
-        if (hybrid) decoded.putAll(readHybridViaAdb(autoservice))
+        if (hybrid != null) decoded.putAll(readHybridViaAdb(autoservice, hybrid))
 
         return assembleSnapshot(withInsideTempFallback(decoded, insideTempRaw), windowRrRaw)
     }
@@ -534,12 +539,13 @@ private fun decodeHybrid(entry: FidEntry, word: Int): Any? = when (entry.transac
     else -> null
 }
 
-/** The [FidMap.hybrid] fields read one by one over the plain path, at their compiled addresses. */
-private suspend fun readHybridViaAdb(autoservice: AutoserviceClient): Map<String, Any?> =
+/** The [FidMap.hybrid] fields read one by one over the plain path, at the addresses of [table]. */
+private suspend fun readHybridViaAdb(autoservice: AutoserviceClient, table: ResolvedFidTable): Map<String, Any?> =
     FidMap.hybrid.associate { entry ->
+        val address = table.address(entry.field)
         entry.field to when (entry.transact) {
-            5 -> autoservice.getInt(entry.device, entry.fid)?.let { decodeHybrid(entry, it) }
-            7 -> autoservice.getFloat(entry.device, entry.fid)
+            5 -> autoservice.getInt(address.device, address.fid)?.let { decodeHybrid(entry, it) }
+            7 -> autoservice.getFloat(address.device, address.fid)
                 ?.let { decodeHybrid(entry, java.lang.Float.floatToRawIntBits(it)) }
             else -> null
         }

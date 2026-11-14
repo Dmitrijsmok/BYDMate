@@ -44,12 +44,9 @@ data class WriteEntry(
 
 class WriteAllowlist(private val map: Map<String, WriteEntry>) {
     val size: Int get() = map.size
-    val validatedCount: Int get() = map.values.count { it.validated }
     val entries: Collection<WriteEntry> get() = map.values
     fun find(actionName: String): WriteEntry? = map[actionName.lowercase()]
     fun allEntries(): Collection<WriteEntry> = map.values
-    fun entriesByCategory(category: String): Collection<WriteEntry> =
-        map.values.filter { it.category == category }
 
     companion object {
         private const val TAG = "WriteAllowlist"
@@ -74,6 +71,7 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
             1023 to 1069547536,  // SET_INTERIOR_ATMOSPHERE_LAMP_BRIGHTNESS_SET (ambient)
             1004 to 1125122118,  // DRL (daytime running lights) on/off
             1004 to 871366669,   // hazard lights — live-validated on Leopard 3 2026-07-31
+            1004 to 1324621876,  // LIGHT_REAR_GLOW_LOGO_STATE_SET (rear logo light, #383) — live-validated on Leopard 3 2026-11-06
             1023 to 850427920,  // fridge WORKING_STATUS_SET (cool/heat/off) — com.byd.car.icebox
             1023 to 850427928,  // fridge TEMP_REGULATION_SET — com.byd.car.icebox
             1023 to 944767029,  // SET_STEERING_WHEEL_HEAT_STATE_SET — BYDAutoSettingDevice, unvalidated
@@ -87,6 +85,16 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
             // #311). Only 1 (on) and 2 (off) pass, see [RESTRICTED_VALUES]; the rest of the
             // charging device stays banned. Carve-out approved by the owner 2026-10-10.
             BATTERY_PREHEAT_DEV to BATTERY_PREHEAT_SET_FID,
+            // SETTING_ELECTRIC_TAIL_VOICE_SWITCH_ORDER_SET — the BYD voice assistant's spoiler
+            // command (autovoice ElectricTailApiImpl, #383). Only 1 (up) and 2 (down) pass, see
+            // [RESTRICTED_VALUES]. Carve-out approved by the owner 2026-11-14, unvalidated.
+            SPOILER_DEV to SPOILER_CMD_FID,
+            // SETTING_ELECTRIC_TAIL_AUTOMATIC_MODE_SET — the voice assistant's "automatic mode on"
+            // (SetElectricTailAutomaticModeSwitch(1), #383). The number is the one the catalogs of
+            // four Song L owners give for that name; the settings service's own table (dicarserver
+            // Setting.java) says 0x4C110046 for it, and that fid stays banned. Only 1 passes.
+            // Carve-out approved by the owner 2026-11-14, unvalidated.
+            SPOILER_DEV to SPOILER_AUTO_SET_FID,
         )
 
         /** Drive mode: written and read back on the Setting device (dev=1023). */
@@ -119,12 +127,35 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
         const val CHARGE_GUN_STATE_FID = 876609586
         /** CHARGING_CURRENT_BATTERY_HEATING_POWER (tx=5), raw; diagnostics only. */
         const val BATTERY_HEATING_POWER_FID = 584067131
-        /** HEV odometer (dev=1014, tx=5): 1048575 on a pure EV, a real number on a hybrid.
-         *  Stands in for the stock toggle's isEVCarType() check. */
-        const val HEV_MILEAGE_DEV = 1014
-        const val HEV_MILEAGE_FID = 1246773264
-        /** Fuel percent (dev=1014, tx=5), raw; diagnostics only. */
-        const val FUEL_PERCENT_FID = 1246785600
+
+        /** Electric spoiler (#383): commanded on the Setting device (dev=1023), 1 = up, 2 = down. */
+        const val SPOILER_DEV = 1023
+        const val SPOILER_CMD_FID = 1276182582
+        /** Automatic mode on: 1. The voice assistant has no "off": a raise/lower command leaves the mode. */
+        const val SPOILER_AUTO_SET_FID = 1276182596
+        /** Spoiler config (tx=5): 2 = an electric spoiler is fitted. */
+        const val SPOILER_CONFIG_FID = 1200619534
+        /** Spoiler status (tx=5): 2/5 opening/opened, 3/6 closing/closed, 4 anti-pinch. */
+        const val SPOILER_STATUS_FID = 1200619531
+        /** Spoiler position (tx=5), 0..100; above 10 is raised for the standstill guard. */
+        const val SPOILER_POSITION_FID = 1200619536
+        /**
+         * The car's own "not now" states (tx=5), read before the command as the BYD voice
+         * assistant does: repair mode (1 = on), the spoiler's warning (1 speed too high,
+         * 2 not initialised, 3 tailgate opening, 4 special mode) and motor protection (1 = on).
+         */
+        const val SPOILER_REPAIR_FID = 1200619598
+        const val SPOILER_WARNING_FID = 1200619557
+        const val SPOILER_THERMAL_FID = 1200619544
+        /**
+         * The spoiler's own mode (tx=5): 2 = automatic (the car raises it at speed), 1 = manual.
+         * The voice assistant tells the driver to say "raise/lower" to leave the automatic mode,
+         * so the command is expected to switch it to manual. The readback of "automatic mode on".
+         */
+        const val SPOILER_AUTO_MODE_FID = 1200619594
+        /** ADAS_DNP_STATE on the ADAS device (dev=1038): 4, 6 and 8 = the navigation pilot drives. */
+        const val SPOILER_PILOT_DEV = 1038
+        const val SPOILER_PILOT_FID = 700448800
 
         /**
          * Carve-outs that open only some values of their fid: an entry on such a fid must be a
@@ -135,6 +166,8 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
             (DRIVE_MODE_DEV to DRIVE_MODE_WRITE_FID) to DriveMode.entries.map { it.value }.toSet(),
             (HUD_DEV to HUD_SWITCH_FID) to setOf(1, 2),
             (BATTERY_PREHEAT_DEV to BATTERY_PREHEAT_SET_FID) to setOf(1, 2),
+            (SPOILER_DEV to SPOILER_CMD_FID) to setOf(1, 2),
+            (SPOILER_DEV to SPOILER_AUTO_SET_FID) to setOf(1),
         )
 
         /** False when [entry] sits on a [RESTRICTED_VALUES] fid with a value outside its set. */
@@ -394,12 +427,21 @@ class WriteAllowlist(private val map: Map<String, WriteEntry>) {
             // that a HUD is fitted and reads the status back itself.
             WriteEntry("hud_on",  1023, 1276174371, null, 1, 1, "hud", false, "byd-sdk carsetting HudSwitchModel + autovoice"),
             WriteEntry("hud_off", 1023, 1276174371, null, 2, 2, "hud", false, "byd-sdk carsetting HudSwitchModel + autovoice"),
+            // Spoiler up/down (#383) — dev=1023 carve-out, 1=up, 2=down. No readbackFid:
+            // [SpoilerChannel] checks that an electric spoiler is fitted and reads the status back itself.
+            WriteEntry("spoiler_up",   1023, 1276182582, null, 1, 1, "body", false, "byd-sdk autovoice ElectricTailApiImpl (#383)"),
+            WriteEntry("spoiler_down", 1023, 1276182582, null, 2, 2, "body", false, "byd-sdk autovoice ElectricTailApiImpl (#383)"),
+            WriteEntry("spoiler_auto_on", 1023, 1276182596, null, 1, 1, "body", false, "byd-sdk autovoice ElectricTailApiImpl (#383)"),
             // Battery warm-up (#311) — dev=1009 carve-out, 1=on, 2=off, the stock toggle's write.
             // No readbackFid: [BatteryPreheatChannel] runs the stock checks (function fitted, no
             // charge gun, the car's permit) and reads the status back itself. Not tried on a car:
             // the car refuses the warm-up on a warm battery.
             WriteEntry("battery_preheat_on",  1009, 1324617774, null, 1, 1, "energy", false, "byd-sdk carsetting ChargingPreheat"),
             WriteEntry("battery_preheat_off", 1009, 1324617774, null, 2, 2, "energy", false, "byd-sdk carsetting ChargingPreheat"),
+            // Rear logo light (#383) — dev=1004 carve-out, 1=on, 2=off. No readbackFid: like
+            // hazard, the state follows the write on CAN within ~2 s. Live-validated on Leopard 3 2026-11-06.
+            WriteEntry("rear_logo_light_on",  1004, 1324621876, null, 1, 1, "lights", true, "live-leopard3-2026-11-06"),
+            WriteEntry("rear_logo_light_off", 1004, 1324621876, null, 2, 2, "lights", true, "live-leopard3-2026-11-06"),
             WriteEntry("driver_seat_heat_fallback",    1001, 1125122068, null, 1, 6, "seats", false, "competitor-v80"),
             WriteEntry("driver_seat_vent_fallback",    1001, 1125122064, null, 1, 6, "seats", false, "competitor-v80"),
             WriteEntry("passenger_seat_heat_fallback", 1001, 1125122076, null, 1, 6, "seats", false, "competitor-v80"),

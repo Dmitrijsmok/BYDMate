@@ -35,6 +35,7 @@ object RuGoldenCorpus {
         is ParseResult.Ask -> "ASK:" + result.question.id
         ParseResult.Music -> "MUSIC"
         is ParseResult.Navigator -> "NAVIGATOR" + (result.app?.let { ":$it" } ?: "")
+        is ParseResult.Navigate -> (if (result.go) "NAVIGATE:" else "ROUTE:") + result.shortcut
         ParseResult.Unrecognized -> UNRECOGNIZED
     }
 

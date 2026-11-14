@@ -33,7 +33,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-// Robolectric so the real Intent/Uri built by the navigate/music/go_home branches
+// Robolectric so the real Intent/Uri built by the music/go_home branches
 // can be inspected; the daemon-launch tests still use only mocked collaborators.
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [29])
@@ -50,12 +50,7 @@ class ActionDispatcherLaunchTest {
         LocalePreferences(ApplicationProvider.getApplicationContext()).setLanguage("ru")
         every { context.packageManager } returns packageManager
         every { context.getSystemService(Context.NOTIFICATION_SERVICE) } returns notificationManager
-        dispatcher = ActionDispatcher(vehicleApi, helper, context,
-            dagger.Lazy { mockk<com.bydmate.app.voice.VoiceAutomationActions>(relaxed = true) },
-            mockk<ClusterVoiceControl>(relaxed = true),
-            mockk<com.bydmate.app.voice.AudioCapture>(relaxed = true),
-            mockk<com.bydmate.app.split.SplitSessionManager>(relaxed = true),
-            com.bydmate.app.util.AppStrings(ApplicationProvider.getApplicationContext()), dagger.Lazy { io.mockk.mockk(relaxed = true) })
+        dispatcher = testDispatcher(vehicleApi, helper, context, appStrings = com.bydmate.app.util.AppStrings(ApplicationProvider.getApplicationContext()))
     }
 
     private fun launchAction(pkg: String) = ActionDef(

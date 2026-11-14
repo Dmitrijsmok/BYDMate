@@ -1,5 +1,9 @@
 package com.bydmate.app.ui.settings
 
+import com.bydmate.app.data.autoservice.FidRegistry.TX_GET_FLOAT
+import com.bydmate.app.data.autoservice.FidRegistry.TX_GET_INT
+import com.bydmate.app.data.nativestack.FidMap
+import com.bydmate.app.data.nativestack.ResolvedFidTable
 import com.bydmate.app.data.vehicle.BatchReadItem
 
 /**
@@ -41,15 +45,28 @@ internal object HybridProbeDiagnostics {
      * [readings] (daemon unreachable, timeout, old daemon without batch support) or a length
      * mismatch collapses to a single "(unavailable)" line — same contract as the seats block.
      */
-    fun format(readings: List<Pair<Int, Int>>?): List<String> {
-        if (readings == null || readings.size != FIDS.size) return listOf("(unavailable)")
-        return FIDS.mapIndexed { i, f ->
-            val (status, value) = readings[i]
-            val rendered = if (status == 0) value.toString() else "(status=$status)"
-            "${f.name}[dev=${f.dev} fid=${f.fid} tx=${f.tx}]=$rendered"
-        }
+    fun format(readings: List<Pair<Int, Int>>?): List<String> =
+        FIDS.withReadings(readings)?.map { (f, reading) -> fidDumpRow(f.name, f.dev, f.fid, reading, f.tx) }
+            ?: listOf("(unavailable)")
+
+    /** The polled hybrid fields at the addresses [table] puts them on, in [FidMap.hybrid] order. */
+    fun tableItems(table: ResolvedFidTable): List<BatchReadItem> = FidMap.hybrid.map {
+        BatchReadItem(it.transact, table.device(it.field), table.fid(it.field))
     }
 
-    private const val TX_GET_INT = 5
-    private const val TX_GET_FLOAT = 7
+    /**
+     * The hybrid addresses in force (#394): one line per polled field with its resolution note
+     * (const, catalog, or rejected with the probe value and reason) and the raw word that
+     * address answers now, read through [tableItems]; no `now=` when the read failed.
+     */
+    fun formatTable(table: ResolvedFidTable, readings: List<Pair<Int, Int>>?): List<String> {
+        val notes = table.notes.associateBy { it.field }
+        val now = FidMap.hybrid.withReadings(readings)?.toMap()
+        return listOf("hybrid table: source=${table.source} ${table.summary()}") + FidMap.hybrid.map { entry ->
+            val address = table.address(entry.field)
+            val note = notes[entry.field]?.render() ?: "${entry.field} dev=${address.device} fid=${address.fid}"
+            val reading = now?.get(entry)?.let { (status, word) -> if (status == 0) " now=$word" else " now=(status=$status)" }
+            "  $note${reading.orEmpty()}"
+        }
+    }
 }

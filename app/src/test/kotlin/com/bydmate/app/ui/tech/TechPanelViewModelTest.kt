@@ -157,7 +157,7 @@ class TechPanelViewModelTest {
     ): TechPanelViewModel {
         val repo = mockk<BatteryStateRepository>()
         coEvery { repo.refresh() } returns (
-            battery ?: BatteryState(null, null, null, null, null, autoserviceAvailable = false)
+            battery ?: BatteryState(null, null, null, null, autoserviceAvailable = false)
             )
         val avgProvider = mockk<AvgSocProvider>()
         coEvery { avgProvider.compute(any()) } returns avg
@@ -195,7 +195,7 @@ class TechPanelViewModelTest {
     fun `online flag follows the live connection flag`() = runTest {
         val vm = buildViewModel(
             battery = BatteryState(
-                socNow = 43f, voltage12v = 13.9f, sohPercent = 99f,
+                socNow = 43f, sohPercent = 99f,
                 lifetimeKm = 3802f, lifetimeKwh = 1240f, autoserviceAvailable = true,
             ),
         )
@@ -216,7 +216,7 @@ class TechPanelViewModelTest {
     fun `battery state read on open fills SoH, lifetime and the online flag`() = runTest {
         val vm = buildViewModel(
             battery = BatteryState(
-                socNow = 43f, voltage12v = 13.9f, sohPercent = 99f,
+                socNow = 43f, sohPercent = 99f,
                 lifetimeKm = 3802f, lifetimeKwh = 1240f, autoserviceAvailable = true,
             ),
             avg = AvgSoc(sinceCharge = 52, allTime = 58),
@@ -402,6 +402,17 @@ class TechPanelViewModelTest {
         assertEquals("-370", rpmForDisplay(-370)?.toString())
         assertEquals("1200", rpmForDisplay(1200)?.toString())
         assertNull(rpmForDisplay(null))
+    }
+
+    /** #403: the car never reports the inverter below 30 (cold start at 4° outside, motors 8-11°,
+     *  inverters 30), so 30 means "30 or colder" and shows as a dash; 31+ is a real reading. */
+    @Test
+    fun `inverter temperature at the 30 degree floor shows as unknown`() {
+        assertNull(inverterTempForDisplay(30))
+        assertEquals(31, inverterTempForDisplay(31))
+        assertEquals(37, inverterTempForDisplay(37))
+        assertEquals(25, inverterTempForDisplay(25))
+        assertNull(inverterTempForDisplay(null))
     }
 
     /** Measured on the car: the split follows the two motor currents on a shared bus. */
@@ -607,15 +618,14 @@ class TechPanelViewModelTest {
     }
 
     @Test
-    fun `car-state card shows from tyres alone`() = runTest {
-        val state = openWith(noData.copy(tirePressFL = 245))
-        assertTrue(state.isVisible(TechCard.CAR_STATE))
-    }
-
-    @Test
-    fun `car-state card shows from climate alone`() = runTest {
-        val state = openWith(noData.copy(insideTemp = 22))
-        assertTrue(state.isVisible(TechCard.CAR_STATE))
+    fun `car-state card shows from tyres alone or climate alone`() = runTest {
+        val cases = listOf(
+            "tyres alone" to noData.copy(tirePressFL = 245),
+            "climate alone" to noData.copy(insideTemp = 22),
+        )
+        for ((label, data) in cases) {
+            assertTrue("case: $label", openWith(data).isVisible(TechCard.CAR_STATE))
+        }
     }
 
     @Test

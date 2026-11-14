@@ -1,13 +1,10 @@
 package com.bydmate.app.agent
 
 import android.content.Context
-import com.bydmate.app.cluster.ClusterVoiceControl
-import com.bydmate.app.data.automation.ActionDispatcher
 import com.bydmate.app.data.automation.AutomationEngine
 import com.bydmate.app.data.local.dao.ChargeDao
 import com.bydmate.app.data.local.dao.RuleDao
 import com.bydmate.app.data.local.dao.TripDao
-import com.bydmate.app.data.remote.InsightsManager
 import com.bydmate.app.data.remote.OpenRouterClient
 import com.bydmate.app.data.repository.PlaceRepository
 import com.bydmate.app.data.repository.SettingsRepository
@@ -36,16 +33,21 @@ class AgentToolsStateExtrasTest {
     private val range = mockk<RangeCalculator>()
     private val context = mockk<Context>(relaxed = true)
 
-    private fun tools() = AgentTools(
-        gate, battery, range, mockk<TripDao>(), mockk<ChargeDao>(),
-        mockk<ActionDispatcher>(relaxed = true), mockk<RuleDao>(), mockk<AutomationEngine>(),
-        mockk<PlaceRepository>(), mockk<WeatherClient>(), mockk<ExaSearchClient>(),
-        mockk<OpenRouterClient>(), mockk<SettingsRepository>(), mockk<ContactLookup>(), context,
-        mockk<ClusterVoiceControl>(relaxed = true),
-        mockk<ChargerSearchClient>(relaxed = true),
-        mockk<InsightsManager>(relaxed = true),
-        mockk<ZaiSearchClient>(relaxed = true),
-        mockk<LlmConnectionResolver>(relaxed = true),
+    private fun tools() = agentTools(
+        gate = gate,
+        batteryStateRepository = battery,
+        rangeCalculator = range,
+        tripDao = mockk<TripDao>(),
+        chargeDao = mockk<ChargeDao>(),
+        ruleDao = mockk<RuleDao>(),
+        automationEngine = mockk<AutomationEngine>(),
+        placeRepository = mockk<PlaceRepository>(),
+        weatherClient = mockk<WeatherClient>(),
+        exaSearchClient = mockk<ExaSearchClient>(),
+        openRouterClient = mockk<OpenRouterClient>(),
+        settingsRepository = mockk<SettingsRepository>(),
+        contactLookup = mockk<ContactLookup>(),
+        context = context,
     )
 
     private suspend fun state(data: com.bydmate.app.data.remote.DiParsData): JSONObject {
@@ -76,9 +78,11 @@ class AgentToolsStateExtrasTest {
     }
 
     @Test fun bms_limits_reach_the_model() = runTest {
-        val out = state(snapshot().copy(bmsMaxChargeKw = 88.5, bmsMaxDischargeKw = 210))
+        val out = state(snapshot().copy(bmsMaxChargeKw = 88.5, bmsMaxDischargeKw = 164))
         assertEquals(88.5, out.getDouble("bms_max_charge_kw"), 0.01)
-        assertEquals(210, out.getInt("bms_max_discharge_kw"))
+        // #402: STATISTIC_BATTERY_AVAILABLE_POWER is the pack's current nominal capacity in Ah (scanner match).
+        assertEquals(164, out.getInt("battery_capacity_ah"))
+        assertFalse(out.has("bms_max_discharge_kw"))
     }
 
     @Test fun tyre_temperatures_reach_the_model() = runTest {

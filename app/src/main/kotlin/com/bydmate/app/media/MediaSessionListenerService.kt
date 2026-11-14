@@ -1,6 +1,10 @@
 package com.bydmate.app.media
 
 import android.app.Notification
+import android.content.ComponentName
+import android.content.Context
+import android.media.session.MediaController
+import android.media.session.MediaSessionManager
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
@@ -24,6 +28,14 @@ class MediaSessionListenerService : NotificationListenerService() {
     companion object {
         private const val TAG = "MediaSessionListener"
 
+        /** The active MediaSessions in the system's priority order, asked through this listener's
+         *  component (job 1 above); empty when the call fails (access not granted). */
+        fun activeControllers(context: Context): List<MediaController> = runCatching {
+            val msm = context.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
+            val component = ComponentName(context, MediaSessionListenerService::class.java)
+            msm.getActiveSessions(component)
+        }.getOrElse { emptyList() }
+
         /** Bound and connected right now, process-wide (#325): approval alone does not mean the
          *  framework bound us. Same signal as SteeringWheelKeyService.isConnected. */
         @Volatile
@@ -45,8 +57,11 @@ class MediaSessionListenerService : NotificationListenerService() {
 
     /** Where the unknown-maneuver lines go; logcat in production, a collector in tests. */
     internal var unknownManeuverSink: (String) -> Unit = { Log.i(TAG, it) }
+    internal var emptyShapeSink: (String) -> Unit = { Log.i(TAG, it) }
     // Maneuver icon names this lane could not map, a line per name per 5 min (lane thread).
     private val unknownManeuvers = UnknownManeuverGate(UnknownManeuverGate.MIN_INTERVAL_MS)
+    /** One shape line per outcome kind per 5 min (#301). */
+    private val emptyShapes = UnknownManeuverGate(UnknownManeuverGate.MIN_INTERVAL_MS)
 
     /** Where the notification trace goes (issue #199); logcat in production, a collector in tests. */
     internal var naviNotifSink: (String) -> Unit = { Log.i(TAG, it) }
@@ -186,6 +201,7 @@ class MediaSessionListenerService : NotificationListenerService() {
             if (!NaviRichNotificationParser.hasNaviSignal(rich)) {
                 Log.d(TAG, "rich parse: stub notification, skipped")
                 tracePost(notification, pkg, id, "stub", null)
+                logEmptyShape("stub $pkg", notification, resolver)
                 NavGuidanceHub.countNotifEmpty()
                 return
             }
@@ -209,6 +225,7 @@ class MediaSessionListenerService : NotificationListenerService() {
             hubHasKnownManeuver = hubHasKnownManeuver,
         ) ?: run {
             tracePost(notification, pkg, id, "empty", null)
+            logEmptyShape("empty $pkg", notification, resolver)
             NavGuidanceHub.countNotifEmpty()
             return
         }
@@ -218,6 +235,21 @@ class MediaSessionListenerService : NotificationListenerService() {
         // Maps drops its own maneuver while the hub knows one (rule R2-1): that 0 is not unknown.
         if (!(isMaps && hubHasKnownManeuver)) {
             logUnknownManeuver(update, "notification extras", "icon=${UnknownManeuverGate.quote(iconName)}")
+        }
+    }
+
+    /** Field diagnostics (#301): what a notification without guidance carries, lengths instead of texts. */
+    private fun logEmptyShape(kind: String, n: Notification, resolver: (Int) -> String?) {
+        if (!emptyShapes.take(kind, System.currentTimeMillis())) return
+        runCatching {
+            val e = n.extras
+            emptyShapeSink(NaviNotificationShape.line(
+                kind, e.keySet(),
+                e.getCharSequence(Notification.EXTRA_TITLE)?.toString(),
+                e.getCharSequence(Notification.EXTRA_TEXT)?.toString(),
+                e.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString(),
+                NaviNotificationParser.views(n, resolver),
+            ))
         }
     }
 

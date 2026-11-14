@@ -53,7 +53,6 @@ class TelegramReporterLocationTest {
             keys.mapNotNull { k -> map[k]?.let { SettingEntity(k, it) } }
         override suspend fun set(setting: SettingEntity) { map[setting.key] = setting.value ?: "" }
         override suspend fun setAll(settings: List<SettingEntity>) { settings.forEach { set(it) } }
-        override fun getAll(): Flow<List<SettingEntity>> = flowOf(emptyList())
     }
 
     private val ctx: Context get() = ApplicationProvider.getApplicationContext()
@@ -146,10 +145,11 @@ class TelegramReporterLocationTest {
     }
 
     @Test fun `a report that did not go out sends no point, the queued one gets it once it goes out`() = runBlocking {
-        messageAnswers += MockResponse().setResponseCode(502)
+        // The refused one first: a fresh report now waits behind a queued one, so the order matters.
         messageAnswers += refused(403)
-        assertEquals(TelegramReporter.SendResult.Queued, report())
+        messageAnswers += MockResponse().setResponseCode(502)
         assertEquals(TelegramReporter.SendResult.Failed("HTTP:403"), report())
+        assertEquals(TelegramReporter.SendResult.Queued, report())
         assertEquals(1, reporter.outboxSize())
         reporter.drainOutbox("network")
         assertEquals(listOf("sendMessage", "sendMessage", "sendMessage", "sendLocation"), calls().map(::method))

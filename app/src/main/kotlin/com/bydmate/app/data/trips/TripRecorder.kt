@@ -2,6 +2,7 @@ package com.bydmate.app.data.trips
 
 import com.bydmate.app.data.local.EnergyDataDeadDetector
 import com.bydmate.app.data.local.EnergyDataReader
+import com.bydmate.app.data.local.TripEnergySanity
 import com.bydmate.app.data.local.dao.LastStateDao
 import com.bydmate.app.data.local.dao.TripDao
 import com.bydmate.app.data.local.entity.LastStateEntity
@@ -117,17 +118,24 @@ class TripRecorder @Inject @Suppress("LongParameterList") constructor( // inject
      * BMS lifetime-consumption counter (0.1 kWh granularity) beats the integer SOC
      * delta (1% SOC = ~0.7 kWh quantum — issue #53: dashes on short trips, inflated
      * per-100km on others). Negative/zero delta (counter reset or unsupported fid)
-     * falls back to the SOC estimate. A DM-i hybrid gets no SOC estimate: the engine charges
+     * falls back to the SOC estimate, and so does a delta no drive can reach: after a 12 V
+     * power cut the counter can come back as a jump of the whole lifetime figure (#428,
+     * 54300 kWh on a 0,2 km trip). Only the absolute ceiling applies here, never the per-100
+     * one: hours parked with the heater on before a short drive are an honest high figure.
+     * A DM-i hybrid gets no SOC estimate: the engine charges
      * the pack on the way, so a SOC delta is not what the trip drew (null instead).
      */
     private fun computeKwh(startElec: Double?, endElec: Double?, startSoc: Int?, endSoc: Int?, cap: Double): Double? {
         if (startElec != null && endElec != null) {
             val elecDelta = endElec - startElec
-            if (elecDelta > 0) return elecDelta
+            if (elecDelta > 0) {
+                if (TripEnergySanity.isPlausible(elecDelta, tripKm = null)) return elecDelta
+                Log.w(TAG, "trip kwh implausible: elec=$startElec/$endElec delta=$elecDelta " +
+                    "soc=$startSoc->$endSoc -> SOC estimate")
+            }
         }
         if (kind() == VehicleKind.HYBRID) return null
-        val socDelta = (startSoc ?: 0) - (endSoc ?: 0)
-        return if (socDelta > 0) socDelta / 100.0 * cap else null
+        return TripEnergySanity.socEstimate(startSoc, endSoc, cap)
     }
 
     /**
@@ -185,13 +193,16 @@ class TripRecorder @Inject @Suppress("LongParameterList") constructor( // inject
 
     private suspend fun close(open: Open, end: DiParsData) {
         val cap = batteryCapacityKwh()
-        val kwh = computeKwh(open.startTotalElec, end.totalElecConsumption, open.startSoc, end.soc, cap)
-        val distance = plausibleDistance(open.startMileage, end.mileage)
-        val per100 = if (kwh != null && distance != null && distance > 0) kwh / distance * 100.0 else null
-        val (odoStart, odoEnd) = odometerPair(open.startMileage, end.mileage)
         // The end edge is one ON tick, whose time is also the trip's endTs: the confirming tick
         // comes OFF_AFTER_MS later, with the car off and its counters no longer the trip's.
         val edgeMs = endEdge.tickMs?.takeIf { it >= open.startTs }
+        // DM-i: the confirming tick may carry no BMS counter any more; the edge's one is the trip's.
+        val edgeElec = if (kind() == VehicleKind.HYBRID) edgeMs?.let { endEdge.totalElecConsumption } else null
+        val endElec = end.totalElecConsumption ?: edgeElec
+        val kwh = computeKwh(open.startTotalElec, endElec, open.startSoc, end.soc, cap)
+        val distance = plausibleDistance(open.startMileage, end.mileage)
+        val per100 = if (kwh != null && distance != null && distance > 0) kwh / distance * 100.0 else null
+        val (odoStart, odoEnd) = odometerPair(open.startMileage, end.mileage)
         val fuel = fuelColumns(
             open.startFuelTotal, edgeMs?.let { endEdge.fuelTotalL },
             open.startMileageHev, edgeMs?.let { endEdge.mileageHevKm }, distance,
@@ -226,7 +237,8 @@ class TripRecorder @Inject @Suppress("LongParameterList") constructor( // inject
         )
         if (kind() == VehicleKind.HYBRID) {
             Log.i(TAG, "trip close fuel: l=${fuel.fuelLiters} hev=${fuel.hevKm} " +
-                "total=${fuel.fuelTotalStart}/${fuel.fuelTotalEnd} hevOdo=${fuel.mileageHevStart}/${fuel.mileageHevEnd}")
+                "total=${fuel.fuelTotalStart}/${fuel.fuelTotalEnd} hevOdo=${fuel.mileageHevStart}/${fuel.mileageHevEnd} " +
+                "elec=${open.startTotalElec}/$endElec closeElec=${end.totalElecConsumption}")
         }
         Log.i(TAG, "trip close: km=$distance kwh=$kwh " +
             "ext_temp=${open.startExteriorTemp}/${end.exteriorTemp} odo=$odoStart/$odoEnd")

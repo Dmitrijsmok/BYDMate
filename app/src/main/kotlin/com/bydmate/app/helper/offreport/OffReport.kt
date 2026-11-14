@@ -3,6 +3,7 @@ package com.bydmate.app.helper.offreport
 import android.os.SystemClock
 import android.util.Log
 import com.bydmate.app.data.telegram.TelegramReportBuilder
+import com.bydmate.app.helper.describeRootCause
 import com.bydmate.app.helper.push.FID_PUSH_DEVICE_CLASSES
 import com.bydmate.app.helper.push.FID_PUSH_OK
 import com.bydmate.app.helper.push.FID_PUSH_SENT
@@ -92,9 +93,13 @@ internal object OffReport {
     const val PENDING_CONNECT_MS = 3_000
     const val PENDING_READ_MS = 5_000
 
-    /** After a pass that met no network, arms do not start another one for this long (doubling). */
+    /**
+     * After a pass that met no network, arms do not start another one for this long (doubling). The
+     * cap stays under the app's hold ([com.bydmate.app.data.telegram.TelegramReporter.POWER_OFF_FIRST_CAP_MS]),
+     * so a network that comes back mid-drive is noticed while the app's reports still wait (#413).
+     */
     const val PENDING_BACKOFF_FIRST_MS = 30_000L
-    const val PENDING_BACKOFF_MAX_MS = 15 * 60_000L
+    const val PENDING_BACKOFF_MAX_MS = 4 * 60_000L
 
     private const val PENDING_DIR = "/data/local/tmp/bydm_d3_offreport" // fork: isolated from an upstream install
     private const val TELEGRAM_HOST = "api.telegram.org"
@@ -569,7 +574,7 @@ internal object OffReport {
     private fun registerPending() {
         val missing = synchronized(lock) { registrations.filterValues { !isLive(it) }.keys.toList() }
         for ((dev, fid) in POWER_FIDS.filter { it.second in missing }) {
-            val outcome = runCatching { registrar(dev, fid, sink) }.getOrElse { describe(it) }
+            val outcome = runCatching { registrar(dev, fid, sink) }.getOrElse { describeRootCause(it) }
             val before = synchronized(lock) { registrations.put(fid, outcome) }
             // One line per change: a fid this firmware lacks is retried for the daemon's life.
             if (before != outcome) Log.i(TAG, "offreport: listen dev=$dev fid=$fid -> $outcome")
@@ -658,11 +663,6 @@ internal object OffReport {
         }
         handle.register.invoke(handle.device, handle.listener, intArrayOf(fid))
         return confirmRegistration(handle.device, fid)
-    }
-
-    private fun describe(t: Throwable): String {
-        val root = generateSequence(t) { it.cause }.last()
-        return "${root.javaClass.simpleName}: ${root.message ?: "(no message)"}"
     }
 
     /**
