@@ -1,6 +1,6 @@
 === BYDMate diagnostic dump ===
 timestamp: <now>
-app: com.bydmate.app v<version> (code=<code>)
+app: com.bydmate.dilink3.app v<version> (code=<code>)
 device: unknown robolectric
 android: 10 (SDK 29)
 fingerprint: robolectric
@@ -12,6 +12,7 @@ data_source: ENERGYDATA
 battery_capacity: raw="72,9" parsed=72.9
 abrp_enabled: true token_len=8 car_model="byd:leopard3" send_location=false
 route_navigator=dgis
+route_navigator_package= resolved=
 adb_restore=false/Unsupported trigger=none retries=0 write_secure_settings=false
 cloud_over_wifi: fixed
 adb_verdict: (none)
@@ -29,6 +30,9 @@ journal:
 (no poll yet)
 --- car status ---
 read: unavailable reason=null cursor
+--- alice bridge ---
+polling=false endpoint_set=false key_len=0 vehicle_control=false navigation=false
+poll_age=- poll_error=- state_age=- insideTemp=null acTemp=null exteriorTemp=null state_http=- state_error=- last_command=- age_source=- command_age=- clock_skew=- expired=0
 --- hybrid probe ---
 engine_rpm[dev=1012 fid=339738642 tx=5]=0
 engine_power[dev=1012 fid=339738656 tx=5]=1
@@ -154,6 +158,22 @@ com.byd.autovoice: not installed
 com.byd.autovoice.engine: not installed
 com.byd.autovoice.tts: not installed
 com.byd.vrassistant: not installed
+--- contacts ---
+permission: denied
+com.byd.bluetoothcall providers: not installed
+phonebook-like providers: error NullPointerException
+probe content://com.android.bluetooth.contactprovider: unresolved null cursor
+probe content://com.android.bluetooth.contactprovider/contacts: unresolved null cursor
+probe content://com.android.bluetooth.contactprovider/phonebook: unresolved null cursor
+probe content://com.android.bluetooth.contactprovider/pb: unresolved null cursor
+probe content://com.android.bluetooth.contactprovider/calllog: unresolved null cursor
+my_contacts: 0 aliases=0
+--- mic & keys ---
+key_filter_services: 0 -
+recordings_local: 0 -
+recorders_daemon: (none)
+--- voice zone probe ---
+(no voice-looking keys)
 --- helper daemon ---
 alive: true
 hud_navi_gate:
@@ -223,7 +243,7 @@ left: -> hidden not in catalog
 right: -> hidden not in catalog
 --- fid resolve ---
 catalog: source=constants symbols=0 devices=0
-resolved: 122 const, 0 catalog, 0 rejected, 0 no-symbol
+resolved: 123 const, 0 catalog, 0 rejected, 0 no-symbol
 (every entry on its constant)
 --- auto backup ---
 period: daily
@@ -245,6 +265,7 @@ daemon: state=IDLE done=0/0 reason=-
 --- last crash ---
 (none)
 --- trace ---
-(none)
+-- <day> --
+<time> user   navigator-select value=dgis #1
 ===============================
 

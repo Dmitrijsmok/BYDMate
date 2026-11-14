@@ -1573,6 +1573,8 @@ class SettingsViewModelTest {
         // The header prints process-wide state that another test class in the same JVM may have left behind:
         // the self-heal history and the live state of the cluster projection object. Both start as on a cold start.
         com.bydmate.app.service.GrantSelfHeal.clearHistory()
+        // Key counters are process-wide too: the steering-key tests leave presses behind.
+        com.bydmate.app.cluster.SteeringWheelKeyService.keyCounters.reset()
         io.mockk.mockkObject(com.bydmate.app.cluster.ClusterProjectionManager)
         io.mockk.every { com.bydmate.app.cluster.ClusterProjectionManager.diag() } returns
             com.bydmate.app.cluster.ClusterProjectionManager.Diag(
@@ -1621,10 +1623,12 @@ class SettingsViewModelTest {
                 .replace(Regex("(?m)^timestamp: \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$"), "timestamp: <now>")
                 // app: the version name and code move with every release.
                 .replace(Regex("(?m)^(app: \\S+) v\\S+ \\(code=\\d+\\)$"), "$1 v<version> (code=<code>)")
+                // trace: the day and time of the events the set-up itself makes (navigator-select).
+                .replace(Regex("(?m)^-- \\d{4}-\\d{2}-\\d{2} --$"), "-- <day> --")
+                .replace(Regex("(?m)^\\d{2}:\\d{2}:\\d{2}\\.\\d{3} "), "<time> ")
             val reference = javaClass.getResourceAsStream("/diagnostic-dump/reference-header.txt")!!
                 .bufferedReader().use { it.readText() }
-            // TEMPORARY (PR #18): print the actual header to regenerate the reference.
-            if (reference != normalized) throw AssertionError("ACTUAL_HEADER_BEGIN\n$normalized\nACTUAL_HEADER_END")
+            assertEquals(reference, normalized)
         } finally {
             java.util.TimeZone.setDefault(zone)
             io.mockk.unmockkObject(com.bydmate.app.cluster.ClusterProjectionManager)

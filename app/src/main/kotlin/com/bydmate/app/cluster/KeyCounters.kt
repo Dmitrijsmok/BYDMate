@@ -38,6 +38,17 @@ class KeyCounters(private val maxCodes: Int = MAX_CODES) {
         passed++
     }
 
+    /** Back to a fresh process, for tests that share the JVM with key-service tests. */
+    @Synchronized
+    internal fun reset() {
+        received = 0
+        matched = 0
+        passed = 0
+        text = 0
+        otherCodes = 0
+        byCode.clear()
+    }
+
     @Synchronized
     fun line(): String {
         val codes = byCode.entries.map { "${it.key}:${it.value}" }.toMutableList()
