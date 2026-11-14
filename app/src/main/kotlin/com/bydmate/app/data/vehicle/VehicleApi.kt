@@ -18,15 +18,16 @@ interface VehicleApi {
     suspend fun isAvailable(): Boolean
     suspend fun readBatterySnapshot(): BatteryReading?
 
-    // Side window positions and percent writes: the Alice bridge's aperture control (fork).
-    suspend fun readWindowDriver(): Int?
-    suspend fun readWindowPassenger(): Int?
-    suspend fun readWindowRearLeft(): Int?
-    suspend fun readWindowRearRight(): Int?
-    suspend fun writeWindowDriver(percent: Int): Result<Unit>    // range 0..100
-    suspend fun writeWindowPassenger(percent: Int): Result<Unit> // range 0..100
-    suspend fun writeWindowRearLeft(percent: Int): Result<Unit>  // range 0..100
-    suspend fun writeWindowRearRight(percent: Int): Result<Unit> // range 0..100
+    // Side window positions and percent writes (0..100): the Alice bridge's aperture control (fork).
+    // Defaults for fakes that never touch a window: no reading, every write unsupported.
+    suspend fun readWindowDriver(): Int? = null
+    suspend fun readWindowPassenger(): Int? = null
+    suspend fun readWindowRearLeft(): Int? = null
+    suspend fun readWindowRearRight(): Int? = null
+    suspend fun writeWindowDriver(percent: Int): Result<Unit> = windowUnsupported()
+    suspend fun writeWindowPassenger(percent: Int): Result<Unit> = windowUnsupported()
+    suspend fun writeWindowRearLeft(percent: Int): Result<Unit> = windowUnsupported()
+    suspend fun writeWindowRearRight(percent: Int): Result<Unit> = windowUnsupported()
 
     // Write entrypoint, wired to WriteAllowlist + HelperClient (Group C).
     // Failure reason available via Result.exceptionOrNull() as VehicleWriteError.
@@ -39,6 +40,8 @@ interface VehicleApi {
      */
     suspend fun driveWindow(pane: WindowPane, percent: Int): Result<Unit> =
         Result.failure(VehicleWriteError.Unsupported("window_step"))
+
+    private fun windowUnsupported(): Result<Unit> = Result.failure(VehicleWriteError.Unsupported("window_percent"))
 
     /** Rear seats whose heat this car has (#327). */
     suspend fun rearSeatHeatSides(): Set<RearSeat> = emptySet()

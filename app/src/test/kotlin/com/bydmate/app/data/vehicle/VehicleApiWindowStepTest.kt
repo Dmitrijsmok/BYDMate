@@ -2,7 +2,6 @@ package com.bydmate.app.data.vehicle
 
 import com.bydmate.app.data.autoservice.AutoserviceClient
 import com.bydmate.app.data.local.dao.VehicleWriteLogDao
-import com.bydmate.app.data.nativestack.ParsReader
 import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
@@ -86,7 +85,7 @@ class VehicleApiWindowStepTest {
             (WriteAllowlist.LIVE_VALIDATED + WriteAllowlist.CANDIDATE_UNVALIDATED).associateBy { it.actionName.lowercase() },
         )
         return VehicleApiImpl(
-            mockk<ParsReader>(relaxed = true), autoservice, helper, allowlist, mockk<VehicleWriteLogDao>(relaxed = true),
+            autoservice, helper, allowlist, mockk<VehicleWriteLogDao>(relaxed = true),
             seatStore, store, legacyHeadUnit = legacy,
         ).also { it.readbackScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined) }
     }
