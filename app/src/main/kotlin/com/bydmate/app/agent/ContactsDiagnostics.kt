@@ -41,16 +41,37 @@ object ContactsDiagnostics {
         "content://com.android.bluetooth.contactprovider/calllog",
     )
 
-    private fun probe(context: Context, uri: Uri): String = runCatching {
-        val perm = context.packageManager.resolveContentProvider(uri.authority.orEmpty(), 0)
-            ?.let { "read=${it.readPermission ?: "-"}" } ?: "unresolved"
-        val result = context.contentResolver.query(uri, null, null, null, null)?.use { c ->
-            "rows=${c.count} columns=${c.columnNames.joinToString(",")}"
-        } ?: "null cursor"
-        "$perm $result"
-    }.getOrElse { "error ${it.javaClass.simpleName}: ${it.message?.take(MAX_ERROR_CHARS)}" }
+    /** The provider's declared read permission, then what a query answers. The declared permission
+     *  is resolved on its own, so a query refused with a SecurityException still names it. */
+    private fun probe(context: Context, uri: Uri): String {
+        val declared = runCatching {
+            context.packageManager.resolveContentProvider(uri.authority.orEmpty(), 0)
+        }.fold(
+            onSuccess = { info -> info?.let { "read=${it.readPermission ?: "-"}" } ?: "unresolved" },
+            onFailure = { "resolve-error ${it.javaClass.simpleName}" },
+        )
+        return runCatching {
+            val result = context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                "rows=${c.count} columns=${c.columnNames.joinToString(",")}"
+            } ?: "null cursor"
+            "$declared $result"
+        }.getOrElse { "$declared ${failureText(it)}" }
+    }
+
+    /**
+     * A refused query, for the dump: the permission a SecurityException asks for sits at the tail of
+     * its message, past the [MAX_ERROR_CHARS] cut (1.1.9 dump: "...uid=10125 requi"), so it is pulled
+     * out first. Pure.
+     */
+    internal fun failureText(t: Throwable): String {
+        val message = t.message.orEmpty()
+        val requires = REQUIRED_PERMISSION_IN_ERROR.find(message)?.groupValues?.get(1)
+        return "error ${t.javaClass.simpleName}" + (requires?.let { " requires=$it" } ?: "") +
+            ": ${message.take(MAX_ERROR_CHARS)}"
+    }
 
     private const val MAX_ERROR_CHARS = 160
+    private val REQUIRED_PERMISSION_IN_ERROR = Regex("requires\\s+([\\w.]+)")
 
     private fun count(context: Context, uri: Uri): String = runCatching {
         context.contentResolver.query(uri, arrayOf("_id"), null, null, null)?.use { it.count.toString() }
