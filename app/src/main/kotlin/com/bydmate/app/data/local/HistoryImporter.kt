@@ -18,6 +18,7 @@ import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.data.repository.TripRepository
 import com.bydmate.app.data.trips.CounterSnapshotWriter
 import com.bydmate.app.data.trips.TripFuel
+import com.bydmate.app.data.trips.TripSource
 import com.bydmate.app.domain.cost.CostCalculator
 import com.bydmate.app.service.TrackingService
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -49,9 +50,6 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
         private const val TAG = "HistoryImporter"
         private const val MIN_TRIP_DURATION_SEC = 30L
         private const val DEDUP_WINDOW_MS = 300_000L // ±5 min for time-based dedup
-        // Mirror of TrackingService.SESSION_IDLE_CLOSE_MS — the idle gap after which an
-        // open SOC session is considered finished and promotable to a completed bookmark.
-        private const val PENDING_SESSION_IDLE_CLOSE_MS = 10_000L
 
         /**
          * An energydata row starting later than now + this is from the future (head unit clock
@@ -175,7 +173,7 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
         // promoted, write socStart/socEnd=null, and the watermark below would lock that loss
         // in forever. Reconcile here so every import path promotes the stale pending first.
         lastSessionRepository.reconcileStaleOpenSession(
-            System.currentTimeMillis(), PENDING_SESSION_IDLE_CLOSE_MS)
+            System.currentTimeMillis(), TrackingService.SESSION_IDLE_CLOSE_MS)
 
         val lastImportTs = settingsRepository.getLastEnergyImportTs()
         // Until recycling is known the whole source is read: the records it hid already sit below
@@ -263,7 +261,7 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
                 if (kwh != byd.electricityKwh) implausibleKwh++
                 val per100 = TripEnergySanity.per100For(kwh, byd.tripKm)
                 tripRepository.updateTrip(existingByTime.copy(
-                    source = "energydata",
+                    source = TripSource.ENERGYDATA,
                     bydId = byd.id,
                     distanceKm = byd.tripKm,
                     kwhConsumed = kwh,
@@ -344,7 +342,7 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
                     exteriorTempEnd = tempEnd,
                     odometerStartKm = odo.startKm,
                     odometerEndKm = odo.finishKm,
-                    source = "energydata",
+                    source = TripSource.ENERGYDATA,
                     bydId = byd.id
                 )
             )
@@ -483,10 +481,14 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
      * kWh value becomes the SOC-delta estimate, or is cleared when SOC is unknown. Cost is
      * dropped so calculateMissingCosts() recomputes it. Idle drains keep their parking window
      * (the hours statistics live off the timestamps) and only lose the impossible kWh.
-     * Runs once, sets the sanity flag.
+     * Two passes, each run once under its own flag: BYD's own records with the full bound, and
+     * the trips TripRecorder stored before it had the absolute ceiling (#428), with that ceiling
+     * only, as TripRecorder applies it.
      */
     suspend fun repairImplausibleKwh(): Int {
-        if (settingsRepository.isEnergyKwhSanityDone()) return 0
+        val energyPending = !settingsRepository.isEnergyKwhSanityDone()
+        val nativePending = !settingsRepository.isNativeKwhSanityDone()
+        if (!energyPending && !nativePending) return 0
 
         return try {
             val allTrips = tripDao.getAllSnapshot()
@@ -495,13 +497,15 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
             var examined = 0
 
             for (trip in allTrips) {
-                // Only BYD's own records: a NATIVE_POLLING trip carries TripRecorder's own
-                // counter delta, which this bound knows nothing about.
-                if (trip.source != "energydata") continue
+                // A NATIVE_POLLING trip carries TripRecorder's own counter delta: the per-100
+                // rule is not for it (km = null leaves the absolute ceiling only).
+                val native = trip.source == TripSource.NATIVE_POLLING
+                val pending = if (native) nativePending else trip.source == TripSource.ENERGYDATA && energyPending
+                if (!pending) continue
                 examined++
                 val raw = trip.kwhConsumed ?: continue
                 val sane = saneKwh(
-                    trip.bydId, raw, trip.distanceKm, trip.socStart, trip.socEnd, capacity)
+                    trip.bydId, raw, trip.distanceKm.takeUnless { native }, trip.socStart, trip.socEnd, capacity)
                 if (sane == raw) continue
                 tripRepository.updateTrip(trip.copy(
                     kwhConsumed = sane,
@@ -511,22 +515,29 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
                 repaired++
             }
 
-            var repairedIdle = 0
-            for (drain in idleDrainDao.getAll()) {
-                val raw = drain.kwhConsumed ?: continue
-                if (TripEnergySanity.isPlausible(raw, 0.0)) continue
-                Log.w(TAG, "energydata kwh implausible: id=${drain.id} kwh=$raw km=0 -> cleared (idle)")
-                idleDrainDao.update(drain.copy(kwhConsumed = null))
-                repairedIdle++
-            }
-
-            settingsRepository.setEnergyKwhSanityDone()
-            Log.i(TAG, "energydata kwh sanity: repaired $repaired/$examined trips, $repairedIdle idle")
+            val repairedIdle = if (energyPending) clearImplausibleIdleKwh() else 0
+            if (energyPending) settingsRepository.setEnergyKwhSanityDone()
+            if (nativePending) settingsRepository.setNativeKwhSanityDone()
+            Log.i(TAG, "kwh sanity (energydata=$energyPending native=$nativePending): " +
+                "repaired $repaired/$examined trips, $repairedIdle idle")
             repaired
         } catch (e: Exception) {
             Log.e(TAG, "energydata kwh sanity failed", e)
             0
         }
+    }
+
+    /** Idle drains keep their parking window and only lose an impossible kWh. */
+    private suspend fun clearImplausibleIdleKwh(): Int {
+        var cleared = 0
+        for (drain in idleDrainDao.getAll()) {
+            val raw = drain.kwhConsumed ?: continue
+            if (TripEnergySanity.isPlausible(raw, 0.0)) continue
+            Log.w(TAG, "energydata kwh implausible: id=${drain.id} kwh=$raw km=0 -> cleared (idle)")
+            idleDrainDao.update(drain.copy(kwhConsumed = null))
+            cleared++
+        }
+        return cleared
     }
 
     /**
@@ -540,7 +551,7 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
             val since = marks.minOfOrNull { it.processStartTs } ?: return
             var filled = 0
             val candidates = tripDao.getAllSnapshot().filter {
-                it.source == "energydata" && (it.endTs ?: 0L) >= since &&
+                it.source == TripSource.ENERGYDATA && (it.endTs ?: 0L) >= since &&
                     it.odometerStartKm == null && it.odometerEndKm == null
             }
             for (trip in candidates) {
@@ -674,7 +685,7 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
                         match.socStart, match.socEnd, capacity)
                     val per100 = TripEnergySanity.per100For(kwh, byd.tripKm)
                     tripRepository.updateTrip(match.copy(
-                        source = "energydata",
+                        source = TripSource.ENERGYDATA,
                         bydId = byd.id,
                         distanceKm = byd.tripKm,
                         kwhConsumed = kwh,
@@ -693,7 +704,7 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
                         distanceKm = byd.tripKm,
                         kwhConsumed = kwh,
                         kwhPer100km = kwhPer100km,
-                        source = "energydata",
+                        source = TripSource.ENERGYDATA,
                         bydId = byd.id
                     ))
                     inserted++
@@ -742,8 +753,8 @@ class HistoryImporter @Inject @Suppress("LongParameterList") constructor( // Hil
                     val loser = when {
                         a.bydId != null && b.bydId == null -> b
                         b.bydId != null && a.bydId == null -> a
-                        a.source == "energydata" && b.source != "energydata" -> b
-                        b.source == "energydata" && a.source != "energydata" -> a
+                        a.source == TripSource.ENERGYDATA && b.source != TripSource.ENERGYDATA -> b
+                        b.source == TripSource.ENERGYDATA && a.source != TripSource.ENERGYDATA -> a
                         // Both same quality — keep the first one
                         else -> b
                     }

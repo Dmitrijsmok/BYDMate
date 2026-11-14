@@ -7,10 +7,9 @@ import com.bydmate.app.data.autoservice.SentinelDecoder
 import com.bydmate.app.data.nativestack.FidAddress
 import com.bydmate.app.data.nativestack.FidAddresses
 import com.bydmate.app.data.nativestack.FidCatalog
+import com.bydmate.app.data.nativestack.WriteFidSymbols
 import com.bydmate.app.data.local.dao.VehicleWriteLogDao
 import com.bydmate.app.data.local.entity.VehicleWriteLogEntity
-import com.bydmate.app.data.nativestack.ParsReader
-import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.diagnostics.Trace
 import com.bydmate.app.diagnostics.TraceArea
 import kotlinx.coroutines.CancellationException
@@ -35,7 +34,6 @@ import javax.inject.Singleton
 @Singleton
 @Suppress("LargeClass") // every car read and write behind VehicleApi, one verification channel each
 class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt-injected dependencies + test seams
-    private val parsReader: ParsReader,
     private val autoservice: AutoserviceClient,
     private val helper: HelperClient,
     private val allowlist: WriteAllowlist,
@@ -44,7 +42,8 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
     private val windowStore: WindowChannelStore,
     // Null in unit tests (no SharedPreferences); production gets the singleton from AppModule.
     private val seatJournal: SeatCommandJournal? = null,
-    // This car's fid catalog for the rear seat heat gate (#327); none in unit tests = no rear heat.
+    // This car's fid catalog for the rear seat heat gate (#327) and the window percent write
+    // check (#417); none in unit tests = no rear heat, no window CTRL fallback.
     private val rearCatalog: () -> FidCatalog? = { null },
     // Android 10 head unit (DiLink 3.0/4.0, LegacyHeadUnit): only there may a percent window
     // write fall back to the closed loop (see [percentWindow]). False in unit tests = upstream.
@@ -88,6 +87,12 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
         HudReader { fid -> helper.read(WriteAllowlist.HUD_DEV, fid)?.toInt() },
     )
 
+    private val spoilerChannel = SpoilerChannel(
+        GuardedWriter { name, value, beforeSend -> doWriteOutcome(name, value, journaled = false, beforeSend = beforeSend) },
+        speed = { guardSpeedKmh { dev, fid -> autoservice.getFloat(dev, fid) } },
+        SpoilerReader { fid -> helper.read(spoilerDev(fid), fid)?.toInt() },
+    )
+
     private val rearSeatHeatChannel = RearSeatHeatChannel(
         SeatWriter { name, value -> doWriteOutcome(name, value, journaled = false) },
         RearSeatReader { fid -> helper.read(RearSeatHeat.READ_DEV, fid)?.toInt() },
@@ -101,11 +106,9 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
     )
 
     private val driveModeChannel = DriveModeChannel(
-        DriveModeWriter { name, value, beforeSend -> doWriteOutcome(name, value, journaled = false, beforeSend = beforeSend) },
+        GuardedWriter { name, value, beforeSend -> doWriteOutcome(name, value, journaled = false, beforeSend = beforeSend) },
         DriveModeReader { fid -> helper.read(WriteAllowlist.DRIVE_MODE_DEV, fid)?.toInt() },
-        // Rounded UP, not truncated: a plain toInt() turns 15.9 km/h into 15 and lets a
-        // terrain mode through above the owner's 15 km/h limit (finding 2026-09-27).
-        speed = { FidAddresses.of("speed").let { autoservice.getFloat(it.device, it.fid) }?.let { kotlin.math.ceil(it).toInt() } },
+        speed = { guardSpeedKmh { dev, fid -> autoservice.getFloat(dev, fid) } },
     )
 
     // Owns the window position samples taken around a write. A write that fails before the
@@ -122,33 +125,6 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
     // Liveness + snapshots — passthroughs.
     override suspend fun isAvailable(): Boolean = autoservice.isAvailable()
     override suspend fun readBatterySnapshot(): BatteryReading? = autoservice.readBatterySnapshot()
-    override suspend fun readSnapshot(): DiParsData? = parsReader.fetch()
-
-    // Individual readers — direct autoservice fid hits.
-    override suspend fun readSoc(): Float? = autoservice.getFloat(1014, 1246777400)
-    override suspend fun readSpeed(): Float? = FidAddresses.of("speed").let { autoservice.getFloat(it.device, it.fid) }
-    override suspend fun readMileageKm(): Float? =
-        autoservice.getInt(1014, 1246765072)?.let { it / 10f }
-    override suspend fun readPowerKw(): Int? = autoservice.getInt(1012, 339738656)
-    override suspend fun readAcStatus(): Int? = autoservice.getInt(1000, 1077936144)
-    override suspend fun readAcTemp(): Int? = autoservice.getInt(1000, 1077936168)
-    override suspend fun readInsideTemp(): Int? = autoservice.getInt(1000, 1031798832)
-    override suspend fun readExteriorTemp(): Int? = autoservice.getInt(1000, 1077936184)
-    override suspend fun readFanLevel(): Int? = autoservice.getInt(1000, 1077936156)
-    override suspend fun readWindowDriver(): Int? = autoservice.getInt(1001, 947912728)
-    override suspend fun readWindowPassenger(): Int? = autoservice.getInt(1001, 1267728400)
-    override suspend fun readWindowRearLeft(): Int? = autoservice.getInt(1001, 947912736)
-    /**
-     * DiLink 5.0 fid, falling back to its alternative-generation twin ONLY when the primary
-     * reports DEVICE_THE_FEATURE_LINK_ERROR — the fid is absent on this generation (#79).
-     * Any other sentinel is a transient fault and must not be answered from a different fid.
-     */
-    override suspend fun readWindowRearRight(): Int? {
-        val raw = autoservice.getIntRaw(1001, 947912752) ?: return null
-        SentinelDecoder.decodeInt(raw)?.let { return it }
-        if (raw != SentinelDecoder.FEATURE_LINK_ERROR) return null
-        return autoservice.getInt(1001, 1267728408)
-    }
 
     // ─── Writes ────────────────────────────────────────────────────────────────
 
@@ -218,13 +194,21 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
         return firstError?.let { Result.failure(it) } ?: Result.success(Unit)
     }
 
-    // Climate
-    override suspend fun writeAcOn(): Result<Unit> = doWrite("ac_on", 1)
-    override suspend fun writeAcOff(): Result<Unit> = doWrite("ac_off", 0)
-    override suspend fun writeSetDriverTemp(celsius: Int): Result<Unit> =
-        doWrite("ac_temp_main", celsius)
-
-    // Windows
+    // Side windows (the Alice bridge's aperture control, fork).
+    override suspend fun readWindowDriver(): Int? = autoservice.getInt(1001, 947912728)
+    override suspend fun readWindowPassenger(): Int? = autoservice.getInt(1001, 1267728400)
+    override suspend fun readWindowRearLeft(): Int? = autoservice.getInt(1001, 947912736)
+    /**
+     * DiLink 5.0 fid, falling back to its alternative-generation twin ONLY when the primary
+     * reports DEVICE_THE_FEATURE_LINK_ERROR — the fid is absent on this generation (#79).
+     * Any other sentinel is a transient fault and must not be answered from a different fid.
+     */
+    override suspend fun readWindowRearRight(): Int? {
+        val raw = autoservice.getIntRaw(1001, 947912752) ?: return null
+        SentinelDecoder.decodeInt(raw)?.let { return it }
+        if (raw != SentinelDecoder.FEATURE_LINK_ERROR) return null
+        return autoservice.getInt(1001, 1267728408)
+    }
     override suspend fun writeWindowDriver(percent: Int): Result<Unit> =
         percentWindow("window_driver_pos", percent)
     override suspend fun writeWindowPassenger(percent: Int): Result<Unit> =
@@ -243,18 +227,6 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
         val outcome = stepWindow(action, percent, "requested")
         return if (outcome.success) Result.success(Unit) else Result.failure(stepFailure(action, percent, outcome))
     }
-
-    // Locks
-    override suspend fun writeLockDoors(): Result<Unit> = doWrite("doors_lock", 2)
-    override suspend fun writeUnlockDoors(): Result<Unit> = doWrite("doors_unlock", 1)
-
-    // Sunroof — one allowlist entry per mode (sunroof_open, sunroof_close, etc.)
-    override suspend fun writeSunroof(mode: SunroofMode): Result<Unit> =
-        doWrite("sunroof_${mode.name.lowercase()}", mode.value)
-
-    // Sunshade
-    override suspend fun writeSunshade(open: Boolean): Result<Unit> =
-        doWrite(if (open) "sunshade_open" else "sunshade_close", if (open) 1 else 2)
 
     // ─── Core write helper ─────────────────────────────────────────────────────
 
@@ -327,6 +299,11 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
         lock?.lock()
         var sent = false
         var wrote = false
+        // A percent write on a firmware whose catalog has no symbol for it keeps its raw status:
+        // the refusal code is the second sign for the CTRL fallback (#417). Every other write
+        // goes out through helper.write exactly as before.
+        val percentSymbolAbsent = reset != null && percentSymbolAbsent(entry)
+        var percentStatus: Int? = null
         try {
             wrote = try {
                 if (windowCheck != null) {
@@ -335,7 +312,13 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
                     withTimeoutOrNull(WINDOW_BEFORE_READ_BUDGET_MS) { windowCheck.before.await() }
                 }
                 sent = true
-                helper.write(entry.dev, entry.writeFid, value)
+                if (percentSymbolAbsent) {
+                    // Same transact and acceptance rule as helper.write, status kept.
+                    percentStatus = helper.writeStatus(entry.dev, entry.writeFid, value)
+                    percentStatus?.let(HelperClientImpl::writeAccepted) ?: false
+                } else {
+                    helper.write(entry.dev, entry.writeFid, value)
+                }
             } catch (e: Exception) {
                 if (sent && reset != null) releasePercentTarget(reset, value)
                 // Rethrow cancellation so callers outside the NonCancellable write unit
@@ -355,6 +338,13 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
 
         if (!wrote) {
             windowCheck?.before?.cancel()
+            if (percentStatus == PERCENT_ABSENT_STATUS && windowChannel.fallBackToCtrl(requestedAction, requestedValue)) {
+                Log.i(TAG, "window fallback: $actionName status=$percentStatus symbol absent from catalog, " +
+                    "channel=CTRL stored, resending as CTRL")
+                logWrite(actionName, entry.dev, entry.writeFid, value, null, false, "percent_absent_ctrl_fallback", entry.validated)
+                // Routed to CTRL now; a CTRL write has no percent status, so this recurses once.
+                return doWrite(requestedAction, requestedValue, verifyInto)
+            }
             return if (entry.validated) {
                 Log.w(TAG, "doWrite: action=$actionName helper.write returned false (validated)")
                 logWrite(actionName, entry.dev, entry.writeFid, value, null, false, "helper_fail", entry.validated)
@@ -399,7 +389,7 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
         // NonCancellable here: the physical write has already landed, so the verdict (up to
         // ~1 s of reads) and the audit row that follows it must survive a caller cancelled in
         // that window — a command the car obeyed must never surface as an exception, whichever
-        // entry point (dispatch, writeWindowDriver, …) started the write.
+        // entry point started the write.
         if (windowCheck != null && verifyInto == null) {
             return withContext(NonCancellable) {
                 val failure = windowFailure(windowCheck)
@@ -410,25 +400,94 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
         }
         if (windowCheck != null) verifyInto?.add(windowCheck)
 
+        // Hazard: an accepted write the car ignores (#412, Tang L) is judged on the turn signal
+        // mask. NonCancellable for the same reason as the window verdict above.
+        if (actionName in HAZARD_ACTIONS) {
+            return withContext(NonCancellable) {
+                hazardNotDone(actionName)?.let { (err, mask) ->
+                    logWrite(actionName, entry.dev, entry.writeFid, value, mask, false, "hazard_not_done", entry.validated)
+                    maybeReportValidatedFailure(actionName, err, entry)
+                    return@withContext Result.failure(err)
+                }
+                logSuccess(actionName, entry, value, readback)
+                verifyLate(actionName, entry, value)
+                Result.success(Unit)
+            }
+        }
+
         logSuccess(actionName, entry, value, readback)
         if (entry.readbackFid == null && windowCheck == null) verifyLate(actionName, entry, value)
         return Result.success(Unit)
     }
 
     /**
-     * One read of the written fid [LATE_VERIFY_MS] after a write that has no check of its own
-     * (#267: the hazard reported ok, the lamps stayed dark), as a trace line. Diagnostics only:
-     * fire-and-forget on [readbackScope], so it never delays the caller or a rule's next step,
-     * and its answer changes no verdict.
+     * One read [LATE_VERIFY_MS] after a write that has no check of its own (#267: the hazard
+     * reported ok, the lamps stayed dark), as a trace line. Reads the action's state fid from
+     * [LATE_VERIFY_STATE] where one is known (the write fids there are write-only and always
+     * answer -10011), else the written fid. Diagnostics only: fire-and-forget on
+     * [readbackScope], so it never delays the caller or a rule's next step, and its answer
+     * changes no verdict.
      */
     private suspend fun verifyLate(actionName: String, entry: WriteEntry, value: Int) {
         val cause = Trace.cause()
+        val state = LATE_VERIFY_STATE[actionName] ?: FidAddress(entry.dev, entry.writeFid)
         readbackScope.launch {
             delay(LATE_VERIFY_MS)
-            val got = runCatching { helper.read(entry.dev, entry.writeFid) }.getOrNull()
+            val got = runCatching { helper.read(state.device, state.fid) }.getOrNull()
             Trace.event(TraceArea.CAR, "verify", "action" to actionName, "want" to value,
                 "got" to (got?.toString() ?: "null"), "after_ms" to LATE_VERIFY_MS.toInt(), by = cause)
         }
+    }
+
+    /**
+     * Did an accepted hazard write leave the turn signal mask ([HAZARD_MASK]: 1 off, 2 left,
+     * 4 right, 6 hazard) where it was? Reads it every [HAZARD_WATCH_STEP_MS] for up to
+     * [HAZARD_WATCH_READS] reads and stops at the first other answer. Working cars show 6 within
+     * 0.2-0.35 s of hazard_on, and the mask blinks 6/1 while the hazard is on, so a step shorter
+     * than a lit or dark phase cannot miss the change.
+     *
+     * The failure (with the last mask) only when EVERY read answered the unchanged value: 1
+     * after hazard_on, 6 after hazard_off. A failed read, a sentinel or any other value is no
+     * evidence and keeps today's success, so a car whose mask is unreadable does not regress.
+     */
+    private suspend fun hazardNotDone(actionName: String): Pair<VehicleWriteError, Int>? {
+        val unchanged = if (actionName == "hazard_on") MASK_OFF else MASK_HAZARD
+        val seen = mutableListOf<String>()
+        var stayed = true
+        for (attempt in 1..HAZARD_WATCH_READS) {
+            delay(HAZARD_WATCH_STEP_MS)
+            val mask = try {
+                helper.read(HAZARD_MASK.device, HAZARD_MASK.fid)
+            } catch (e: Exception) {
+                Log.w(TAG, "hazard verify read fid=${HAZARD_MASK.fid} failed: ${e.message}")
+                null
+            }
+            seen += mask?.toString() ?: "null"
+            if (mask != unchanged.toLong()) {
+                stayed = false
+                break
+            }
+        }
+        Log.i(TAG, "hazard verify action=$actionName fid=${HAZARD_MASK.fid} masks=${seen.joinToString(",")} " +
+            "verdict=${if (stayed) "not_done" else "ok"}")
+        if (!stayed) return null
+        val ms = HAZARD_WATCH_READS * HAZARD_WATCH_STEP_MS
+        return VehicleWriteError.ReadbackMismatch(actionName, "turn signal mask stayed $unchanged for $ms ms") to unchanged
+    }
+
+    /**
+     * True when this firmware's own catalog is loaded and has no symbol for the percent fid of
+     * [entry] (#417: positions readable, percent write absent, CTRL works). One of the two signs
+     * for the CTRL fallback, the other is the car refusing the write with -10011: either alone
+     * proves nothing (a healthy unit can answer -10011 at a cold start, and a catalog that is
+     * not loaded says nothing about the car).
+     */
+    private fun percentSymbolAbsent(entry: WriteEntry): Boolean {
+        val symbol = WriteFidSymbols.byFid[entry.writeFid] ?: return false
+        val catalog = rearCatalog()?.takeIf { it.symbols.isNotEmpty() } ?: return false
+        if (catalog.fidOf(symbol) != null) return false
+        Log.i(TAG, "window percent: ${entry.actionName} symbol=$symbol absent from catalog, watching the write status")
+        return true
     }
 
     /**
@@ -438,6 +497,7 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
     private suspend fun channelWrite(action: String): Result<Unit>? = when {
         action in STEERING_HEAT_ACTIONS -> withContext(NonCancellable) { steeringHeat(action) }
         action in HUD_ACTIONS -> withContext(NonCancellable) { hudSwitch(action) }
+        action in SPOILER_ACTIONS -> withContext(NonCancellable) { spoiler(action) }
         action in BatteryPreheatChannel.ACTIONS ->
             withContext(NonCancellable) { batteryPreheatChannel.dispatch(action, readbackScope) }
         else -> DriveMode.ofAction(action)?.let { mode -> withContext(NonCancellable) { driveMode(mode) } }
@@ -486,6 +546,31 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
             HudSwitchChannel.Result.UNREACHABLE ->
                 Result.failure(VehicleWriteError.HelperUnreachable(action, outcome.verdict))
             HudSwitchChannel.Result.UNCONFIRMED ->
+                Result.failure(VehicleWriteError.HelperUnreachable(action, "result not confirmed (${outcome.verdict})"))
+        }
+    }
+
+    /**
+     * Spoiler up/down and automatic mode on through their channel (#383), as the Result dispatch returns. Like the HUD
+     * verdict row: dev = 1023 when the command was written (0 = nothing written), readback = the
+     * last status read, error = "verdict=<label>" (also on success).
+     */
+    private suspend fun spoiler(action: String): Result<Unit> {
+        val outcome = if (action == "spoiler_auto_on") spoilerChannel.autoOn() else spoilerChannel.actuate(up = action == "spoiler_up")
+        val entry = allowlist.find(action)
+        logWrite(
+            action, if (outcome.written) WriteAllowlist.SPOILER_DEV else 0, entry?.writeFid ?: -1, entry?.valueMin ?: -1,
+            outcome.state, outcome.result == SpoilerChannel.Result.OK, "verdict=${outcome.verdict}", validated = false,
+        )
+        return when (outcome.result) {
+            SpoilerChannel.Result.OK -> Result.success(Unit)
+            SpoilerChannel.Result.NOT_EQUIPPED -> Result.failure(VehicleWriteError.NotEquipped(action))
+            SpoilerChannel.Result.NO_EFFECT -> Result.failure(VehicleWriteError.Unsupported(action))
+            SpoilerChannel.Result.BLOCKED, SpoilerChannel.Result.ANTI_PINCH ->
+                Result.failure(VehicleWriteError.StateBlocked(action, outcome.verdict))
+            SpoilerChannel.Result.UNREACHABLE ->
+                Result.failure(VehicleWriteError.HelperUnreachable(action, outcome.verdict))
+            SpoilerChannel.Result.UNCONFIRMED ->
                 Result.failure(VehicleWriteError.HelperUnreachable(action, "result not confirmed (${outcome.verdict})"))
         }
     }
@@ -1146,9 +1231,6 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
      * HelperUnreachable or ReadbackMismatch. These are the highest-signal
      * failures: the action was live-confirmed on Leopard 3, so a failure means
      * the helper daemon is down or the vehicle state machine rejected the command.
-     *
-     * TODO: route to Crashlytics when Firebase is integrated
-     *   (requires google-services.json + Firebase gradle plugin — out of scope for Phase 2).
      */
     private fun maybeReportValidatedFailure(actionName: String, err: VehicleWriteError, entry: WriteEntry) {
         if (entry.validated && (err is VehicleWriteError.HelperUnreachable || err is VehicleWriteError.ReadbackMismatch)) {
@@ -1223,6 +1305,27 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
         private const val PERCENT_RESET_ATTEMPTS = 2
         private val STEERING_HEAT_ACTIONS = setOf("steering_heat_on", "steering_heat_off")
         private val HUD_ACTIONS = setOf("hud_on", "hud_off")
+        private val SPOILER_ACTIONS = setOf("spoiler_up", "spoiler_down", "spoiler_auto_on")
+
+        // ── Hazard result (#412) ───────────────────────────────────────────────
+        private val HAZARD_ACTIONS = setOf("hazard_on", "hazard_off")
+        /** Turn signal mask (FidMap turnSignal), the independent sign that the hazard is on. */
+        private val HAZARD_MASK = FidAddress(1004, 950009900)
+        private const val MASK_OFF = 1
+        private const val MASK_HAZARD = 6
+        private const val HAZARD_WATCH_STEP_MS = 250L
+        /** 6 reads x 250 ms: about 1.5 s, four times the slowest hazard_on seen on a working car. */
+        private const val HAZARD_WATCH_READS = 6
+        /** State fid read by [verifyLate] instead of a write-only fid. Rear logo: LIGHT_REAR_GLOW_LOGO_STATE. */
+        private val LATE_VERIFY_STATE: Map<String, FidAddress> = mapOf(
+            "hazard_on" to HAZARD_MASK,
+            "hazard_off" to HAZARD_MASK,
+            "rear_logo_light_on" to FidAddress(1004, 880803910),
+            "rear_logo_light_off" to FidAddress(1004, 880803910),
+        )
+
+        /** Window percent write refused: "fid not writable" (SentinelDecoder WRONG_DIRECTION). */
+        private const val PERCENT_ABSENT_STATUS = -10011
 
         // ── Window readback (write verdict) ────────────────────────────────────
         /** Per attempt; a pane that was commanded starts moving well inside two of these
@@ -1278,6 +1381,5 @@ class VehicleApiImpl @Inject @Suppress("LongParameterList") constructor( // Hilt
             "window_rear_right_close" to WINDOW_RR_FIELD,
             "window_rear_right_ctrl" to WINDOW_RR_FIELD,
         )
-        // TODO: route to Crashlytics when Firebase is integrated
     }
 }

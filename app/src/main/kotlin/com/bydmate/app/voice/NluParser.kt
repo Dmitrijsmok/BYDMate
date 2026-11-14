@@ -18,6 +18,8 @@ sealed interface ParseResult {
     /** Open a navigation app, nothing routed: [app] is a RouteNavigatorUris id, null = the app
      *  chosen in «Навигатор для маршрутов». */
     data class Navigator(val app: String? = null) : ParseResult
+    /** A route to the driver's Home or Work ([shortcut] "home" / "work"), as the agent routes «домой». */
+    data class Navigate(val shortcut: String, val go: Boolean = true) : ParseResult
     data object Unrecognized : ParseResult
 }
 

@@ -57,6 +57,14 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.roundToInt
 
+/** Log tag shared by the blind-spot camera classes. */
+internal const val BLIND_SPOT_TAG = "BlindSpot"
+
+/** Glow frame around a camera window; the position overlay draws the same frame. */
+internal const val GLOW_STROKE_DP = 12f
+/** Orange: red draws the eye worse against the camera picture (field feedback). */
+internal const val GLOW_COLOR = 0xFFFF7A00.toInt()
+
 /** Transacts the fast loop reads its telemetry by (Leopard 3, on-car 2026-07-31). */
 internal const val BLIND_SPOT_TX_INT = 5
 internal const val BLIND_SPOT_TX_FLOAT = 7
@@ -91,6 +99,28 @@ internal fun blindSpotBatchItems(withBsd: Boolean): List<BatchReadItem> =
     }
 
 private const val PROJECTION_DISPLAY_NAME = "XDJAScreenProjection"
+
+/** Bitmap the first-frame brightness is measured on: 16:9, a few hundred pixels. */
+private const val LUMA_W = 32
+private const val LUMA_H = 18
+
+/**
+ * Mean brightness of what [view] shows right now, from a tiny bitmap; the error's class name
+ * when the read fails, so nothing here can break the preview.
+ */
+private fun firstFrameLuma(view: TextureView?): String {
+    val luma = runCatching {
+        val bitmap = view?.getBitmap(LUMA_W, LUMA_H) ?: return@runCatching null
+        try {
+            val pixels = IntArray(bitmap.width * bitmap.height)
+            bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+            blindSpotFrameLuma(pixels)
+        } finally {
+            bitmap.recycle()
+        }
+    }
+    return luma.getOrNull()?.toString() ?: luma.exceptionOrNull()?.javaClass?.simpleName ?: "none"
+}
 
 /**
  * The cluster projection panel the blind-spot windows go to, or null when this car has none.
@@ -142,6 +172,7 @@ class BlindSpotController @Inject constructor(
 ) {
     private val probe = AvmCameraProbe()
     private val telemetry = BlindSpotTelemetryGate()
+    private val showLimit = BlindSpotShowLimit()
 
     /** Teardown must outlive [serviceScope]: TrackingService cancels it right after stop(),
      *  and windows left on screen would survive the service. */
@@ -280,7 +311,7 @@ class BlindSpotController @Inject constructor(
         }
         return listOf(
             "enabled=${prefs.enabled}",
-            "threshold_kmh=${prefs.thresholdKmh}",
+            "threshold_kmh=${prefs.thresholdKmh} max_show_sec=${prefs.maxShowSec}",
             "both_on_main=${prefs.bothOnMain} both_on_cluster=${prefs.bothOnCluster}",
             "armed=$lastArmed",
             "reason=$lastArmedReason",
@@ -306,6 +337,7 @@ class BlindSpotController @Inject constructor(
         if (fastLoop?.isActive == true) return
         val scope = serviceScope ?: return
         Log.i(TAG, "fast loop start")
+        showLimit.reset()
         telemetry.reset(SystemClock.elapsedRealtime())
         telemetryLost = false
         fastLoop = scope.launch(Dispatchers.Main) {
@@ -416,6 +448,17 @@ class BlindSpotController @Inject constructor(
                 nativeCameraForeground = nativeCameraForeground,
             )
         )
+        // Fed every tick that gets a decision, reverse and the 360 included, so any interruption
+        // restarts the show timer. A failed blink read keeps the last clean mask: one missed read
+        // must not count as the signal changing and bring a cut window back.
+        val maxShowSec = prefs.maxShowSec
+        val wasExpired = showLimit.expired
+        val show = showLimit.apply(
+            decision.show, blindSpotSignalSide(sample?.blink ?: state.lastValid?.blink), now, maxShowSec)
+        if (showLimit.expired && !wasExpired) {
+            Log.i(TAG, "show limit: ${decision.show} hidden after $maxShowSec s")
+            Trace.event(TraceArea.CAMERA, "show-limit", "side" to decision.show, "sec" to maxShowSec)
+        }
 
         if (gearIsReverse) {
             if (anythingUp()) awaitTeardown("reverse")
@@ -452,7 +495,7 @@ class BlindSpotController @Inject constructor(
         }
 
         applyPipGeometry()
-        applyShow(if (cameraOpen) decision.show else BlindSpotSide.NONE)
+        applyShow(if (cameraOpen) show else BlindSpotSide.NONE)
         if (glow && pairs != null) {
             clusterWindow?.setGlow(
                 shownSide == BlindSpotSide.LEFT && pairs.intAt(INDEX_BSD_LEFT) == BSD_OBJECT)
@@ -1148,7 +1191,16 @@ class BlindSpotController @Inject constructor(
 
         override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {
             val now = SystemClock.elapsedRealtime()
-            if (frames < 2 && ++frames == 2) validFrameAt = now
+            if (frames < 2 && ++frames == 2) {
+                validFrameAt = now
+                // The frame counter cannot tell a black frame from a picture, and the side views
+                // of the non-panoramic cameras stayed black on some cars (#409, #397).
+                if (blindSpotLumaChecked(probe.cameraTag)) {
+                    val luma = firstFrameLuma(textureView)
+                    Log.i(TAG, "first frame luma $label side=$side tag=${probe.cameraTag}: $luma")
+                    Trace.event(TraceArea.CAMERA, "first-frame-luma", "side" to side, "luma" to luma)
+                }
+            }
             lastFrameAt = now
         }
 
@@ -1165,7 +1217,7 @@ class BlindSpotController @Inject constructor(
     }
 
     private companion object {
-        const val TAG = "BlindSpot"
+        const val TAG = BLIND_SPOT_TAG
         /** Suppression key handed to WidgetController while a window covers the main screen. */
         const val WIDGET_SUPPRESS_REASON = "blind-spot camera"
 
@@ -1196,9 +1248,6 @@ class BlindSpotController @Inject constructor(
         const val DUMP_LOG_LINES = 12
         const val GLOW_HALF_PERIOD_MS = 800L
         const val GLOW_MIN_ALPHA = 0.35f
-        const val GLOW_STROKE_DP = 12f
-        /** Orange: red draws the eye worse against the camera picture (field feedback). */
-        const val GLOW_COLOR = 0xFFFF7A00.toInt()
 
         /** Extra px past the edge so a hidden window cannot show a seam. */
         const val OFFSCREEN_MARGIN_PX = 100

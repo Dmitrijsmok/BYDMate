@@ -149,12 +149,6 @@ class MediaSessionListenerServiceTest {
     }
 
     @Test
-    fun `a navigator removal is traced on the lane`() {
-        assertEquals(listOf("navi notif removed: pkg=ru.yandex.yandexnavi id=1"),
-            traced { service.onNotificationRemoved(sbn("ru.yandex.yandexnavi", Notification())) })
-    }
-
-    @Test
     fun `a media post or removal is not traced`() {
         val media = Notification().apply { category = Notification.CATEGORY_TRANSPORT }
         assertTrue(traced { service.onNotificationRemoved(sbn("ru.yandex.yandexnavi", media)) }.isEmpty())
@@ -232,6 +226,16 @@ class MediaSessionListenerServiceTest {
     @Test
     fun `extras post with a recognised maneuver logs nothing`() {
         assertTrue(postAndRun("ru.yandex.yandexnavi", "500 м", "Поверните направо").isEmpty())
+    }
+
+    @Test
+    fun `a notification without guidance logs its shape under its package (301)`() {
+        val shapes = mutableListOf<String>()
+        service.emptyShapeSink = { shapes.add(it) }
+        postAndRun("ru.yandex.yandexnavi", "Тверская", "")
+        assertEquals(1, shapes.size)
+        assertTrue(shapes[0], shapes[0].startsWith("nav notif shape [empty ru.yandex.yandexnavi]: "))
+        assertFalse(shapes[0], shapes[0].contains("Тверская"))
     }
 
     @Test

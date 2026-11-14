@@ -4,13 +4,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.SearchManager
 import android.content.ActivityNotFoundException
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaController
-import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.Bundle
@@ -36,6 +34,8 @@ import com.bydmate.app.data.vehicle.CommandTranslator
 import com.bydmate.app.data.vehicle.DriveMode
 import com.bydmate.app.data.vehicle.HelperClient
 import com.bydmate.app.data.vehicle.RearSeatHeat
+import com.bydmate.app.data.vehicle.SPOILER_ANTI_PINCH
+import com.bydmate.app.data.vehicle.SPOILER_STANDING
 import com.bydmate.app.data.vehicle.ScreenBacklightReply
 import com.bydmate.app.data.vehicle.VehicleApi
 import com.bydmate.app.data.vehicle.VehicleWriteError
@@ -97,8 +97,8 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         private val YOUTUBE_PACKAGES = AliceAppCatalog.YOUTUBE_PACKAGES
         private const val CAR_SETTINGS_PACKAGE = "com.byd.carsettings"
         private const val NAVI_PACKAGE = "ru.yandex.yandexnavi"
-        // Hard cap on user-set delay action; protects against typos like "60000000".
-        private const val MAX_DELAY_MS = 60_000L
+        // Hard cap on user-set delay action (24 h); BYDMate only runs while the car is on.
+        internal const val MAX_DELAY_MS = 86_400_000L
         private val BLOCKED_PATTERNS = listOf("发送CAN", "执行SHELL", "下电")
 
         /**
@@ -148,22 +148,6 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
          */
         internal fun isSunroofOpenCommand(command: String): Boolean {
             if (!command.contains("天窗")) return false
-            if (command.contains("关")) return false
-            val opensViaPosition = POSITION_OPEN.find(command)
-                ?.let { (positionPercent(it.groupValues[1]) ?: 0) > 0 }
-                ?: command.contains("打开")        // bare "打开" (no %) -- treat as open
-            val opensViaWord = listOf("全开", "半开", "通风").any { command.contains(it) }
-            return opensViaPosition || opensViaWord
-        }
-
-        /**
-         * True if [command] would OPEN the sunshade (遮阳帘). NEVER speed-gated
-         * (interior shade) -- used only by the voice early-fire guard, which must
-         * hold ALL aperture opens for the final because a bare-noun partial can
-         * still be qualified. Pure predicate -- unit-testable without Android deps.
-         */
-        internal fun isSunshadeOpenCommand(command: String): Boolean {
-            if (!command.contains("遮阳帘")) return false
             if (command.contains("关")) return false
             val opensViaPosition = POSITION_OPEN.find(command)
                 ?.let { (positionPercent(it.groupValues[1]) ?: 0) > 0 }
@@ -398,16 +382,15 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         }
 
         /** Why a param dispatch failed, as the step reason, always in the app language. Besides
-         *  drive mode and the battery warm-up, the steering heat and HUD channels report
-         *  NotEquipped. The raw error (`value=-10011 sentinel returned` and the like) stays in
-         *  the log only. */
+         *  drive mode and the battery warm-up, the steering heat, HUD, rear seat heat and spoiler
+         *  channels report NotEquipped; the spoiler also reports StateBlocked. The raw error
+         *  (`value=-10011 sentinel returned` and the like) stays in the log only. */
         internal fun paramFailureReason(err: Throwable?, strings: AppStrings): String = when {
             err is VehicleWriteError && DriveMode.ofAction(err.action) != null -> driveModeFailureReason(err, strings)
             err is VehicleWriteError && err.action.startsWith("battery_preheat_") -> batteryPreheatFailureReason(err, strings)
-            err is VehicleWriteError.NotEquipped && err.action.startsWith("hud_") -> strings.get(R.string.hud_not_equipped)
-            err is VehicleWriteError.NotEquipped && err.action in RearSeatHeat.ACTIONS ->
-                strings.get(R.string.rear_seat_heat_not_equipped)
-            err is VehicleWriteError.NotEquipped -> strings.get(R.string.steering_heat_not_equipped)
+            err is VehicleWriteError.NotEquipped -> strings.get(notEquippedText(err.action))
+            err is VehicleWriteError.StateBlocked && err.action.startsWith("spoiler_") ->
+                strings.get(spoilerBlockedText(err.details))
             err is VehicleWriteError.ReadbackMismatch && err.stuckPanes.isNotEmpty() ->
                 stuckWindowsReason(err.stuckPanes, strings)
             else -> strings.get(writeErrorText(err))
@@ -463,6 +446,21 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
             is VehicleWriteError.StateBlocked -> strings.get(R.string.battery_preheat_gun_connected)
             is VehicleWriteError.NotNeeded -> strings.get(R.string.battery_preheat_not_needed)
             else -> strings.get(writeErrorText(err))
+        }
+
+        /** Why the car holds a spoiler command: anti-pinch, the standstill guard, or its own refusal. */
+        private fun spoilerBlockedText(details: String): Int = when {
+            details == SPOILER_ANTI_PINCH -> R.string.spoiler_anti_pinch
+            details.startsWith(SPOILER_STANDING) -> R.string.spoiler_standing
+            else -> R.string.spoiler_blocked
+        }
+
+        /** Each channel that reports NotEquipped names its own function; steering heat is the rest. */
+        private fun notEquippedText(action: String): Int = when {
+            action.startsWith("hud_") -> R.string.hud_not_equipped
+            action.startsWith("spoiler_") -> R.string.spoiler_not_equipped
+            action in RearSeatHeat.ACTIONS -> R.string.rear_seat_heat_not_equipped
+            else -> R.string.steering_heat_not_equipped
         }
 
         /** «окно водителя не сдвинулось…» for one pane, «не сдвинулись с места: …» for several. */
@@ -650,10 +648,7 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
     internal var clusterPollAttempts = 30
 
     internal var activeMediaControllers: () -> List<MediaController> = {
-        runCatching {
-            val msm = context.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
-            msm.getActiveSessions(ComponentName(context, MediaSessionListenerService::class.java))
-        }.getOrDefault(emptyList())
+        MediaSessionListenerService.activeControllers(context)
     }
 
     /**
@@ -1130,7 +1125,7 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         val blockReason = if (isSpeedGated(action.command)) {
             speedOnlyBlockReason(action.command, gateSpeed(action.command))
         } else {
-            getBlockReason(action.command, data)
+            safetyBlockReason(action.command, data)
         }
         if (blockReason != null) {
             Log.w(TAG, "Blocked '${action.command}': $blockReason")
@@ -1162,11 +1157,6 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
 
     /** A failed [VehicleApi] write in the app language, the same text a rule step reports. */
     fun vehicleFailureReason(err: Throwable): String = paramFailureReason(err, appStrings)
-
-    // Delegate to the companion pure function so all callers (dispatch + manual test button)
-    // share identical gate logic.
-    private fun getBlockReason(command: String, data: DiParsData?): BlockReason? =
-        safetyBlockReason(command, data)
 
     // --- notifications (user-visible) ---
 

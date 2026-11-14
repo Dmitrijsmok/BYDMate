@@ -1,6 +1,7 @@
+@file:Suppress("TooManyFunctions") // the trip window: header, stats column, map, chart and their small parts
+
 package com.bydmate.app.ui.trips
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -21,22 +22,16 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.bydmate.app.data.local.entity.TripEntity
@@ -46,8 +41,6 @@ import com.bydmate.app.ui.components.formatDuration
 import com.bydmate.app.ui.components.formatTime
 import com.bydmate.app.R
 import com.bydmate.app.ui.theme.*
-import com.bydmate.app.BYDMateApp
-import com.bydmate.app.util.Gcj02Converter
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -62,13 +55,12 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.em
+import android.util.Log
+import androidx.compose.foundation.border
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.graphics.RectangleShape
 import java.text.SimpleDateFormat
 import java.util.Date
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.util.BoundingBox
-import org.osmdroid.util.GeoPoint
-import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.Polyline
 
 @Composable
 fun TripDetailDialog(
@@ -86,24 +78,17 @@ fun TripDetailDialog(
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         ScaledDialogContent {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-                    ) { onDismiss() },
-                contentAlignment = Alignment.Center
-            ) {
+            // The whole app window (between the DiLink status bar and the climate bar): the map needs the height.
+            Box(modifier = Modifier.fillMaxSize()) {
                 Card(
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RectangleShape,
                     colors = CardDefaults.cardColors(containerColor = CardSurface),
-                    modifier = Modifier
-                        .fillMaxWidth(0.92f)
-                        .fillMaxHeight(0.85f)
-                        .clickable { /* absorb click */ }
+                    modifier = Modifier.fillMaxSize()
                 ) {
                     val isStop = (trip.distanceKm ?: 0.0) == 0.0
+                    val scrub = remember(points) { if (points.size >= 2) ScrubData(points) else null }
+                    val scrubState = remember(points) { ScrubState() }
+                    scrub?.let { ScrubPlayback(it, scrubState) }
 
                     Column(
                         modifier = Modifier
@@ -111,7 +96,9 @@ fun TripDetailDialog(
                             .padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        TripDetailHeader(trip, isStop, onDismiss)
+                        TripDetailHeader(trip, isStop, onDismiss) {
+                            if (scrub != null && scrub.points.size >= CHART_MIN_POINTS) ScrubControls(scrub, scrubState)
+                        }
 
                         // Landscape: map left, stats right
                         Row(
@@ -120,28 +107,19 @@ fun TripDetailDialog(
                                 .weight(1f),
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            // LEFT: Map + speed histogram
+                            // LEFT: map with the values at the cursor, controls, chart
                             Column(
                                 modifier = Modifier
                                     .weight(1f)
                                     .fillMaxHeight(),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                // Map in its own clipped box
-                                if (points.size >= 2) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(8.dp))
-                                    ) {
-                                        TripRouteMap(
-                                            points = points,
-                                            tileSource = tileSource,
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-                                    }
+                                if (scrub != null) {
+                                    TripScrubPane(data = scrub, state = scrubState, tileSource = tileSource)
                                 } else {
+                                    LaunchedEffect(points.size) {
+                                        Log.d(SCRUB_TAG, "open: points=${points.size} (no track)")
+                                    }
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -151,16 +129,6 @@ fun TripDetailDialog(
                                     ) {
                                         Text(stringResource(R.string.trip_detail_gps_unavailable), color = TextMuted, fontSize = 13.sp)
                                     }
-                                }
-
-                                // Speed histogram
-                                if (points.size >= 4) {
-                                    SpeedHistogram(
-                                        points = points,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(60.dp)
-                                    )
                                 }
                             }
 
@@ -272,9 +240,17 @@ fun TripDetailDialog(
     }
 }
 
-/** Title with the weekday and date, the time range below it, a close button on the right. */
+/**
+ * Close button on the left (the driver's side), the title with the weekday and date and the
+ * time range below it, then the window [controls].
+ */
 @Composable
-private fun TripDetailHeader(trip: TripEntity, isStop: Boolean, onDismiss: () -> Unit) {
+private fun TripDetailHeader(
+    trip: TripEntity,
+    isStop: Boolean,
+    onDismiss: () -> Unit,
+    controls: @Composable () -> Unit,
+) {
     // Reading LocalConfiguration ties the date to the app language (see TripsScreen.MonthHeader).
     val locale = LocalConfiguration.current.locales[0]
     val datePattern = stringResource(R.string.trip_detail_date_pattern)
@@ -286,10 +262,32 @@ private fun TripDetailHeader(trip: TripEntity, isStop: Boolean, onDismiss: () ->
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 48.dp),
+            .heightIn(min = 56.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(CircleShape)
+                .clickable { onDismiss() },
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .background(CardSurfaceElevated, CircleShape)
+                    .border(1.dp, CardBorder, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = stringResource(R.string.trip_detail_close),
+                    tint = TextPrimary,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+        }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 buildAnnotatedString {
@@ -307,27 +305,7 @@ private fun TripDetailHeader(trip: TripEntity, isStop: Boolean, onDismiss: () ->
                 style = TextStyle(fontFeatureSettings = "tnum")
             )
         }
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .clickable { onDismiss() },
-            contentAlignment = Alignment.Center
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .background(CardSurfaceElevated, CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Filled.Close,
-                    contentDescription = stringResource(R.string.trip_detail_close),
-                    tint = TextSecondary,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-        }
+        controls()
     }
 }
 
@@ -415,133 +393,4 @@ private fun DetailRow(row: StatRow) {
             modifier = Modifier.alignByBaseline()
         )
     }
-}
-
-@Composable
-private fun TripRouteMap(
-    points: List<TripPointEntity>,
-    tileSource: String,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
-    val isAmap = tileSource == "amap"
-
-    val geoPoints = remember(points, tileSource) {
-        points.map {
-            val (lat, lon) = if (isAmap) Gcj02Converter.wgs84ToGcj02(it.lat, it.lon) else it.lat to it.lon
-            GeoPoint(lat, lon)
-        }
-    }
-
-    val mapView = remember(tileSource) {
-        MapView(context).apply {
-            setTileSource(
-                if (tileSource == "amap") BYDMateApp.AmapTileSource else TileSourceFactory.MAPNIK
-            )
-            setMultiTouchControls(true)
-            zoomController.setVisibility(
-                org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER
-            )
-        }
-    }
-
-    DisposableEffect(mapView) {
-        mapView.onResume()
-        onDispose {
-            mapView.onPause()
-            mapView.onDetach()
-        }
-    }
-
-    key(tileSource) {
-        AndroidView(
-            factory = { mapView },
-            modifier = modifier,
-            update = { map ->
-            map.overlays.clear()
-
-            if (geoPoints.size >= 2) {
-                // Dark outline underneath for contrast on any road color
-                for (i in 0 until geoPoints.size - 1) {
-                    val outline = Polyline().apply {
-                        setPoints(listOf(geoPoints[i], geoPoints[i + 1]))
-                        outlinePaint.color = android.graphics.Color.argb(180, 0, 0, 0)
-                        outlinePaint.strokeWidth = 14f
-                        outlinePaint.isAntiAlias = true
-                        outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
-                        infoWindow = null
-                    }
-                    map.overlays.add(outline)
-                }
-                // Bright speed-colored track on top
-                for (i in 0 until geoPoints.size - 1) {
-                    val speed = points[i].speedKmh ?: 0.0
-                    val color = speedColor(speed)
-
-                    val segment = Polyline().apply {
-                        setPoints(listOf(geoPoints[i], geoPoints[i + 1]))
-                        outlinePaint.color = color.toArgb()
-                        outlinePaint.strokeWidth = 8f
-                        outlinePaint.isAntiAlias = true
-                        outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
-                        infoWindow = null
-                    }
-                    map.overlays.add(segment)
-                }
-
-                // Zoom to fit route
-                try {
-                    val bbox = BoundingBox.fromGeoPoints(geoPoints)
-                    map.post { map.zoomToBoundingBox(bbox, true, 48) }
-                } catch (_: Exception) {
-                    map.controller.setCenter(geoPoints.first())
-                }
-            }
-
-            map.invalidate()
-        }
-    )
-    } // key(tileSource)
-}
-
-@Composable
-private fun SpeedHistogram(points: List<TripPointEntity>, modifier: Modifier = Modifier) {
-    val speeds = remember(points) {
-        val step = (points.size / 40).coerceAtLeast(1)
-        points.filterIndexed { i, _ -> i % step == 0 }.mapNotNull { it.speedKmh }
-    }
-
-    if (speeds.isEmpty()) return
-    val maxSpeed = speeds.max()
-
-    Canvas(modifier = modifier) {
-        if (maxSpeed <= 0.0) return@Canvas
-
-        val barCount = speeds.size
-        val barWidth = size.width / barCount
-        val chartHeight = size.height - 20f
-
-        speeds.forEachIndexed { index, speed ->
-            val barHeight = (speed / maxSpeed * chartHeight).toFloat()
-            val color = speedColor(speed)
-
-            drawRect(
-                color = color,
-                topLeft = Offset(
-                    x = index * barWidth + barWidth * 0.1f,
-                    y = chartHeight - barHeight
-                ),
-                size = Size(
-                    width = barWidth * 0.8f,
-                    height = barHeight
-                )
-            )
-        }
-    }
-}
-
-private fun speedColor(speed: Double): Color = when {
-    speed < 20 -> Color(0xFFFF1744.toInt())  // bright red — distinct from map's pink roads
-    speed < 60 -> Color(0xFFFFFF8D.toInt())  // pale yellow — distinct from map's orange roads
-    else -> Color(0xFF00E676.toInt())         // bright green — distinct from map's muted greens
 }

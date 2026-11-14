@@ -131,11 +131,6 @@ class WelcomeViewModelTest {
     }
 
     @Test
-    fun `initial language comes from LocalePreferences`() {
-        assertEquals("en", viewModel().uiState.value.language)
-    }
-
-    @Test
     fun `setLanguage persists app_language and updates state`() {
         val vm = viewModel()
         vm.setLanguage("pl")

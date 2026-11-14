@@ -123,6 +123,11 @@ internal sealed interface CommandExpr {
         override fun resolve(values: Map<String, String>) = ParseResult.Navigator(app)
     }
 
+    /** [go]: «поехали» starts the route; «маршрут» only builds it and leaves the start to the driver. */
+    class Navigate(private val shortcut: String, private val go: Boolean) : CommandExpr {
+        override fun resolve(values: Map<String, String>) = ParseResult.Navigate(fill(shortcut, values).single(), go)
+    }
+
     class Commands(private val terms: List<String>) : CommandExpr {
         override fun resolve(values: Map<String, String>) = ParseResult.Command(terms.flatMap { fill(it, values) })
     }
@@ -139,6 +144,8 @@ internal sealed interface CommandExpr {
                 require(id in RouteNavigatorUris.ALL) { "unknown navigator \"$id\" in \"$text\"" }
                 Navigator(id)
             }
+            text.startsWith("NAVIGATE ") -> Navigate(text.removePrefix("NAVIGATE ").trim(), go = true)
+            text.startsWith("ROUTE ") -> Navigate(text.removePrefix("ROUTE ").trim(), go = false)
             text.startsWith("VOL ") -> Vol(text.removePrefix("VOL ").trim())
             text.startsWith("ASK ") -> text.removePrefix("ASK ").trim().let { id ->
                 Ask(requireNotNull(VehicleQuestion.of(id)) { "unknown question \"$id\" in \"$text\"" })

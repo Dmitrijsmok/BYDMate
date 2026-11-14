@@ -36,6 +36,23 @@ enum class DriveMode(val value: Int, val actionName: String, val supportFid: Int
     }
 }
 
+/**
+ * The speed a terrain mode is judged on, km/h, read by [read] from the speed fid. Rounded UP, not
+ * truncated: a plain toInt() turns 15.9 km/h into 15 and lets a terrain mode through above the
+ * owner's 15 km/h limit (finding 2026-09-27). Null when the read gives nothing.
+ */
+internal suspend fun guardSpeedKmh(read: suspend (dev: Int, fid: Int) -> Float?): Int? {
+    val address = FidAddresses.of("speed")
+    return read(address.device, address.fid)?.let { kotlin.math.ceil(it).toInt() }
+}
+
+/** [guardSpeedKmh] through the transport's held lock. A throwing read is a failed read (unknown), not a verdict. */
+internal suspend fun lockedGuardSpeedKmh(locked: LockedReader): Int? = guardSpeedKmh { dev, fid ->
+    runCatching { locked.readFloat(dev, fid) }
+        .onFailure { if (it is CancellationException) throw it }
+        .getOrNull()
+}
+
 /** Raw dev=1023 int read (support flag or target mode). Null means the read did not complete. */
 fun interface DriveModeReader {
     suspend fun read(fid: Int): Int?
@@ -49,9 +66,9 @@ fun interface DriveModeReader {
  * [LockedReader] bound to that same lock, so the guard's own re-check reads through the daemon
  * instead of a separately blockable ADB call. Returning false aborts the send and the write
  * reports TRANSIENT. Own interface rather than [SeatWriter] because the seat channel has no
- * equivalent guard.
+ * equivalent guard. The drive mode and the spoiler channels write through it.
  */
-fun interface DriveModeWriter {
+fun interface GuardedWriter {
     suspend fun write(actionName: String, value: Int, beforeSend: suspend (LockedReader) -> Boolean): WriteOutcome
 }
 
@@ -78,7 +95,7 @@ fun interface DriveModeWriter {
  * at a time under [mutex], so a queued one sees the settled mode.
  */
 class DriveModeChannel(
-    private val writer: DriveModeWriter,
+    private val writer: GuardedWriter,
     private val reader: DriveModeReader,
     private val speed: suspend () -> Int?,
 ) {
@@ -136,7 +153,7 @@ class DriveModeChannel(
     private suspend fun readSpeed(): Int? =
         runCatching { speed() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
 
-    /** [DriveModeWriter.beforeSend] guard: for a terrain mode, re-reads speed one last time
+    /** [GuardedWriter] beforeSend guard: for a terrain mode, re-reads speed one last time
      *  through [reader] — the daemon, not ADB (2026-09-27, review round 3): AutoserviceClient's
      *  ADB path shares a `@Synchronized` monitor with every other in-flight ADB call, and a guard
      *  blocked on THAT monitor cannot be interrupted by HelperClient's own guard timeout, holding
@@ -155,7 +172,7 @@ class DriveModeChannel(
         a.speedVerdict = "speed unknown"
         var readFinished = false
         try {
-            a.kmh = readGuardSpeed(locked)
+            a.kmh = lockedGuardSpeedKmh(locked)
             readFinished = true
         } finally {
             if (!readFinished) Log.w(TAG, "DriveMode: guard speed read cut off, refusing as speed unknown")
@@ -165,17 +182,6 @@ class DriveModeChannel(
         if (kmh != null && kmh <= DriveMode.TERRAIN_MAX_SPEED_KMH) { a.speedVerdict = null; return true }
         if (kmh != null) a.speedVerdict = "too fast"
         return false
-    }
-
-    /** Rounded UP, not truncated — same reasoning as VehicleApiImpl's pre-write speed closure: a
-     *  plain toInt() would turn 15.9 km/h into 15 and let a terrain mode through above the limit.
-     *  A throwing read is a failed read (unknown), not a verdict. */
-    private suspend fun readGuardSpeed(locked: LockedReader): Int? {
-        val address = FidAddresses.of("speed")
-        return runCatching { locked.readFloat(address.device, address.fid) }
-            .onFailure { if (it is CancellationException) throw it }
-            .getOrNull()
-            ?.let { kotlin.math.ceil(it).toInt() }
     }
 
     /** What one attempt has seen so far; [done] writes its single log line. [kmh] is mutable:
@@ -205,16 +211,11 @@ class DriveModeChannel(
     }
 
     /** A throwing read is a failed read, not a verdict. */
-    private suspend fun read(fid: Int): Int? = runCatching { reader.read(fid) }
-        .onFailure {
-            if (it is CancellationException) throw it
-            Log.w(TAG, "DriveMode: read fid=$fid failed: ${it.message}")
-        }
-        .getOrNull()
+    private suspend fun read(fid: Int): Int? =
+        readGuarded({ Log.w(TAG, "DriveMode: read fid=$fid failed: ${it.message}") }) { reader.read(fid) }
 
     private companion object {
         const val TAG = "DriveModeChannel"
-        fun render(value: Int?) = value?.toString() ?: "err"
         /** 6 × 500 ms: the target followed within 2 s on the live test, 3 s leaves headroom. */
         const val READBACK_ATTEMPTS = 6
         const val READBACK_DELAY_MS = 500L

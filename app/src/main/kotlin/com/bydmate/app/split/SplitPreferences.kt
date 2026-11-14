@@ -75,7 +75,24 @@ interface SplitPreferences {
 
     /** True when a press of the split key does something: feature on and a key assigned. */
     fun isSteeringKeyActive(): Boolean = isFeatureEnabled() && getSteeringKeyCode() > 0
+
+    /**
+     * True when our freeform split is the one that runs, so the system flag
+     * `enable_freeform_support` must be 1 for it (read by ClusterProjectionManager).
+     */
+    fun isFreeformSplitInUse(): Boolean = isFeatureEnabled()
 }
+
+/**
+ * The split needs the freeform flag only on our freeform path: not in native mode and not on
+ * platformized firmware (3:7 engine). The Android level is no part of it: the freeform path
+ * runs below Android 12 too (#385).
+ */
+internal fun freeformSplitInUse(
+    featureEnabled: Boolean,
+    nativeMode: Boolean,
+    platformizedFirmware: Boolean,
+): Boolean = featureEnabled && !nativeMode && !platformizedFirmware
 
 /**
  * No-op default used by ClusterProjectionManager before the production SplitPreferences
@@ -160,6 +177,12 @@ class SplitPreferencesImpl(context: Context) : SplitPreferences {
     override fun setNativeModeEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_NATIVE_MODE, enabled).apply()
     }
+
+    override fun isFreeformSplitInUse(): Boolean = freeformSplitInUse(
+        featureEnabled = isFeatureEnabled(),
+        nativeMode = isNativeModeEnabled(),
+        platformizedFirmware = Split37Engine.isPlatformizedFirmware(),
+    )
 
     override fun getSteeringKeyCode(): Int = prefs.getInt(KEY_STEERING_KEYCODE, 0)
 

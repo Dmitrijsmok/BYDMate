@@ -21,7 +21,7 @@ Split screen 1/3 and 2/3, navigation on the instrument cluster, Yandex Navigator
 
 Tested on Leopard 3 (Fangchengbao Tai 3), with support for Sea Lion 07, Song, Atto 3, Seal, Han and the DM-i and DM-o hybrids (Song Pro DM-i, Leopard 5, Leopard 8, Sealion 06). DiLink 3.0, 4.0, 5.0, 5.1, and firmware with the new UI7 interface (OTA V1.6).
 
-[Features](#features) | [Screenshots](#screenshots) | [Automation](#automation) | [Projection to cluster](#projection-to-cluster) | [HUD](#hud) | [Split screen](#split-screen) | [Voice AI Agent](#voice-ai-agent) | [Tech](#the-tech-screen) | [Diagnostics](#diagnostics-module-faults) | [AI Insights](#ai-insights) | [ABRP](#abrp-live-telemetry) | [Install](#install) | [Build](#build-from-source) | [Releases](https://github.com/AndyShaman/BYDMate/releases) | [Sponsor](SUPPORT.md)
+[Features](#features) | [Screenshots](#screenshots) | [Automation](#automation) | [Projection to cluster](#projection-to-cluster) | [HUD](#hud) | [Split screen](#split-screen) | [Voice AI Agent](#voice-ai-agent) | [Car](#the-car-screen) | [Diagnostics](#diagnostics-module-faults) | [AI Insights](#ai-insights) | [ABRP](#abrp-live-telemetry) | [Install](#install) | [Build](#build-from-source) | [Releases](https://github.com/AndyShaman/BYDMate/releases) | [Sponsor](SUPPORT.md)
 
 </div>
 
@@ -39,7 +39,7 @@ All core features (trips, charges, automations, local insights, offline voice ag
 
 The main changes in version 4.1.0.
 
-**Module fault codes with descriptions.** The "Tech" screen has a new "Diagnostics" card. The "Scan" button reads fault codes from the car's modules, only in P and only when you press it, and changes nothing in the car. Codes are written the same way as in BYD manuals and service scanners, grouped by module, with a description from BYD diagnostic manuals next to each one, no internet needed. You can send the codes to yourself in Telegram. The same card shows cluster warnings and the time left until the next service. Tested on Leopard 3. Details in [Diagnostics: Module Faults](#diagnostics-module-faults).
+**Module fault codes with descriptions.** The "Car" screen has a new "Diagnostics" card. The "Scan" button reads fault codes from the car's modules, only in P and only when you press it, and changes nothing in the car. Codes are written the same way as in BYD manuals and service scanners, grouped by module, with a description from BYD diagnostic manuals next to each one, no internet needed. You can send the codes to yourself in Telegram. The same card shows cluster warnings and the time left until the next service. Tested on Leopard 3. Details in [Diagnostics: Module Faults](#diagnostics-module-faults).
 
 **"Car status" card.** Climate and tires now share one card. The tires are drawn on a picture of the car, each wheel with its own pressure and temperature. If the car has a PM2.5 sensor, the cabin and outside air quality shows there too.
 
@@ -60,8 +60,8 @@ The full list of changes is in the [CHANGELOG](CHANGELOG.md).
 | **Charge** | Charges | Automatic AC/DC logging, period and lifetime stats, manual add and edit |
 | **AI** | Insights | Driving analysis: on-device rules, no internet |
 | **TRIP** | TRIP 1/2 counters | Distance, consumption, time, and cost since the last reset (like in the car); long-press to reset, tap for details |
-| **Bat** | Battery health and "Tech" | Card: SoH (Leopard 3, DiLink 3.0), temperature, 12V, cell balance, insulation. Tap opens the "Tech" screen with live battery, motor, climate, and tire parameters, including the front/rear power split in percent |
-| **DTC** | Module faults | "Diagnostics" card on the "Tech" screen: fault codes from the car's modules with descriptions from BYD manuals, cluster warnings, time until the next service. Scanning only in P and only on a press, it changes nothing in the car |
+| **Bat** | Battery health and "Car" | Card: SoH (Leopard 3, DiLink 3.0), temperature, 12V, cell balance, insulation. Tap opens the "Car" screen with live battery, motor, climate, and tire parameters, including the front/rear power split in percent |
+| **DTC** | Module faults | "Diagnostics" card on the "Car" screen: fault codes from the car's modules with descriptions from BYD manuals, cluster warnings, time until the next service. Scanning only in P and only on a press, it changes nothing in the car |
 | **DM-i** | Hybrids | The app detects a hybrid from the car's own counters. Battery and fuel range from the car, a «Fuel» card (tank, range, rpm, engine and battery mileage), litres and engine kilometres per trip from the car's counter, litre price per tariff period. Nothing changes on EVs |
 | **Map** | Route map | osmdroid (OpenStreetMap) in trip details |
 | **Rules** | Automation | WHEN→THEN rules: parameter triggers → vehicle control commands |
@@ -94,9 +94,9 @@ Below the ring: an AI insight, a small battery health card (SoH on Leopard 3 and
 
 *Driving efficiency analysis: consumption, trends, battery, recommendations (computed on the device)*
 
-**Tech**
+**Car**
 
-<img src="docs/screenshots/tech-screen-en.jpg" alt="The Tech screen" width="800">
+<img src="docs/screenshots/tech-screen-en.jpg" alt="The Car screen" width="800">
 
 *Battery, motors, BMS limits, cells, battery history, climate, tyres, diagnostics. Opens with a tap on the battery card on the Dashboard*
 
@@ -237,15 +237,15 @@ The right star turns on the projection by default. You can reassign the button, 
 
 ### Enabling
 
-Open **Settings → Display** and turn on the "Cluster projection" toggle. The app enables the needed service itself (this requires the ADB activation done during install, see "Install") and switches the cluster into projection mode by itself: that is what the "Show on the cluster right away" toggle does, on by default. Nothing needs to be set up by hand on the head unit.
+Open **Settings → Display** and turn on the "Cluster projection" toggle. The app enables the needed service itself (this requires the ADB activation done during install, see "Install") and switches the cluster into projection mode by itself: that is what the "Auto-switch the cluster" toggle does, on by default. Nothing needs to be set up by hand on the head unit.
 
 After that, a short press of the chosen steering-wheel button (right star by default) moves the chosen app to the cluster and back.
 
-If you turn "Show on the cluster right away" off, you will need to put the cluster into projection mode once yourself: the projection icon on the head unit's home screen, then the **IPC** button on the map that appears. It is worth turning off if, after projecting, ADAS or the native widget disappears from the cluster and does not come back by itself (on some DiLink 5.0 firmware the projection screen lives inside the native mini-map): with the toggle off the app does not touch the cluster mode at all, including for blind-spot cameras, and the picture is visible in the mini-map.
+If you turn "Auto-switch the cluster" off, you will need to put the cluster into projection mode once yourself: the projection icon on the head unit's home screen, then the **IPC** button on the map that appears. It is worth turning off if, after projecting, ADAS or the native widget disappears from the cluster and does not come back by itself (on some DiLink 5.0 firmware the projection screen lives inside the native mini-map): with the toggle off the app does not touch the cluster mode at all, including for blind-spot cameras, and the picture is visible in the mini-map.
 
 <img src="docs/screenshots/settings-display-en.jpg" alt="Settings → Display: cluster projection, what each option does" width="800">
 
-### Projection Modes: Factory and Extended
+### Cluster Output Modes: Factory and Extended
 
 In **Settings → Display**, next to the projection toggle, you choose the cluster output mode. There are two, and they differ in whether the app touches the car's system settings.
 
@@ -318,7 +318,7 @@ With the turn signal on, BYDMate shows the side camera picture by itself: the le
 
 <img src="docs/screenshots/settings-blindspot-en.jpg" alt="Settings → Display → Blind spots" width="800">
 
-Enable it in **Settings → Display**, "Blind spots" section (off by default). The same place has the speed threshold below which the camera does not show, the window width, and its position: the "Adjust position" button shows an empty window you drag with a finger to where the camera should be. If the left camera on the cluster gets in the way, turn on "Both cameras on the main screen" there too: both pictures show on the tablet, the cluster is left alone. The left window mirrors the right one by default, and the "Left camera position" button under the toggle gives it its own spot. The "Vertical camera window" toggle turns the window vertical and rotates the picture 90 degrees, like a mirror: if the picture ends up facing the wrong way after turning it on, open an issue. Requires a car equipped with a surround-view system. On some cars with DiLink 4.0 the firmware does not let apps access the cameras, the feature does not work there.
+Enable it in **Settings → Display**, "Blind spots" section (off by default). The same place has the speed threshold below which the camera does not show, the window width, and its position: the "Adjust position" button shows an empty window you drag with a finger to where the camera should be. The "Hide the camera after" slider (5 to 60 seconds, "no limit" by default) is for a turn signal that stays on for a long time: the camera leaves the screen after that time and comes back the next time the turn signal goes on, and the warning frame leaves with it. If the left camera on the cluster gets in the way, turn on "Both cameras on the main screen" there too: both pictures show on the tablet, the cluster is left alone. The left window mirrors the right one by default, and the "Left camera position" button under the toggle gives it its own spot. The "Vertical camera window" toggle turns the window vertical and rotates the picture 90 degrees, like a mirror: if the picture ends up facing the wrong way after turning it on, open an issue. Requires a car equipped with a surround-view system. On some cars with DiLink 4.0 the firmware does not let apps access the cameras, the feature does not work there.
 
 ---
 
@@ -413,7 +413,7 @@ Safety: window opening is blocked above 120 km/h, the sunroof above 80 km/h, doo
 
 ### Quick Commands Without the Agent and Without Internet
 
-Frequent commands run instantly, without the language model and without the network. For this, the app has a fixed list of Russian phrases: windows and sunroof, seat heating and ventilation, steering wheel heating, mirrors, climate, fan, volume, locks, trunk, and lights.
+Frequent commands run instantly, without the language model and without the network. For this, the app has a fixed list of Russian phrases: windows and sunroof, seat heating and ventilation, steering wheel heating, mirrors, climate, fan, volume, locks, trunk, lights, and navigation.
 
 How it works:
 
@@ -438,6 +438,8 @@ Examples from the list. Full list with wording variants: [docs/VOICE_COMMANDS.md
 | "Поставь температуру 22" (Set the temperature to 22) | climate set to 22 degrees |
 | "Громкость 20" (Volume 20) | media volume set to 20 |
 | "Включи Яндекс Музыку", "Яндекс Музыка" (Turn on Yandex Music, Yandex Music) | starts "My Wave" in Yandex Music |
+| "Поехали домой", "Маршрут на работу" (Let's go home, Route to work) | a route to the BYDMate Place "Дом" (Home) or "Работа" (Work), or, without one, to the home or work saved in the navigator |
+| "Открой навигатор", "Навигация" (Open the navigator, Navigation) | opens the navigator chosen for routes |
 | "Запри машину" (Lock the car) | doors lock |
 
 The English offline commands were removed, the list is Russian only. The app's interface language does not affect this: the offline commands and the agent work regardless of the app's language.
@@ -577,7 +579,7 @@ Two apps on screen at once: one takes two thirds, the other takes a third. A typ
 ### Enabling
 
 1. Open **Settings → Split screen** and turn on the "Split screen 1/3 + 2/3" toggle.
-2. If a note about rebooting shows up under the toggle, reboot the head unit once (long-press the volume wheel). If you already use "Extended" projection mode, no reboot is needed: everything required is already running.
+2. If a note about rebooting shows up under the toggle, reboot the head unit once (long-press the volume wheel). If you already use "Extended" output mode, no reboot is needed: everything required is already running.
 
 While the feature is off, the app does not touch the car's system settings. Turning the toggle off restores the setting to its factory value, unless the window mode is also needed by "Extended" projection: then it returns to factory once you turn that off too.
 
@@ -772,7 +774,7 @@ On **BYD Leopard 3 (Fangchengbao Tai 3)** BYDMate reads this value directly from
 
 On other BYD models, access to this value is not yet confirmed, so SoH does not show there. The rest of the card (battery temperature, 12V, cell balance, insulation resistance) works on every supported model.
 
-Tapping the card opens the **"Tech"** screen with detailed battery, motor, climate and tyre data plus diagnostics, see [The "Tech" Screen](#the-tech-screen).
+Tapping the card opens the **"Car"** screen with detailed battery, motor, climate and tyre data plus diagnostics, see [The "Car" Screen](#the-car-screen).
 
 If SoH is available on your car and you want to help add support, open an [Issue](https://github.com/AndyShaman/BYDMate/issues) with your model and year.
 
@@ -789,26 +791,26 @@ SoH and automatic charge logging on Leopard 3 work automatically, there is nothi
 
 ---
 
-## The "Tech" Screen
+## The "Car" Screen
 
-"Tech" is the screen with the car's detailed data: battery, motors, battery limits, climate, tyres and diagnostics. The values come from the car itself and update live.
+"Car" is the screen with the car's detailed data: battery, motors, battery limits, climate, tyres and diagnostics. The values come from the car itself and update live.
 
 ### How to Open It
 
 1. Open the **"Dashboard"** tab.
 2. Tap the battery card: the row with SoH, battery temperature, 12V system, cell delta and insulation. It has a yellow outline in the picture.
-3. The **"Tech"** screen opens. The arrow in the top left corner takes you back.
+3. The **"Car"** screen opens. The arrow in the top left corner takes you back.
 
-<img src="docs/screenshots/tech-entry-en.jpg" alt="Dashboard: the battery card that opens Tech" width="400">
+<img src="docs/screenshots/tech-entry-en.jpg" alt="Dashboard: the battery card that opens Car" width="400">
 
 ### What Is on the Screen
 
-<img src="docs/screenshots/tech-screen-en.jpg" alt="The whole Tech screen" width="900">
+<img src="docs/screenshots/tech-screen-en.jpg" alt="The whole Car screen" width="900">
 
 Six cards, three per row. You can change their order: hold a card and drag it.
 
-- **Battery · now**: charge (SoC), remaining energy in kWh as the battery itself estimates it, SoH, battery temperature, traction battery voltage, power at the motors, how much the battery is giving out right now and how many percent of charge per hour that eats, the 12V system, insulation resistance.
-- **Motors and inverters**: front and rear separately. Motor and inverter temperatures on a scale, rpm, accelerator and brake pedal, power.
+- **Battery · now**: charge (SoC), remaining energy in kWh as the battery itself estimates it, SoH, battery temperature, traction battery voltage, how much the battery is giving out right now and how many percent of charge per hour that eats, the 12V system, insulation resistance.
+- **Motors and inverters**: power at the motors on top, then front and rear separately. Motor and inverter temperatures on a scale, rpm, accelerator and brake pedal, power.
 - **BMS limits**: the charge and discharge power the battery controller (BMS) allows right now and how much power the battery can give. Below are the cells: the weakest, the strongest and the difference between them.
 - **Battery · history**: when the last full charge to 100 % and the last calibration happened, mileage by battery data, how much energy has passed through the battery in total, the number of full cycles (with the numbers it is figured from), average charge since the last charge and over all time.
 - **Car status**: how much the A/C compressor draws, whether climate is on, cabin and outside temperature. Below are the pressure and temperature of each tyre on a picture of the car. If the car has a PM2.5 sensor, it is shown too.
@@ -829,13 +831,13 @@ Hybrids get a seventh card, **"Fuel"**.
 
 A car has dozens of electronic modules: battery, brakes, steering, airbags, driver assistance and more. When a module notices a problem, it stores a fault code. A service shop reads these codes with a scanner. Since version 4.1 BYDMate can read them too, right on the car's screen, with no scanner and no internet.
 
-<img src="docs/screenshots/tech-diagnostics.jpg" alt="The Car status and Diagnostics cards on the Tech screen" width="800">
+<img src="docs/screenshots/tech-diagnostics.jpg" alt="The Car status and Diagnostics cards on the Car screen" width="800">
 
 The screenshots show the app in Russian; in English the labels are the ones quoted below.
 
 ### Where to find it
 
-Dashboard → tap the battery card → the **"Tech"** screen → the **"Diagnostics"** card. The card has three parts:
+Dashboard → tap the battery card → the **"Car"** screen → the **"Diagnostics"** card. The card has three parts:
 
 - **Cluster warnings**: what the car itself shows on the instrument cluster. "none" means the cluster shows nothing right now.
 - **Next service**: days and km left until the scheduled service. The row shows only if the service reminder is on in the car. On Leopard 3 it is turned on in the car settings: Vehicle → Maintenance → Maintenance Interval or Maintenance Mileage.
@@ -978,7 +980,7 @@ On DiLink firmware from summer 2026 ("2606" builds), the ADB port closes at ever
 Things to know:
 
 - **Wi-Fi in the car must be on and connected to a network** (home, a phone's hotspot, any). Without Wi-Fi, Android does not let you turn on wireless debugging, and there is no way around this.
-- The first time you connect **on each new network**, a system dialog appears, "Allow wireless debugging on this network?". When the restore toggle is on, the app confirms it by itself through its accessibility service: on a phone's hotspot the network changes every time it is turned on, and "Always allow on this network" does not help there. If BYDMate's accessibility service is off, check "Always allow on this network" and tap ALLOW.
+- With the toggle on, the app first tries to switch regular ADB back on by itself, without any dialog. If that does not work and the "Allow wireless debugging on this network?" dialog appears, the app taps it by itself, but only after its own attempt and only in the wireless debugging dialog for the network the car is connected to. Nothing has to be switched on for this, location included. If the dialog stays on screen anyway, check "Always allow on this network" and tap ALLOW.
 - Once, while ADB still works, the app grants itself the `WRITE_SECURE_SETTINGS` system permission (a single command over ADB). Without it, wireless debugging cannot be turned on: the status line shows "Activation needed".
 - After booting, the app keeps retrying by itself as long as Wi-Fi is connected, and reacts to the screen unlocking. ADB usually comes back 10 to 30 seconds after the car connects to Wi-Fi. It works best if the phone's hotspot is already on by the time the car starts.
 - If ADB on your firmware survives a reboot anyway, there is no need to turn the toggle on: the status line shows "Not needed".

@@ -13,6 +13,7 @@ import com.k2fsa.sherpa.onnx.Vad
 import com.k2fsa.sherpa.onnx.VadModelConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.runBlocking
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
@@ -108,11 +109,15 @@ internal class GigaAmAsrEngine @Suppress("LongParameterList") constructor(
         thread(name = "gigaam-vad-prewarm", isDaemon = true) { task.run() }
     },
     private val preRollMs: Int = 0,
+    // Test seam: where the known-good hashes of freshly loaded files are taken (~230 MB read).
+    private val integrityExecutor: Executor = Executor { task ->
+        thread(name = "gigaam-integrity", isDaemon = true) { task.run() }
+    },
 ) : ContinuousAsr {
 
     // A tripped guard means the last loads aborted the whole process from native code
     // (corrupt .onnx): reporting not-ready blocks every load path (warmUp and transcribe
-    // both gate on isReady) until TrackingService quarantines the files and resets it.
+    // both gate on isReady) until TrackingService has checked the files (AsrGuardRecovery) and reset it.
     override fun isReady(): Boolean = modelManager.isReady() && loadGuard?.isTripped() != true
 
     // Cached across sessions: creating the recognizer loads the 226 MiB GigaAM model from disk
@@ -133,23 +138,6 @@ internal class GigaAmAsrEngine @Suppress("LongParameterList") constructor(
         if (warmVad) isReady() && cachedRecognizer != null && spareVad != null else isReady()
 
     override fun requiresWarmBeforeListening(): Boolean = warmVad
-
-    /** Drop the cached recognizer so the next session reloads the model from disk. Called when
-     *  the model files change (re-download). The old handle is NOT closed here: an in-flight
-     *  session may still be decoding with it; the one-handle leak per re-download is bounded
-     *  and rare, and beats a use-after-free.
-     *
-     *  Not wired to a call site yet: GigaAmModelManager (the re-download/delete owner) has no
-     *  reference to this engine, and re-download is a rare, manual user action after which the
-     *  driver restarts the app anyway -- building that wiring now would be speculative (YAGNI).
-     *  The spare VAD, unused by definition, is closed. */
-    internal fun invalidateCachedRecognizer() {
-        cachedRecognizer = null
-        synchronized(this) {
-            spareVad?.let { runCatching { it.close() } }
-            spareVad = null
-        }
-    }
 
     /** Pre-builds the cached recognizer (~1.3 s cold load of the 226 MiB model) so the first
      *  PTT's transcribe() starts the mic immediately instead of after model load (field defect:
@@ -174,6 +162,7 @@ internal class GigaAmAsrEngine @Suppress("LongParameterList") constructor(
             loadGuard?.noteLoadBegin(AsrLoadGuard.ARTIFACT_RECOGNIZER)
             val handle = recognizerFactory()
             loadGuard?.noteLoadSuccess(AsrLoadGuard.ARTIFACT_RECOGNIZER)
+            recordIntegrity(model = true)
             handle.also { cachedRecognizer = it }
         }
 
@@ -184,7 +173,25 @@ internal class GigaAmAsrEngine @Suppress("LongParameterList") constructor(
         loadGuard?.noteLoadBegin(AsrLoadGuard.ARTIFACT_VAD)
         val vad = vadFactory()
         loadGuard?.noteLoadSuccess(AsrLoadGuard.ARTIFACT_VAD)
+        recordIntegrity(model = false)
         return vad
+    }
+
+    private val modelIntegrityQueued = AtomicBoolean(false)
+    private val vadIntegrityQueued = AtomicBoolean(false)
+
+    /** Once per process and file kind, off the load path: files the native loader just accepted
+     *  get their SHA-256 recorded when none is (installs older than the hashes), so a later
+     *  tripped load guard can tell a process kill from a corrupt file instead of deleting. */
+    private fun recordIntegrity(model: Boolean) {
+        val queued = if (model) modelIntegrityQueued else vadIntegrityQueued
+        if (!queued.compareAndSet(false, true)) return
+        runCatching {
+            integrityExecutor.execute {
+                runCatching { runBlocking { modelManager.recordIntegrityIfMissing(model) } }
+                    .onFailure { Log.w(TAG, "integrity record failed: ${it.message}") }
+            }
+        }
     }
 
     /** Hands the spare VAD to the calling session, which owns (and closes) it from now on. */

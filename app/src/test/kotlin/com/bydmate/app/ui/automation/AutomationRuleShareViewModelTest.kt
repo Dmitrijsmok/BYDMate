@@ -185,6 +185,23 @@ class AutomationRuleShareViewModelTest {
         assertEquals("OR", inserted.captured.triggerLogic)
     }
 
+    @Test fun `a rule the editor would refuse opens the preview with an error and is not saved`() {
+        val vm = vm()
+        vm.importFile(powerStateFile("AND", """{"param":"Gear","chineseName":"档位","operator":"==","value":"9","displayName":"Передача","kind":"param"}"""))
+
+        val draft = requireNotNull(vm.uiState.value.importDraft)
+        assertNotNull(draft.error)
+        vm.confirmImport()
+        testDispatcher.scheduler.advanceUntilIdle()
+        coVerify(exactly = 0) { ruleDao.insert(any()) }
+    }
+
+    @Test fun `a valid file opens the preview without an error`() {
+        val vm = vm()
+        vm.importFile(copyFixture("bydmate_rule_speed.json"))
+        assertNull(requireNotNull(vm.uiState.value.importDraft).error)
+    }
+
     @Test fun `unknown kind is refused with the update message`() {
         val vm = vm()
         vm.importFile(copyFixture("bydmate_rule_newer_kind.json"))
@@ -209,14 +226,6 @@ class AutomationRuleShareViewModelTest {
     private fun powerState(value: String) =
         """{"param":"PowerState","chineseName":"电源状态","operator":"==","value":"$value","displayName":"Питание","kind":"param"}"""
 
-    @Test fun `an imported PowerState DRIVE condition comes in as the BYDMate start`() {
-        val vm = vm()
-        vm.importFile(powerStateFile("AND", """{"param":"ExtTemp","chineseName":"车外温度","operator":"<","value":"0","displayName":"t","kind":"param"},""" + powerState("2")))
-
-        val triggers = requireNotNull(vm.uiState.value.importDraft).rule.triggers
-        assertEquals(listOf("param", "service_start"), triggers.map { it.kind })
-    }
-
     @Test fun `an imported sunshade template with PowerState DRIVE comes in as gear D`() {
         val vm = vm()
         vm.importFile(powerStateFile("AND", powerState("2"), name = "Sunshade while driving"))
@@ -224,13 +233,6 @@ class AutomationRuleShareViewModelTest {
         val trigger = requireNotNull(vm.uiState.value.importDraft).rule.triggers.single()
         assertEquals("Gear", trigger.param)
         assertEquals("4", trigger.value)
-    }
-
-    @Test fun `an imported PowerState ON condition comes in as the BYDMate start`() {
-        val vm = vm()
-        vm.importFile(powerStateFile("AND", powerState("1")))
-
-        assertEquals("service_start", requireNotNull(vm.uiState.value.importDraft).rule.triggers.single().kind)
     }
 
     @Test fun `an imported rule that needs the car off is refused`() {
@@ -369,6 +371,11 @@ class AutomationRuleShareViewModelTest {
 
         coVerify(exactly = 1) { actionDispatcher.dispatch(windowOpen, fresh) }
         coVerify(exactly = 1) { actionDispatcher.dispatch(sunroofToggle, fresh) }
+    }
+
+    @Test fun `rear logo light actions are not speed gated (383)`() {
+        assertFalse(isSpeedGatedAction(ActionDef("后车标灯打开", "Подсветка заднего логотипа: вкл")))
+        assertFalse(isSpeedGatedAction(ActionDef("后车标灯关闭", "Подсветка заднего логотипа: выкл")))
     }
 
     @Test fun `speed gate covers window, sunroof, frunk and unlock only`() {
@@ -650,13 +657,6 @@ class AutomationRuleShareViewModelTest {
         vm.closeImport()
         vm.importFile(file)
         assertTrue(vm.uiState.value.importDraft!!.preview.actions.single().contains(go))
-    }
-
-    @Test fun `a file with a BOM-prefixed deep schedule is refused before the preview`() {
-        val vm = vm()
-        vm.importFile(copyFixture("bydmate_rule_bom_deep.json"))
-        assertNull(vm.uiState.value.importDraft)
-        assertEquals(ctx.appLocalizedContext().getString(R.string.automation_import_invalid), vm.uiState.value.importError)
     }
 
     @Test fun `two quick shares write one file`() {

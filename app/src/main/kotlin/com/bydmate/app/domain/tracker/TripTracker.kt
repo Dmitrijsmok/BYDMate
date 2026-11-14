@@ -8,7 +8,6 @@ import com.bydmate.app.data.local.dao.TripPointDao
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.util.Collections
-import javax.inject.Inject
 import javax.inject.Singleton
 
 enum class TripState { IDLE, DRIVING }
@@ -19,24 +18,26 @@ enum class TripState { IDLE, DRIVING }
  * by HistoryImporter.attachGpsPoints().
  */
 @Singleton
-class TripTracker @Inject constructor(
+class TripTracker(
     private val tripPointDao: TripPointDao,
     private val clock: () -> Long = { System.currentTimeMillis() },
 ) {
     private val _state = MutableStateFlow(TripState.IDLE)
     val state: StateFlow<TripState> = _state
 
-    private val _tripStartedAt = MutableStateFlow<Long?>(null)
-    /**
-     * Epoch millis when the IDLE→DRIVING transition was confirmed (≤[START_DELAY_MS] ms after
-     * actual movement started). Null when not driving.
-     * Set on IDLE→DRIVING, cleared on DRIVING→IDLE and in [forceEnd].
-     */
-    val tripStartedAt: StateFlow<Long?> = _tripStartedAt
-
     private var speedAboveThresholdSince: Long? = null
     private var speedZeroSince: Long? = null
     private val pendingPoints = Collections.synchronizedList(mutableListOf<TripPointEntity>())
+
+    // Net battery energy of this run, Wh, integrated on every tick in any state so that the
+    // difference of two stored points stays exact after old points are thinned out.
+    // A new run starts after every break in the integration, so a difference across a break
+    // (which thinning could otherwise hide) is never read as a complete energy.
+    private var energyRun: Long = clock()
+    private var energyChainBroken = false
+    private var batteryEnergyWh = 0.0
+    private var prevPowerW: Double? = null
+    private var prevPowerTs = 0L
 
     companion object {
         private const val TAG = "TripTracker"
@@ -44,6 +45,7 @@ class TripTracker @Inject constructor(
         private const val START_DELAY_MS = 5_000L   // 5 seconds above threshold
         private const val STOP_DELAY_MS = 180_000L  // 3 minutes at zero
         private const val POINT_BATCH_SIZE = 30
+        private const val MAX_ENERGY_STEP_MS = 10_000L  // longer tick gaps are not integrated
     }
 
     suspend fun onData(data: DiParsData, location: Location?) {
@@ -56,6 +58,8 @@ class TripTracker @Inject constructor(
             ?: location?.takeIf { it.hasSpeed() }?.let { (it.speed * 3.6f).toInt() }
             ?: 0
         val now = clock()
+        val powerW = data.batteryPowerW
+        integrateEnergy(powerW, now)
 
         when (_state.value) {
             TripState.IDLE -> {
@@ -64,12 +68,11 @@ class TripTracker @Inject constructor(
                         speedAboveThresholdSince = now
                     } else if (now - speedAboveThresholdSince!! >= START_DELAY_MS) {
                         _state.value = TripState.DRIVING
-                        _tripStartedAt.value = now
                         speedZeroSince = null
                         speedAboveThresholdSince = null
                         Log.d(TAG, "Driving started (GPS collection)")
                         // Record first point
-                        recordPoint(location, speed, now)
+                        recordPoint(location, speed, now, powerW)
                     }
                 } else {
                     speedAboveThresholdSince = null
@@ -77,7 +80,7 @@ class TripTracker @Inject constructor(
             }
             TripState.DRIVING -> {
                 // Record GPS point
-                recordPoint(location, speed, now)
+                recordPoint(location, speed, now, powerW)
 
                 if (pendingPoints.size >= POINT_BATCH_SIZE) {
                     flushPoints()
@@ -90,7 +93,6 @@ class TripTracker @Inject constructor(
                     } else if (now - speedZeroSince!! >= STOP_DELAY_MS) {
                         flushPoints()
                         _state.value = TripState.IDLE
-                        _tripStartedAt.value = null
                         speedZeroSince = null
                         speedAboveThresholdSince = null
                         Log.d(TAG, "Driving stopped (GPS collection ended)")
@@ -102,7 +104,29 @@ class TripTracker @Inject constructor(
         }
     }
 
-    private fun recordPoint(location: Location?, speed: Int, now: Long) {
+    /**
+     * Left rectangle with the previous tick's power. A tick without power, or a gap over
+     * [MAX_ENERGY_STEP_MS], breaks the chain; the next powered tick opens a new [energyRun].
+     */
+    private fun integrateEnergy(powerW: Double?, now: Long) {
+        val prev = prevPowerW
+        if (prev != null) {
+            val dt = now - prevPowerTs
+            if (powerW != null && dt in 1..MAX_ENERGY_STEP_MS) {
+                batteryEnergyWh += prev * dt / 3_600_000.0
+            } else {
+                energyChainBroken = true
+            }
+        }
+        if (powerW != null && energyChainBroken) {
+            energyRun = now
+            energyChainBroken = false
+        }
+        prevPowerW = powerW
+        prevPowerTs = now
+    }
+
+    private fun recordPoint(location: Location?, speed: Int, now: Long, powerW: Double?) {
         if (location != null) {
             pendingPoints.add(
                 TripPointEntity(
@@ -111,8 +135,11 @@ class TripTracker @Inject constructor(
                     lat = location.latitude,
                     lon = location.longitude,
                     speedKmh = speed.toDouble(),
-                    // Elevation is stored for a later climb correction; nothing reads it yet.
+                    // Elevation feeds the elevation shadow of the trip window chart.
                     altitude = if (location.hasAltitude()) location.altitude else null,
+                    batteryPowerW = powerW,
+                    batteryEnergyWh = if (powerW != null) batteryEnergyWh else null,
+                    energyRun = if (powerW != null) energyRun else null,
                 )
             )
             if (pendingPoints.size % 10 == 1) {
@@ -128,12 +155,11 @@ class TripTracker @Inject constructor(
     /**
      * Force-end on service shutdown. Just flush remaining GPS points.
      */
-    suspend fun forceEnd(lastData: DiParsData?, lastLocation: Location?) {
+    suspend fun forceEnd() {
         if (_state.value != TripState.DRIVING) return
         Log.w(TAG, "forceEnd: flushing GPS points on shutdown")
         flushPoints()
         _state.value = TripState.IDLE
-        _tripStartedAt.value = null
         speedZeroSince = null
         speedAboveThresholdSince = null
     }
