@@ -491,6 +491,10 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             var silentMs = 0L
             var lastTickSilentMs = 0L
             var inAgentTurn = false
+            // A session that heard speech but never got a phrase out of it is journaled, so the
+            // road-noise case ("nothing happened") shows up in the voice history.
+            var heardSpeech = false
+            var utterances = 0
             try {
                 // Wave P: no session cap; silence auto-stop below is the only auto-exit.
                 // The mark runs on the capture thread when the frame is read, not when it is
@@ -542,6 +546,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                 continuousAsr.transcribe(pcm).collect { ev ->
                     when (ev) {
                         is ContinuousAsrEvent.SpeechStart -> {
+                            heardSpeech = true
                             lastEventMs = System.currentTimeMillis()
                             lastTickSilentMs = 0L
                             silentMs = 0L
@@ -569,6 +574,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                             if (silentMs >= SILENCE_AUTOSTOP_MS && !agentTurn) throw StopSession
                         }
                         is ContinuousAsrEvent.Utterance -> {
+                            utterances++
                             val decodeMs = System.currentTimeMillis() - lastEventMs
                             if (processingUtterance) {
                                 if (AgentNameMatcher.matches(ev.text, agentIdentity().name)) {
@@ -649,6 +655,12 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
                 sessionJob = null
                 // Before busy is released: a new session resets the reason.
                 val level = micLevel.snapshot()
+                if (heardSpeech && utterances == 0 && stopReason?.startsWith("error") != true) {
+                    record(VoiceJournalEntry(transcript = "", route = VoiceJournalEntry.Route.REFUSED, detail = "",
+                        outcome = VoiceJournalEntry.Outcome.NOT_UNDERSTOOD,
+                        reason = "речь не выделена из шума (rms_avg=${level.avg})", refusal = VoiceRefusal.NO_SEGMENT),
+                        "Continuous session heard speech but no phrase: stop=${stopReason ?: "cancel"} rms_avg=${level.avg}")
+                }
                 Trace.event(TraceArea.VOICE, "session-stop", "reason" to (stopReason ?: "cancel"),
                     "frames" to level.frames, "rms_avg" to level.avg, "rms_peak" to level.peak, by = traceId)
                 busy.set(false)
