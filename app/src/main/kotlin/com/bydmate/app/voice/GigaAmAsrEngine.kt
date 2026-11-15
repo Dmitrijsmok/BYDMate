@@ -121,9 +121,8 @@ private class NoiseGate {
         return true
     }
 
-    fun onSegment(samples: Int, hasText: Boolean) {
+    fun onSegment() {
         segments++
-        Trace.event(TraceArea.VOICE, "vad-segment", "ms" to samples * 1000L / GigaAmAsrEngine.SAMPLE_RATE, "text" to hasText)
     }
 
     fun summary() {
@@ -310,7 +309,7 @@ internal class GigaAmAsrEngine @Suppress("LongParameterList") constructor(
                     vad.pop()
                     speaking = false
                     val text = recognizer.decode(segment)
-                    noise.onSegment(segment.size, text.isNotBlank())
+                    noise.onSegment()
                     if (text.isNotBlank()) emit(ContinuousAsrEvent.Utterance(text))
                 }
             }
