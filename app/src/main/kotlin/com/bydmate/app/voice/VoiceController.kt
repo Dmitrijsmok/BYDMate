@@ -1422,7 +1422,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         /** The route code of the trace. */
         val route: String get() = when (this) {
             is Cmd -> if (label.startsWith("phrase:")) "phrase" else "nlu"
-            is RelTemp, is Vol, Music, is Navigator, is Navigate, is Answer -> "nlu"
+            is RelTemp, is Vol, Music, is Navigator, is Navigate, is Answer, is AppSetStart -> "nlu"
             is Auto -> "automation"
             is None -> "agent"
         }
