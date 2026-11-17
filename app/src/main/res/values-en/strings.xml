@@ -2218,7 +2218,7 @@
     <string name="settings_voice_app_matches_dialog_title">Application matches</string>
     <string name="settings_voice_app_matches_not_found">Not found on this device</string>
     <string name="settings_section_app_sets_title">Split screen</string>
-    <string name="settings_app_sets_howto">Two apps side by side. Say "split" and the set name and both open in a split screen. Just "split" or "turn on split screen" opens the first set, and so does a tap on the left part of the widget.</string>
+    <string name="settings_app_sets_howto">Voice:\n• "split" or "turn on split screen" — the first set in the list;\n• "split" and the name — that set. Any name works, small recognition slips are forgiven.\nWidget: a tap on the left part opens the first set.\nNo second app chosen: whatever is open now stays.</string>
     <string name="settings_app_sets_add_title">New set</string>
     <string name="settings_app_sets_add">Add</string>
     <string name="settings_app_sets_name_label">Name (voice command)</string>
@@ -2244,4 +2244,6 @@
     <string name="settings_app_sets_saved">Saved</string>
     <string name="settings_app_sets_run_failed">The set did not open</string>
     <string name="app_sets_none_hint">No set yet. Add one in Settings → Split screen</string>
+    <string name="settings_widget_left_tap_zoning_description_legacy">The left part opens an app or the split screen; the rest is BYDMate.</string>
+    <string name="settings_widget_left_tap_mode_split_legacy">Split screen</string>
 </resources>

@@ -2388,7 +2388,7 @@
     <string name="settings_voice_app_matches_dialog_title">Совпадения приложений</string>
     <string name="settings_voice_app_matches_not_found">Не найдено на этом устройстве</string>
     <string name="settings_section_app_sets_title">Разделение экрана</string>
-    <string name="settings_app_sets_howto">Два приложения рядом. Скажите «сплит» и название комплекта, и оба откроются в разделённом экране. Просто «сплит» или «включи разделение экрана» открывает первый комплект, тап по левой части виджета тоже.</string>
+    <string name="settings_app_sets_howto">Голос:\n• «сплит» или «включи разделение экрана» — первый комплект в списке;\n• «сплит» и название — нужный комплект. Название любое, небольшие ошибки распознавания прощаются.\nВиджет: тап по левой части открывает первый комплект.\nНе выбрано второе приложение: останется то, что открыто сейчас.</string>
     <string name="settings_app_sets_add_title">Новый комплект</string>
     <string name="settings_app_sets_add">Добавить</string>
     <string name="settings_app_sets_name_label">Название (голосовая команда)</string>
@@ -2414,4 +2414,6 @@
     <string name="settings_app_sets_saved">Сохранено</string>
     <string name="settings_app_sets_run_failed">Комплект не открылся</string>
     <string name="app_sets_none_hint">Нет комплекта. Добавьте его в Настройки → Разделение экрана</string>
+    <string name="settings_widget_left_tap_zoning_description_legacy">Левая часть открывает приложение или разделение экрана; остальное - BYDMate.</string>
+    <string name="settings_widget_left_tap_mode_split_legacy">Разделение экрана</string>
 </resources>
