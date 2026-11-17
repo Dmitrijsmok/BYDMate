@@ -2373,7 +2373,7 @@
     <string name="settings_voice_app_matches_dialog_title">Супадзенні праграм</string>
     <string name="settings_voice_app_matches_not_found">Не знойдзена на гэтай прыладзе</string>
     <string name="settings_section_app_sets_title">Падзел экрана</string>
-    <string name="settings_app_sets_howto">Дзве праграмы побач: адна злева, другая справа. Назва камплекта — галасавая каманда: скажыце яе, і абедзве праграмы адкрыюцца ў падзеленым экране. Калі праграма справа не абрана, справа застанецца тое, што адкрыта цяпер. Камплект можна адкрываць і пры запуску, на стаянцы.</string>
+    <string name="settings_app_sets_howto">Дзве праграмы побач: адна злева, другая справа. Скажыце «сплит» і назву камплекта, і абедзве праграмы адкрыюцца ў падзеленым экране. Проста «сплит» або «уключы падзел экрана» адкрывае першы камплект у спісе. Тап па левай частцы віджэта таксама адкрывае першы камплект. Назву можна выбраць любую: калі распазнаванне запіша яе крыху інакш, яна ўсё роўна знойдзецца. Калі праграма справа не абрана, справа застанецца тое, што адкрыта цяпер.</string>
     <string name="settings_app_sets_add_title">Новы камплект</string>
     <string name="settings_app_sets_add">Дадаць</string>
     <string name="settings_app_sets_name_label">Назва (галасавая каманда)</string>
@@ -2386,12 +2386,9 @@
     <string name="settings_app_sets_not_chosen">Не абрана</string>
     <string name="settings_app_sets_autostart_title">Адкрываць пры запуску</string>
     <string name="settings_app_sets_autostart_desc">Камплект адкрыецца пасля запуску службы, калі машына стаіць</string>
-    <string name="settings_app_sets_untitled">Без назвы</string>
     <string name="settings_app_sets_save">Захаваць</string>
     <string name="settings_app_sets_run">Запусціць</string>
-    <string name="settings_app_sets_delete_title">Выдаліць камплект</string>
     <string name="settings_app_sets_delete">Выдаліць</string>
-    <string name="settings_app_sets_cancel_title">Адмяніць новы камплект</string>
     <string name="settings_app_sets_cancel">Адмена</string>
     <string name="settings_app_sets_err_name">Увядзіце назву</string>
     <string name="settings_app_sets_err_name_long">Назва занадта доўгая</string>
@@ -2401,4 +2398,5 @@
     <string name="settings_app_sets_err_in_use">Такая назва ўжо ёсць: %1$s</string>
     <string name="settings_app_sets_saved">Захавана</string>
     <string name="settings_app_sets_run_failed">Камплект не адкрыўся</string>
+    <string name="app_sets_none_hint">Няма камплекта. Дадайце яго ў Налады → Падзел экрана</string>
 </resources>

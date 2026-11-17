@@ -2388,7 +2388,7 @@
     <string name="settings_voice_app_matches_dialog_title">Совпадения приложений</string>
     <string name="settings_voice_app_matches_not_found">Не найдено на этом устройстве</string>
     <string name="settings_section_app_sets_title">Разделение экрана</string>
-    <string name="settings_app_sets_howto">Два приложения рядом: одно слева, другое справа. Название комплекта — голосовая команда: скажите его, и оба приложения откроются в разделённом экране. Если приложение справа не выбрано, справа останется то, что открыто сейчас. Комплект можно открывать и при запуске, на стоянке.</string>
+    <string name="settings_app_sets_howto">Два приложения рядом: одно слева, другое справа. Скажите «сплит» и название комплекта, и оба приложения откроются в разделённом экране. Просто «сплит» или «включи разделение экрана» открывает первый комплект в списке. Тап по левой части виджета тоже открывает первый комплект. Название можно выбрать любое: если распознавание записало его немного иначе, оно всё равно найдётся. Если приложение справа не выбрано, справа останется то, что открыто сейчас.</string>
     <string name="settings_app_sets_add_title">Новый комплект</string>
     <string name="settings_app_sets_add">Добавить</string>
     <string name="settings_app_sets_name_label">Название (голосовая команда)</string>
@@ -2401,12 +2401,9 @@
     <string name="settings_app_sets_not_chosen">Не выбрано</string>
     <string name="settings_app_sets_autostart_title">Открывать при запуске</string>
     <string name="settings_app_sets_autostart_desc">Комплект откроется после запуска службы, если машина стоит</string>
-    <string name="settings_app_sets_untitled">Без названия</string>
     <string name="settings_app_sets_save">Сохранить</string>
     <string name="settings_app_sets_run">Запустить</string>
-    <string name="settings_app_sets_delete_title">Удалить комплект</string>
     <string name="settings_app_sets_delete">Удалить</string>
-    <string name="settings_app_sets_cancel_title">Отменить новый комплект</string>
     <string name="settings_app_sets_cancel">Отмена</string>
     <string name="settings_app_sets_err_name">Введите название</string>
     <string name="settings_app_sets_err_name_long">Название слишком длинное</string>
@@ -2416,4 +2413,5 @@
     <string name="settings_app_sets_err_in_use">Такое название уже есть: %1$s</string>
     <string name="settings_app_sets_saved">Сохранено</string>
     <string name="settings_app_sets_run_failed">Комплект не открылся</string>
+    <string name="app_sets_none_hint">Нет комплекта. Добавьте его в Настройки → Разделение экрана</string>
 </resources>

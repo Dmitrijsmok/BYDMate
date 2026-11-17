@@ -869,7 +869,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
     /** Side-effect-free resolution of a transcript to an actionable command. Precedence (the
      *  agent follow-up window, checked by the caller, outranks all of them):
      *  1. an automation phrase equal to the whole utterance, word for word after normalization;
-     *  1a. the name of an app set, the same way (only on the Android 10 head units, where sets exist);
+     *  1a. an app set: «сплит <название>», «включи разделение экрана» (Android 10 head units, where sets exist);
      *  2. the user's own phrase for a built-in command, equal to the whole utterance;
      *  3. the built-in NluParser on the full utterance;
      *  4. the agent (Resolution.None, with the parser's reason).
@@ -878,7 +878,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
      *  «открой окно наполовину», «не открывай окно» or «открой окно на палец». */
     private suspend fun resolve(text: String): Resolution {
         automationResolver.match(text)?.let { return Resolution.Auto(it) }
-        appSets?.match(text)?.let { return Resolution.AppSetStart(it) }
+        appSets?.resolve(text)?.let { return Resolution.AppSetStart(it) }
         userPhrases.match(text)?.let { return Resolution.Cmd(listOf(it.command), "phrase:${it.id}") }
         return parse(text)
     }

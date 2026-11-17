@@ -2219,7 +2219,7 @@
     <string name="settings_voice_app_matches_dialog_title">Correspondências de apps</string>
     <string name="settings_voice_app_matches_not_found">Não encontrado neste dispositivo</string>
     <string name="settings_section_app_sets_title">Tela dividida</string>
-    <string name="settings_app_sets_howto">Dois apps lado a lado: um à esquerda, outro à direita. O nome do conjunto é um comando de voz: diga-o e os dois apps abrem em tela dividida. Se não houver app à direita, fica à direita o que está aberto agora. O conjunto também pode abrir ao iniciar, com o carro parado.</string>
+    <string name="settings_app_sets_howto">Dois apps lado a lado: um à esquerda, outro à direita. Diga «split» e o nome do conjunto e os dois apps abrem em tela dividida. Só «split» ou «ligar tela dividida» abre o primeiro conjunto da lista. Tocar na parte esquerda do widget também abre o primeiro conjunto. Qualquer nome serve: se o reconhecimento de voz o escrever um pouco diferente, ainda é encontrado. Se não houver app à direita, fica à direita o que está aberto agora.</string>
     <string name="settings_app_sets_add_title">Novo conjunto</string>
     <string name="settings_app_sets_add">Adicionar</string>
     <string name="settings_app_sets_name_label">Nome (comando de voz)</string>
@@ -2232,12 +2232,9 @@
     <string name="settings_app_sets_not_chosen">Não escolhido</string>
     <string name="settings_app_sets_autostart_title">Abrir ao iniciar</string>
     <string name="settings_app_sets_autostart_desc">O conjunto abre depois de o serviço iniciar, com o carro parado</string>
-    <string name="settings_app_sets_untitled">Sem nome</string>
     <string name="settings_app_sets_save">Guardar</string>
     <string name="settings_app_sets_run">Executar</string>
-    <string name="settings_app_sets_delete_title">Eliminar o conjunto</string>
     <string name="settings_app_sets_delete">Eliminar</string>
-    <string name="settings_app_sets_cancel_title">Cancelar o novo conjunto</string>
     <string name="settings_app_sets_cancel">Cancelar</string>
     <string name="settings_app_sets_err_name">Introduza um nome</string>
     <string name="settings_app_sets_err_name_long">O nome é demasiado longo</string>
@@ -2247,4 +2244,5 @@
     <string name="settings_app_sets_err_in_use">Este nome já existe: %1$s</string>
     <string name="settings_app_sets_saved">Guardado</string>
     <string name="settings_app_sets_run_failed">O conjunto não abriu</string>
+    <string name="app_sets_none_hint">Ainda não há conjunto. Adicione um em Definições → Tela dividida</string>
 </resources>

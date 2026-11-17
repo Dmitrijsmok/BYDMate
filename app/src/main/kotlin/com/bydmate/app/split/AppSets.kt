@@ -17,8 +17,7 @@ import javax.inject.Singleton
  * An app set for the Android 10 head units (DiLink 3 / 4): two apps side by side, started by a
  * phrase of the driver's own choice or at the start of the service.
  *
- * [name] is also the voice phrase: it matches only when it is the whole utterance, word for word
- * after [VoicePhrase.isExact] normalization. [leftPkg] ends up in the left half; [rightPkg] in the
+ * [name] is what follows «сплит» in the voice command ([AppSetStore.resolve]). [leftPkg] ends up in the left half; [rightPkg] in the
  * right one, or null to leave there whatever is on screen at that moment.
  */
 data class AppSet(
@@ -52,9 +51,40 @@ class AppSetStore(private val prefs: SharedPreferences? = null) {
         data class NameInUse(val owner: String) : Check
     }
 
-    /** The set whose name is the whole of [transcript]. */
-    fun match(transcript: String): AppSet? =
-        _sets.value.firstOrNull { VoicePhrase.isExact(transcript, it.name) }
+    /**
+     * The set an utterance asks for, or null when it asks for none.
+     *
+     * - «сплит», «включи / открой / запусти сплит», «разделение экрана», «включи / открой разделение
+     *   экрана», «раздели экран»: the default set, the first in the list.
+     * - «сплит <название>» (also after «включи», «открой», «запусти»): the set with that name. The
+     *   name is compared by its letters, without spaces, and a slip of the recognizer is forgiven
+     *   ([nameDistanceLimit]): an invented word is written differently every time. With one set
+     *   saved, whatever follows «сплит» is that set.
+     *
+     * The bare name never opens a set: it would collide with «открой тикток» and the like.
+     */
+    fun resolve(transcript: String): AppSet? {
+        val sets = _sets.value
+        val heard = VoicePhrase.words(transcript)
+        if (sets.isEmpty() || heard.isEmpty()) return null
+        if (DEFAULT_PHRASES.any { it == heard }) return sets.first()
+        val rest = heard.dropWhile { it in LEAD_VERBS }
+        val prefix = rest.firstOrNull() ?: return null
+        val name = rest.drop(1)
+        if (name.isEmpty() || editDistance(prefix, SPLIT_WORD) > 1) return null
+        if (sets.size == 1) return sets.first()
+        val spoken = name.joinToString("")
+        val scored = sets.mapNotNull { set ->
+            val key = VoicePhrase.words(set.name).joinToString("")
+            val distance = editDistance(spoken, key)
+            (set to distance).takeIf { distance <= nameDistanceLimit(key) }
+        }
+        val best = scored.minOfOrNull { it.second } ?: return null
+        return scored.filter { it.second == best }.singleOrNull()?.first
+    }
+
+    /** The set the widget tap and the split key open: the first in the list. */
+    fun defaultSet(): AppSet? = _sets.value.firstOrNull()
 
     fun autostartSet(): AppSet? = _sets.value.firstOrNull { it.autostart }
 
@@ -120,6 +150,30 @@ class AppSetStore(private val prefs: SharedPreferences? = null) {
 
     companion object {
         private const val TAG = "AppSetStore"
+        private const val SPLIT_WORD = "сплит"
+        private val LEAD_VERBS = setOf("включи", "открой", "запусти")
+        private val DEFAULT_PHRASES = listOf(
+            "сплит", "включи сплит", "открой сплит", "запусти сплит",
+            "разделение экрана", "включи разделение экрана", "открой разделение экрана", "запусти разделение экрана",
+            "включи разделение", "открой разделение", "раздели экран",
+        ).map { VoicePhrase.words(it) }
+
+        /** How many letters the recognizer may have got wrong in a name of [length] letters. */
+        internal fun nameDistanceLimit(key: String): Int = maxOf(1, key.length / 4)
+
+        /** Levenshtein distance. */
+        internal fun editDistance(a: String, b: String): Int {
+            var prev = IntArray(b.length + 1) { it }
+            for (i in 1..a.length) {
+                val cur = IntArray(b.length + 1)
+                cur[0] = i
+                for (j in 1..b.length) {
+                    cur[j] = minOf(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + if (a[i - 1] == b[j - 1]) 0 else 1)
+                }
+                prev = cur
+            }
+            return prev[b.length]
+        }
         const val PREFS_NAME = "bydmate_app_sets"
         const val KEY = "sets"
         const val MAX_SETS = 8

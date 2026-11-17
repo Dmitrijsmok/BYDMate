@@ -2,6 +2,7 @@ package com.bydmate.app.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -16,6 +17,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -108,18 +110,25 @@ private fun AppSetEditor(viewModel: AppSetsViewModel, initial: AppSet, isNew: Bo
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = name,
-                onValueChange = { name = it.take(AppSetStore.MAX_NAME_CHARS + 1); message = null },
-                label = { Text(stringResource(R.string.settings_app_sets_name_label)) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = TextPrimary,
-                    unfocusedTextColor = TextPrimary,
-                    focusedBorderColor = AccentGreen,
-                ),
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(AppSetStore.MAX_NAME_CHARS + 1); message = null },
+                    label = { Text(stringResource(R.string.settings_app_sets_name_label)) },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedBorderColor = AccentGreen,
+                    ),
+                )
+                // A set that is not saved yet has nothing to delete: the button cancels it.
+                SettingActionButton(
+                    label = stringResource(if (isNew) R.string.settings_app_sets_cancel else R.string.settings_app_sets_delete),
+                    onClick = { if (isNew) onDone() else viewModel.store.remove(initial.id) },
+                )
+            }
             SettingValueRow(
                 title = stringResource(R.string.settings_app_sets_left_title),
                 value = left.takeIf { it.isNotBlank() }?.let { resolveAppLabel(context, it) }
@@ -151,39 +160,27 @@ private fun AppSetEditor(viewModel: AppSetsViewModel, initial: AppSet, isNew: Bo
                 traceId = "app_set_autostart",
             )
             SettingDivider()
-            SettingActionRow(
-                title = name.trim().ifBlank { stringResource(R.string.settings_app_sets_untitled) },
-                buttonLabel = stringResource(R.string.settings_app_sets_save),
-                onClick = {
-                    val check = viewModel.store.check(draft())
-                    when {
-                        check == AppSetStore.Check.Ok -> {
-                            viewModel.store.upsert(draft())
-                            message = saved; messageIsError = false
-                            if (isNew) onDone()
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SettingActionButton(
+                    label = stringResource(R.string.settings_app_sets_save),
+                    style = SettingButtonStyle.Primary,
+                    onClick = {
+                        val check = viewModel.store.check(draft())
+                        when {
+                            check == AppSetStore.Check.Ok -> {
+                                viewModel.store.upsert(draft())
+                                message = saved; messageIsError = false
+                                if (isNew) onDone()
+                            }
+                            check is AppSetStore.Check.NameInUse -> { message = inUse.format(check.owner); messageIsError = true }
+                            else -> { message = errors[check]; messageIsError = true }
                         }
-                        check is AppSetStore.Check.NameInUse -> { message = inUse.format(check.owner); messageIsError = true }
-                        else -> { message = errors[check]; messageIsError = true }
-                    }
-                },
-                style = SettingButtonStyle.Primary,
-                secondButtonLabel = stringResource(R.string.settings_app_sets_run),
-                onSecondClick = { viewModel.run(draft()) },
-                secondButtonEnabled = left.isNotBlank(),
-            )
-            if (!isNew) {
-                SettingActionRow(
-                    title = stringResource(R.string.settings_app_sets_delete_title),
-                    buttonLabel = stringResource(R.string.settings_app_sets_delete),
-                    onClick = { viewModel.store.remove(initial.id) },
-                    style = SettingButtonStyle.Secondary,
+                    },
                 )
-            } else {
-                SettingActionRow(
-                    title = stringResource(R.string.settings_app_sets_cancel_title),
-                    buttonLabel = stringResource(R.string.settings_app_sets_cancel),
-                    onClick = onDone,
-                    style = SettingButtonStyle.Secondary,
+                SettingActionButton(
+                    label = stringResource(R.string.settings_app_sets_run),
+                    onClick = { viewModel.run(draft()) },
+                    enabled = left.isNotBlank(),
                 )
             }
             val shown = message ?: runFailed.takeIf { lastRun != null && lastRun != AppSetLauncher.Outcome.OK }

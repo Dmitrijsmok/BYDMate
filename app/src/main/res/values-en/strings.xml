@@ -2218,7 +2218,7 @@
     <string name="settings_voice_app_matches_dialog_title">Application matches</string>
     <string name="settings_voice_app_matches_not_found">Not found on this device</string>
     <string name="settings_section_app_sets_title">Split screen</string>
-    <string name="settings_app_sets_howto">Two apps side by side: one on the left, one on the right. The set name is a voice command: say it and both apps open in a split screen. If no right app is chosen, whatever is open now stays on the right. A set can also open at start, when the car is stopped.</string>
+    <string name="settings_app_sets_howto">Two apps side by side: one on the left, one on the right. Say "split" and the set name and both apps open in a split screen. Just "split" or "turn on split screen" opens the first set in the list. Tapping the left part of the widget also opens the first set. Any name will do: if speech recognition writes it a little differently, it is still found. If no right app is chosen, whatever is open now stays on the right.</string>
     <string name="settings_app_sets_add_title">New set</string>
     <string name="settings_app_sets_add">Add</string>
     <string name="settings_app_sets_name_label">Name (voice command)</string>
@@ -2231,12 +2231,9 @@
     <string name="settings_app_sets_not_chosen">Not chosen</string>
     <string name="settings_app_sets_autostart_title">Open at start</string>
     <string name="settings_app_sets_autostart_desc">The set opens after the service starts, if the car is stopped</string>
-    <string name="settings_app_sets_untitled">Untitled</string>
     <string name="settings_app_sets_save">Save</string>
     <string name="settings_app_sets_run">Run</string>
-    <string name="settings_app_sets_delete_title">Delete the set</string>
     <string name="settings_app_sets_delete">Delete</string>
-    <string name="settings_app_sets_cancel_title">Cancel the new set</string>
     <string name="settings_app_sets_cancel">Cancel</string>
     <string name="settings_app_sets_err_name">Enter a name</string>
     <string name="settings_app_sets_err_name_long">The name is too long</string>
@@ -2246,4 +2243,5 @@
     <string name="settings_app_sets_err_in_use">This name is already used: %1$s</string>
     <string name="settings_app_sets_saved">Saved</string>
     <string name="settings_app_sets_run_failed">The set did not open</string>
+    <string name="app_sets_none_hint">No set yet. Add one in Settings → Split screen</string>
 </resources>
