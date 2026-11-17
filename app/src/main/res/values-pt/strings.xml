@@ -2218,7 +2218,7 @@
     <string name="settings_voice_app_matches_button">Mostrar</string>
     <string name="settings_voice_app_matches_dialog_title">Correspondências de apps</string>
     <string name="settings_voice_app_matches_not_found">Não encontrado neste dispositivo</string>
-    <string name="settings_section_app_sets_title">Conjuntos de apps</string>
+    <string name="settings_section_app_sets_title">Tela dividida</string>
     <string name="settings_app_sets_howto">Dois apps lado a lado: um à esquerda, outro à direita. O nome do conjunto é um comando de voz: diga-o e os dois apps abrem em tela dividida. Se não houver app à direita, fica à direita o que está aberto agora. O conjunto também pode abrir ao iniciar, com o carro parado.</string>
     <string name="settings_app_sets_add_title">Novo conjunto</string>
     <string name="settings_app_sets_add">Adicionar</string>

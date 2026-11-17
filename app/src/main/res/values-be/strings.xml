@@ -2372,7 +2372,7 @@
     <string name="settings_voice_app_matches_button">Паказаць</string>
     <string name="settings_voice_app_matches_dialog_title">Супадзенні праграм</string>
     <string name="settings_voice_app_matches_not_found">Не знойдзена на гэтай прыладзе</string>
-    <string name="settings_section_app_sets_title">Камплекты праграм</string>
+    <string name="settings_section_app_sets_title">Падзел экрана</string>
     <string name="settings_app_sets_howto">Дзве праграмы побач: адна злева, другая справа. Назва камплекта — галасавая каманда: скажыце яе, і абедзве праграмы адкрыюцца ў падзеленым экране. Калі праграма справа не абрана, справа застанецца тое, што адкрыта цяпер. Камплект можна адкрываць і пры запуску, на стаянцы.</string>
     <string name="settings_app_sets_add_title">Новы камплект</string>
     <string name="settings_app_sets_add">Дадаць</string>

@@ -2322,7 +2322,7 @@
     <string name="settings_voice_app_matches_button">显示</string>
     <string name="settings_voice_app_matches_dialog_title">应用匹配</string>
     <string name="settings_voice_app_matches_not_found">此设备上未找到</string>
-    <string name="settings_section_app_sets_title">应用组合</string>
+    <string name="settings_section_app_sets_title">分屏</string>
     <string name="settings_app_sets_howto">两个应用并排显示：一个在左，一个在右。组合名称就是语音指令：说出名称，两个应用会以分屏打开。未选择右侧应用时，右侧保留当前已打开的内容。组合也可在启动时、车辆静止时自动打开。</string>
     <string name="settings_app_sets_add_title">新建组合</string>
     <string name="settings_app_sets_add">添加</string>

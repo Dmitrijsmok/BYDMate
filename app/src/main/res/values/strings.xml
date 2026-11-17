@@ -2387,7 +2387,7 @@
     <string name="settings_voice_app_matches_button">Показать</string>
     <string name="settings_voice_app_matches_dialog_title">Совпадения приложений</string>
     <string name="settings_voice_app_matches_not_found">Не найдено на этом устройстве</string>
-    <string name="settings_section_app_sets_title">Комплекты приложений</string>
+    <string name="settings_section_app_sets_title">Разделение экрана</string>
     <string name="settings_app_sets_howto">Два приложения рядом: одно слева, другое справа. Название комплекта — голосовая команда: скажите его, и оба приложения откроются в разделённом экране. Если приложение справа не выбрано, справа останется то, что открыто сейчас. Комплект можно открывать и при запуске, на стоянке.</string>
     <string name="settings_app_sets_add_title">Новый комплект</string>
     <string name="settings_app_sets_add">Добавить</string>

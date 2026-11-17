@@ -2217,7 +2217,7 @@
     <string name="settings_voice_app_matches_button">Show</string>
     <string name="settings_voice_app_matches_dialog_title">Application matches</string>
     <string name="settings_voice_app_matches_not_found">Not found on this device</string>
-    <string name="settings_section_app_sets_title">App sets</string>
+    <string name="settings_section_app_sets_title">Split screen</string>
     <string name="settings_app_sets_howto">Two apps side by side: one on the left, one on the right. The set name is a voice command: say it and both apps open in a split screen. If no right app is chosen, whatever is open now stays on the right. A set can also open at start, when the car is stopped.</string>
     <string name="settings_app_sets_add_title">New set</string>
     <string name="settings_app_sets_add">Add</string>
