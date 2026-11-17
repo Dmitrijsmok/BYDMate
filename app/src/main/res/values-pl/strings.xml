@@ -2373,25 +2373,22 @@
     <string name="settings_voice_app_matches_dialog_title">Dopasowania aplikacji</string>
     <string name="settings_voice_app_matches_not_found">Nie znaleziono na tym urządzeniu</string>
     <string name="settings_section_app_sets_title">Podział ekranu</string>
-    <string name="settings_app_sets_howto">Dwie aplikacje obok siebie: jedna po lewej, druga po prawej. Nazwa zestawu to komenda głosowa: powiedz ją, a obie aplikacje otworzą się w podzielonym ekranie. Jeśli nie wybrano aplikacji po prawej, po prawej zostanie to, co jest teraz otwarte. Zestaw może też otwierać się przy uruchomieniu, gdy samochód stoi.</string>
+    <string name="settings_app_sets_howto">Dwie aplikacje obok siebie. Powiedz „split” i nazwę zestawu, a obie otworzą się w podzielonym ekranie. Samo „split” lub „włącz podział ekranu” otwiera pierwszy zestaw, tak samo dotknięcie lewej części widżetu.</string>
     <string name="settings_app_sets_add_title">Nowy zestaw</string>
     <string name="settings_app_sets_add">Dodaj</string>
     <string name="settings_app_sets_name_label">Nazwa (komenda głosowa)</string>
-    <string name="settings_app_sets_left_title">Po lewej</string>
-    <string name="settings_app_sets_right_title">Po prawej</string>
-    <string name="settings_app_sets_right_desc">Otwiera się pierwsza, potem po lewej staje pierwsza aplikacja</string>
+    <string name="settings_app_sets_left_title">Pierwsza aplikacja</string>
+    <string name="settings_app_sets_right_title">Druga aplikacja</string>
+    <string name="settings_app_sets_right_desc">Otwiera się pierwsza. Niewybrana: zostaje to, co jest teraz otwarte</string>
     <string name="settings_app_sets_right_keep">Zostanie to, co jest otwarte</string>
     <string name="settings_app_sets_right_clear_title">Nie wybieraj aplikacji po prawej</string>
     <string name="settings_app_sets_right_clear">Wyczyść</string>
     <string name="settings_app_sets_not_chosen">Nie wybrano</string>
     <string name="settings_app_sets_autostart_title">Otwieraj przy uruchomieniu</string>
     <string name="settings_app_sets_autostart_desc">Zestaw otworzy się po uruchomieniu usługi, gdy samochód stoi</string>
-    <string name="settings_app_sets_untitled">Bez nazwy</string>
     <string name="settings_app_sets_save">Zapisz</string>
     <string name="settings_app_sets_run">Uruchom</string>
-    <string name="settings_app_sets_delete_title">Usuń zestaw</string>
     <string name="settings_app_sets_delete">Usuń</string>
-    <string name="settings_app_sets_cancel_title">Anuluj nowy zestaw</string>
     <string name="settings_app_sets_cancel">Anuluj</string>
     <string name="settings_app_sets_err_name">Wpisz nazwę</string>
     <string name="settings_app_sets_err_name_long">Nazwa jest za długa</string>
@@ -2401,4 +2398,5 @@
     <string name="settings_app_sets_err_in_use">Taka nazwa już istnieje: %1$s</string>
     <string name="settings_app_sets_saved">Zapisano</string>
     <string name="settings_app_sets_run_failed">Zestaw się nie otworzył</string>
+    <string name="app_sets_none_hint">Brak zestawu. Dodaj go w Ustawienia → Podział ekranu</string>
 </resources>

@@ -77,9 +77,11 @@ internal fun WidgetSection() {
     val prefs = remember { WidgetPreferences(context) }
     val enabled by prefs.enabledFlow().collectAsStateWithLifecycle(initialValue = prefs.isEnabled())
     // Read split feature state once at composition time to gate the left-tap mode chip.
+    // The Android 10 head units open the app set there, which needs no switch of the split feature.
     val splitFeatureEnabled = remember {
-        EntryPointAccessors.fromApplication(context.applicationContext, ClusterEntryPoint::class.java)
-            .splitPreferences().isFeatureEnabled()
+        com.bydmate.app.platform.LegacyHeadUnit.isAndroid10 ||
+            EntryPointAccessors.fromApplication(context.applicationContext, ClusterEntryPoint::class.java)
+                .splitPreferences().isFeatureEnabled()
     }
     val alpha by prefs.alphaFlow().collectAsStateWithLifecycle(initialValue = prefs.getAlpha())
     val scale by prefs.scaleFlow().collectAsStateWithLifecycle(initialValue = prefs.getScale())

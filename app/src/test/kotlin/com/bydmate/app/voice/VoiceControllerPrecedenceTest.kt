@@ -195,10 +195,10 @@ class VoiceControllerPrecedenceTest {
     private fun setLauncher(outcome: AppSetLauncher.Outcome = AppSetLauncher.Outcome.OK) =
         mockk<AppSetLauncher> { coEvery { launch(any()) } returns outcome }
 
-    @Test fun `an app set name beats the built-in parser and opens the set`() {
+    @Test fun `split plus a set name beats the built-in parser and opens the set`() {
         val launcher = setLauncher()
         val r = rig(null, VoiceUserPhrases(), appSets = setStore to launcher)
-        val entry = r.say("открой окна")
+        val entry = r.say("сплит открой окна")
 
         assertEquals(VoiceJournalEntry.Route.NLU, entry.route)
         assertEquals(VoiceJournalEntry.Outcome.OK, entry.outcome)
@@ -207,28 +207,34 @@ class VoiceControllerPrecedenceTest {
         assertEquals(emptyList<String>(), r.dispatched.toList())
     }
 
-    @Test fun `an app set that does not open is reported as blocked`() {
-        val r = rig(null, VoiceUserPhrases(), appSets = setStore to setLauncher(AppSetLauncher.Outcome.LEFT_FAILED))
-        val entry = r.say("открой окна")
+    @Test fun `the split screen phrase opens the first set`() {
+        val launcher = setLauncher()
+        val r = rig(null, VoiceUserPhrases(), appSets = setStore to launcher)
 
-        assertEquals(VoiceJournalEntry.Outcome.BLOCKED, entry.outcome)
+        assertEquals("appset:открой окна", r.say("включи разделение экрана").command)
+        coVerify(exactly = 1) { launcher.launch(match { it.id == "set1" }) }
     }
 
-    @Test fun `an app set name inside a longer utterance leaves it to the parser`() {
-        val text = "открой окна наполовину"
+    @Test fun `an app set that does not open is reported as blocked`() {
+        val r = rig(null, VoiceUserPhrases(), appSets = setStore to setLauncher(AppSetLauncher.Outcome.LEFT_FAILED))
+
+        assertEquals(VoiceJournalEntry.Outcome.BLOCKED, r.say("сплит открой окна").outcome)
+    }
+
+    @Test fun `a set name without split is left to the parser`() {
+        val text = "открой окна"
         val expected = parserLabel(text)
         val launcher = setLauncher()
         val r = rig(null, VoiceUserPhrases(), appSets = setStore to launcher)
-        val entry = r.say(text)
 
-        assertEquals(expected, entry.command)
+        assertEquals(expected, r.say(text).command)
         coVerify(exactly = 0) { launcher.launch(any()) }
     }
 
-    @Test fun `an automation phrase outranks an app set name`() {
-        val r = rig("открой окна", VoiceUserPhrases(), appSets = setStore to setLauncher())
+    @Test fun `an automation phrase outranks an app set`() {
+        val r = rig("сплит открой окна", VoiceUserPhrases(), appSets = setStore to setLauncher())
 
-        assertEquals(VoiceJournalEntry.Route.AUTOMATION, r.say("открой окна").route)
+        assertEquals(VoiceJournalEntry.Route.AUTOMATION, r.say("сплит открой окна").route)
     }
 
     // --- a phrase inside a longer utterance never fires ---

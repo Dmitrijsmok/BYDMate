@@ -31,12 +31,70 @@ class AppSetStoreTest {
         assertTrue(s.sets.value.isEmpty())
     }
 
-    @Test fun `the name is the voice phrase and only the whole utterance matches`() {
-        val s = store().apply { upsert(tiktokMusic) }
-        assertEquals(tiktokMusic, s.match("открой комплект 1"))
-        assertEquals(tiktokMusic, s.match("эй, открой комплект 1, пожалуйста"))
-        assertNull(s.match("открой комплект 1 и включи музыку"))
-        assertNull(s.match("открой комплект 2"))
+    private fun twoSets() = store().apply {
+        upsert(tiktokMusic.copy(name = "тиквейз"))
+        upsert(AppSet("set2", "кино", "com.google.android.youtube", null))
+    }
+
+    @Test fun `split plus the name opens that set`() {
+        val s = twoSets()
+        assertEquals("set1", s.resolve("сплит тиквейз")?.id)
+        assertEquals("set2", s.resolve("включи сплит кино")?.id)
+        assertEquals("set2", s.resolve("эй сплит кино пожалуйста")?.id)
+    }
+
+    @Test fun `a name the recognizer wrote a little differently is still found`() {
+        val s = twoSets()
+        assertEquals("set1", s.resolve("сплит тик вейз")?.id)
+        assertEquals("set1", s.resolve("сплит тиквейс")?.id)
+        assertEquals("set2", s.resolve("сплит кина")?.id)
+    }
+
+    @Test fun `a word that is no name opens nothing when there are several sets`() {
+        assertNull(twoSets().resolve("сплит погода"))
+        assertNull(twoSets().resolve("сплит футбол"))
+    }
+
+    @Test fun `with one set whatever follows split is that set`() {
+        val s = store().apply { upsert(tiktokMusic.copy(name = "тиквейз")) }
+        assertEquals("set1", s.resolve("сплит чтото непонятное")?.id)
+    }
+
+    @Test fun `split alone and the screen phrases open the first set`() {
+        val s = twoSets()
+        listOf("сплит", "включи сплит", "открой сплит", "разделение экрана", "включи разделение экрана",
+            "открой разделение экрана", "запусти разделение экрана", "раздели экран").forEach {
+            assertEquals(it, "set1", s.resolve(it)?.id)
+        }
+        assertEquals("set1", s.defaultSet()?.id)
+    }
+
+    @Test fun `the bare name never opens a set, it would clash with open-app commands`() {
+        val s = store().apply { upsert(tiktokMusic.copy(name = "тикток")) }
+        assertNull(s.resolve("тикток"))
+        assertNull(s.resolve("открой тикток"))
+    }
+
+    @Test fun `other utterances and an empty list open nothing`() {
+        assertNull(twoSets().resolve("открой окно"))
+        assertNull(twoSets().resolve("сплитер тиквейз"))
+        assertNull(store().resolve("сплит"))
+        assertNull(store().resolve("включи разделение экрана"))
+    }
+
+    @Test fun `two sets equally close to the spoken name open neither`() {
+        val s = store().apply {
+            upsert(AppSet("set1", "кино", "pkg.a"))
+            upsert(AppSet("set2", "кина", "pkg.b"))
+        }
+        assertNull(s.resolve("сплит кинс"))
+    }
+
+    @Test fun `edit distance counts the letters that differ`() {
+        assertEquals(0, AppSetStore.editDistance("кино", "кино"))
+        assertEquals(1, AppSetStore.editDistance("кино", "кина"))
+        assertEquals(3, AppSetStore.editDistance("", "кин"))
+        assertEquals(4, AppSetStore.editDistance("тиквейз", "тикток"))
     }
 
     @Test fun `only one set starts with the service`() {
