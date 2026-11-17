@@ -2373,13 +2373,13 @@
     <string name="settings_voice_app_matches_dialog_title">Dopasowania aplikacji</string>
     <string name="settings_voice_app_matches_not_found">Nie znaleziono na tym urządzeniu</string>
     <string name="settings_section_app_sets_title">Podział ekranu</string>
-    <string name="settings_app_sets_howto">Dwie aplikacje obok siebie: jedna po lewej, druga po prawej. Powiedz „split” i nazwę zestawu, a obie aplikacje otworzą się w podzielonym ekranie. Samo „split” lub „włącz podział ekranu” otwiera pierwszy zestaw na liście. Dotknięcie lewej części widżetu też otwiera pierwszy zestaw. Nazwa może być dowolna: jeśli rozpoznawanie mowy zapisze ją trochę inaczej, i tak zostanie znaleziona. Jeśli nie wybrano aplikacji po prawej, po prawej zostanie to, co jest teraz otwarte.</string>
+    <string name="settings_app_sets_howto">Dwie aplikacje obok siebie. Powiedz „split” i nazwę zestawu, a obie otworzą się w podzielonym ekranie. Samo „split” lub „włącz podział ekranu” otwiera pierwszy zestaw, tak samo dotknięcie lewej części widżetu.</string>
     <string name="settings_app_sets_add_title">Nowy zestaw</string>
     <string name="settings_app_sets_add">Dodaj</string>
     <string name="settings_app_sets_name_label">Nazwa (komenda głosowa)</string>
-    <string name="settings_app_sets_left_title">Po lewej</string>
-    <string name="settings_app_sets_right_title">Po prawej</string>
-    <string name="settings_app_sets_right_desc">Otwiera się pierwsza, potem po lewej staje pierwsza aplikacja</string>
+    <string name="settings_app_sets_left_title">Pierwsza aplikacja</string>
+    <string name="settings_app_sets_right_title">Druga aplikacja</string>
+    <string name="settings_app_sets_right_desc">Otwiera się pierwsza. Niewybrana: zostaje to, co jest teraz otwarte</string>
     <string name="settings_app_sets_right_keep">Zostanie to, co jest otwarte</string>
     <string name="settings_app_sets_right_clear_title">Nie wybieraj aplikacji po prawej</string>
     <string name="settings_app_sets_right_clear">Wyczyść</string>

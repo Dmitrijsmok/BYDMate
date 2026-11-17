@@ -2218,13 +2218,13 @@
     <string name="settings_voice_app_matches_dialog_title">Application matches</string>
     <string name="settings_voice_app_matches_not_found">Not found on this device</string>
     <string name="settings_section_app_sets_title">Split screen</string>
-    <string name="settings_app_sets_howto">Two apps side by side: one on the left, one on the right. Say "split" and the set name and both apps open in a split screen. Just "split" or "turn on split screen" opens the first set in the list. Tapping the left part of the widget also opens the first set. Any name will do: if speech recognition writes it a little differently, it is still found. If no right app is chosen, whatever is open now stays on the right.</string>
+    <string name="settings_app_sets_howto">Two apps side by side. Say "split" and the set name and both open in a split screen. Just "split" or "turn on split screen" opens the first set, and so does a tap on the left part of the widget.</string>
     <string name="settings_app_sets_add_title">New set</string>
     <string name="settings_app_sets_add">Add</string>
     <string name="settings_app_sets_name_label">Name (voice command)</string>
-    <string name="settings_app_sets_left_title">Left</string>
-    <string name="settings_app_sets_right_title">Right</string>
-    <string name="settings_app_sets_right_desc">Opens first, then the left app takes the left half</string>
+    <string name="settings_app_sets_left_title">First app</string>
+    <string name="settings_app_sets_right_title">Second app</string>
+    <string name="settings_app_sets_right_desc">Opens first. Not chosen: whatever is open now stays</string>
     <string name="settings_app_sets_right_keep">Keep what is open now</string>
     <string name="settings_app_sets_right_clear_title">Do not choose a right app</string>
     <string name="settings_app_sets_right_clear">Reset</string>

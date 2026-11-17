@@ -2323,13 +2323,13 @@
     <string name="settings_voice_app_matches_dialog_title">应用匹配</string>
     <string name="settings_voice_app_matches_not_found">此设备上未找到</string>
     <string name="settings_section_app_sets_title">分屏</string>
-    <string name="settings_app_sets_howto">两个应用并排显示：一个在左，一个在右。说“split”加组合名称，两个应用会以分屏打开。只说“split”或“打开分屏”会打开列表中的第一个组合。点按小组件左侧也会打开第一个组合。名称可以随意取：即使语音识别写得略有不同，也能找到。未选择右侧应用时，右侧保留当前已打开的内容。</string>
+    <string name="settings_app_sets_howto">两个应用并排显示。说“split”加组合名称，两个应用会以分屏打开。只说“split”或“打开分屏”会打开第一个组合，点按小组件左侧也一样。</string>
     <string name="settings_app_sets_add_title">新建组合</string>
     <string name="settings_app_sets_add">添加</string>
     <string name="settings_app_sets_name_label">名称（语音指令）</string>
-    <string name="settings_app_sets_left_title">左侧</string>
-    <string name="settings_app_sets_right_title">右侧</string>
-    <string name="settings_app_sets_right_desc">先打开右侧应用，然后左侧应用占据左半屏</string>
+    <string name="settings_app_sets_left_title">第一个应用</string>
+    <string name="settings_app_sets_right_title">第二个应用</string>
+    <string name="settings_app_sets_right_desc">先打开。未选择：保留当前已打开的内容</string>
     <string name="settings_app_sets_right_keep">保留当前已打开的内容</string>
     <string name="settings_app_sets_right_clear_title">不选择右侧应用</string>
     <string name="settings_app_sets_right_clear">清除</string>

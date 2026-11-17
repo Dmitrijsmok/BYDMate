@@ -2388,13 +2388,13 @@
     <string name="settings_voice_app_matches_dialog_title">Совпадения приложений</string>
     <string name="settings_voice_app_matches_not_found">Не найдено на этом устройстве</string>
     <string name="settings_section_app_sets_title">Разделение экрана</string>
-    <string name="settings_app_sets_howto">Два приложения рядом: одно слева, другое справа. Скажите «сплит» и название комплекта, и оба приложения откроются в разделённом экране. Просто «сплит» или «включи разделение экрана» открывает первый комплект в списке. Тап по левой части виджета тоже открывает первый комплект. Название можно выбрать любое: если распознавание записало его немного иначе, оно всё равно найдётся. Если приложение справа не выбрано, справа останется то, что открыто сейчас.</string>
+    <string name="settings_app_sets_howto">Два приложения рядом. Скажите «сплит» и название комплекта, и оба откроются в разделённом экране. Просто «сплит» или «включи разделение экрана» открывает первый комплект, тап по левой части виджета тоже.</string>
     <string name="settings_app_sets_add_title">Новый комплект</string>
     <string name="settings_app_sets_add">Добавить</string>
     <string name="settings_app_sets_name_label">Название (голосовая команда)</string>
-    <string name="settings_app_sets_left_title">Слева</string>
-    <string name="settings_app_sets_right_title">Справа</string>
-    <string name="settings_app_sets_right_desc">Открывается первым, потом слева встаёт первое приложение</string>
+    <string name="settings_app_sets_left_title">Первое приложение</string>
+    <string name="settings_app_sets_right_title">Второе приложение</string>
+    <string name="settings_app_sets_right_desc">Откроется первым. Не выбрано: останется то, что открыто сейчас</string>
     <string name="settings_app_sets_right_keep">Останется открытое сейчас</string>
     <string name="settings_app_sets_right_clear_title">Не выбирать приложение справа</string>
     <string name="settings_app_sets_right_clear">Сбросить</string>

@@ -2219,13 +2219,13 @@
     <string name="settings_voice_app_matches_dialog_title">Correspondências de apps</string>
     <string name="settings_voice_app_matches_not_found">Não encontrado neste dispositivo</string>
     <string name="settings_section_app_sets_title">Tela dividida</string>
-    <string name="settings_app_sets_howto">Dois apps lado a lado: um à esquerda, outro à direita. Diga «split» e o nome do conjunto e os dois apps abrem em tela dividida. Só «split» ou «ligar tela dividida» abre o primeiro conjunto da lista. Tocar na parte esquerda do widget também abre o primeiro conjunto. Qualquer nome serve: se o reconhecimento de voz o escrever um pouco diferente, ainda é encontrado. Se não houver app à direita, fica à direita o que está aberto agora.</string>
+    <string name="settings_app_sets_howto">Dois apps lado a lado. Diga «split» e o nome do conjunto e os dois abrem em tela dividida. Só «split» ou «ligar tela dividida» abre o primeiro conjunto, e tocar na parte esquerda do widget também.</string>
     <string name="settings_app_sets_add_title">Novo conjunto</string>
     <string name="settings_app_sets_add">Adicionar</string>
     <string name="settings_app_sets_name_label">Nome (comando de voz)</string>
-    <string name="settings_app_sets_left_title">Esquerda</string>
-    <string name="settings_app_sets_right_title">Direita</string>
-    <string name="settings_app_sets_right_desc">Abre primeiro; depois o app da esquerda ocupa a metade esquerda</string>
+    <string name="settings_app_sets_left_title">Primeiro app</string>
+    <string name="settings_app_sets_right_title">Segundo app</string>
+    <string name="settings_app_sets_right_desc">Abre primeiro. Sem escolha: fica o que está aberto agora</string>
     <string name="settings_app_sets_right_keep">Manter o que está aberto agora</string>
     <string name="settings_app_sets_right_clear_title">Não escolher app à direita</string>
     <string name="settings_app_sets_right_clear">Limpar</string>
