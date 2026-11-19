@@ -9,7 +9,6 @@ import io.mockk.coVerifyOrder
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppSetLauncherTest {
@@ -129,7 +128,8 @@ class AppSetLauncherTest {
         coEvery { helper.launchAppInWindowingMode(any(), any()) } returns false
 
         assertEquals(AppSetLauncher.Outcome.LEFT_FAILED, launcher.launch(set))
-        assertTrue(AppSetLauncher.VERIFY_MS !in pauses)
+        // Only the wait for the right app: no read-back of a launch that failed.
+        assertEquals(listOf(AppSetLauncher.SETTLE_MS), pauses)
     }
 
     @Test fun `a daemon that is down while waiting does not break the launch`() = runBlocking {
