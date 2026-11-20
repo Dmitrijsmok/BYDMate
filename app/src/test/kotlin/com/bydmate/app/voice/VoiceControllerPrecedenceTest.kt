@@ -274,6 +274,58 @@ class VoiceControllerPrecedenceTest {
         coVerify(exactly = 0) { manager.startLastPair() }
     }
 
+    // --- the split with an app named on the spot (alternative method) ---
+
+    private val music = AliceAppCatalog.forAction("app.music.open")!!
+
+    /** A head unit with Yandex Music installed and nothing else the table knows. */
+    private fun withMusic() = mockk<AliceAppResolver> {
+        every { packageFor(any()) } answers {
+            if (firstArg<AliceAppTarget>() == music) "ru.yandex.music" else null
+        }
+    }
+
+    @Test fun `split and an app name splits the screen with that app`() {
+        val launcher = setLauncher()
+        val r = rig(null, VoiceUserPhrases(), withMusic(), appSets = setStore to launcher)
+
+        val entry = r.say("сплит яндекс музыка")
+
+        assertEquals("split:app:яндекс музыка", entry.command)
+        assertEquals(VoiceJournalEntry.Outcome.OK, entry.outcome)
+        coVerify(exactly = 1) { launcher.launch(match { it.leftPkg == "ru.yandex.music" && it.rightPkg == null }) }
+    }
+
+    @Test fun `add an app to the split works too`() {
+        val launcher = setLauncher()
+        val r = rig(null, VoiceUserPhrases(), withMusic(), appSets = setStore to launcher)
+
+        assertEquals("split:app:яндекс музыку", r.say("добавь яндекс музыку в сплит").command)
+    }
+
+    @Test fun `a set name still wins over an app`() {
+        val launcher = setLauncher()
+        val r = rig(null, VoiceUserPhrases(), withMusic(), appSets = setStore to launcher)
+
+        assertEquals("appset:открой окна", r.say("сплит открой окна").command)
+    }
+
+    @Test fun `an app that is not installed leaves the one set to open as before`() {
+        val launcher = setLauncher()
+        val nothingInstalled = mockk<AliceAppResolver> { every { packageFor(any()) } returns null }
+        val r = rig(null, VoiceUserPhrases(), nothingInstalled, appSets = setStore to launcher)
+
+        assertEquals("appset:открой окна", r.say("сплит яндекс музыка").command)
+    }
+
+    @Test fun `with the main method an app split is left to the agent`() {
+        val launcher = setLauncher()
+        val r = rig(null, VoiceUserPhrases(), withMusic(), appSets = setStore to launcher, split = SplitSetup(mainMethod = true))
+
+        assertNotEquals("split:app:яндекс музыка", r.say("сплит яндекс музыка").command)
+        coVerify(exactly = 0) { launcher.launch(any()) }
+    }
+
     @Test fun `an app set that does not open is reported as blocked`() {
         val r = rig(null, VoiceUserPhrases(), appSets = setStore to setLauncher(AppSetLauncher.Outcome.LEFT_FAILED))
 

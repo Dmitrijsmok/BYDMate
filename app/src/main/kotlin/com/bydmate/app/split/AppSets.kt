@@ -68,11 +68,12 @@ class AppSetStore(private val prefs: SharedPreferences? = null) {
      * - «сплит <название>» (also after «включи», «открой», «запусти»): the set with that name. The
      *   name is compared by its letters, without spaces, and a slip of the recognizer is forgiven
      *   ([nameDistanceLimit]): an invented word is written differently every time. With one set
-     *   saved, whatever follows «сплит» is that set.
+     *   saved, whatever follows «сплит» is that set, unless [oneSetTakesAny] is false (the words
+     *   name an app, which the voice then puts into a split of its own).
      *
      * The bare name never opens a set: it would collide with «открой тикток» and the like.
      */
-    fun resolve(transcript: String): AppSet? {
+    fun resolve(transcript: String, oneSetTakesAny: Boolean = true): AppSet? {
         val sets = _sets.value
         val heard = VoicePhrase.words(transcript)
         if (sets.isEmpty() || heard.isEmpty()) return null
@@ -81,7 +82,7 @@ class AppSetStore(private val prefs: SharedPreferences? = null) {
         val prefix = rest.firstOrNull() ?: return null
         val name = rest.drop(1)
         if (name.isEmpty() || editDistance(prefix, SPLIT_WORD) > 1) return null
-        if (sets.size == 1) return sets.first()
+        if (sets.size == 1 && oneSetTakesAny) return sets.first()
         val spoken = name.joinToString("")
         val scored = sets.mapNotNull { set ->
             val key = VoicePhrase.words(set.name).joinToString("")

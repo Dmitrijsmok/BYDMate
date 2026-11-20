@@ -2225,7 +2225,7 @@
     <string name="settings_split_autostart_desc">Only with the car standing. The main method opens the saved pair, the alternative one the first set.</string>
     <string name="settings_split_mode_main_header">Main method</string>
     <string name="settings_section_app_sets_title">Alternative method: 50/50</string>
-    <string name="settings_app_sets_howto">Voice:\n• \"split\" or \"turn on split screen\" — the first set in the list;\n• \"split\" and the name — that set. Any name works, small recognition slips are forgiven.\nWidget: a tap on the left part opens the first set.\nNo second app chosen: whatever is open now stays.</string>
+    <string name="settings_app_sets_howto">Voice:\n• \"split\" or \"turn on split screen\" — the first set in the list;\n• \"split\" and the name — that set. Any name works, small recognition slips are forgiven.\n• \"split\" and an app name (or \"add &lt;app&gt; to split\") — that app on the left, whatever is on screen on the right. A set name comes first.\nWidget: a tap on the left part opens the first set.\nNo second app chosen: whatever is open now stays.</string>
     <string name="settings_app_sets_add_title">New set</string>
     <string name="settings_app_sets_add">Add</string>
     <string name="settings_app_sets_name_label">Name (voice command)</string>

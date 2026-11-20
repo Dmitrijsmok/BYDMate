@@ -2380,7 +2380,7 @@
     <string name="settings_split_autostart_desc">Tylko gdy auto stoi. Sposób podstawowy otwiera zapisaną parę, alternatywny — pierwszy zestaw.</string>
     <string name="settings_split_mode_main_header">Sposób podstawowy</string>
     <string name="settings_section_app_sets_title">Sposób alternatywny: 50/50</string>
-    <string name="settings_app_sets_howto">Głos:\n• „split” lub „włącz podział ekranu” — pierwszy zestaw na liście;\n• „split” i nazwa — wybrany zestaw. Nazwa dowolna, drobne błędy rozpoznawania są wybaczane.\nWidżet: dotknięcie lewej części otwiera pierwszy zestaw.\nNie wybrano drugiej aplikacji: zostaje to, co jest teraz otwarte.</string>
+    <string name="settings_app_sets_howto">Głos:\n• „split” lub „włącz podział ekranu” — pierwszy zestaw na liście;\n• „split” i nazwa — wybrany zestaw. Nazwa dowolna, drobne błędy rozpoznawania są wybaczane.\n• „split” i nazwa aplikacji (lub „dodaj &lt;aplikację&gt; do splitu”) — ta aplikacja po lewej, to, co na ekranie, po prawej. Nazwa zestawu ma pierwszeństwo.\nWidżet: dotknięcie lewej części otwiera pierwszy zestaw.\nNie wybrano drugiej aplikacji: zostaje to, co jest teraz otwarte.</string>
     <string name="settings_app_sets_add_title">Nowy zestaw</string>
     <string name="settings_app_sets_add">Dodaj</string>
     <string name="settings_app_sets_name_label">Nazwa (komenda głosowa)</string>

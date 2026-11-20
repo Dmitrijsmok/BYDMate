@@ -12,6 +12,7 @@ import com.bydmate.app.data.automation.DispatchResult
 import com.bydmate.app.data.automation.VoiceFireResult
 import com.bydmate.app.R
 import com.bydmate.app.data.local.entity.ActionDef
+import com.bydmate.app.data.remote.AliceAppCatalog
 import com.bydmate.app.data.remote.AliceAppResolver
 import com.bydmate.app.data.remote.AliceAppTarget
 import com.bydmate.app.diagnostics.Trace
@@ -902,7 +903,10 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         if (splitPreferences?.isFeatureEnabled() == true) {
             if (legacyHeadUnit() && AppSetStore.isBareSplitPhrase(text)) return Resolution.SplitStart
         } else {
-            appSets?.resolve(text)?.let { return Resolution.AppSetStart(it) }
+            // A set's name wins over an app; an app the table knows is split with the screen.
+            val adHoc = adHocSplitApp(text)
+            appSets?.resolve(text, oneSetTakesAny = adHoc == null)?.let { return Resolution.AppSetStart(it) }
+            adHoc?.let { return it }
         }
         userPhrases.match(text)?.let { return Resolution.Cmd(listOf(it.command), "phrase:${it.id}") }
         return parse(text)
@@ -941,6 +945,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
             is Resolution.Auto -> fireAutomation(res.match, transcript, decodeMs)
             is Resolution.AppSetStart -> dispatchAppSet(res.set, transcript, decodeMs)
             Resolution.SplitStart -> dispatchSplitStart(transcript, decodeMs)
+            is Resolution.SplitApp -> dispatchSplitApp(res, transcript, decodeMs)
             is Resolution.None -> agentFallback(transcript, decodeMs)
         }
     }
@@ -1155,14 +1160,40 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
     /** «открой комплект …»: the set's left app into the split, the right one beside it ([AppSetLauncher]). */
     private suspend fun dispatchAppSet(set: AppSet, transcript: String, decodeMs: Long) {
         val outcome = appSetLauncher?.launch(set) ?: AppSetLauncher.Outcome.LEFT_FAILED
-        val failure = when (outcome) {
-            AppSetLauncher.Outcome.OK -> null
-            AppSetLauncher.Outcome.RIGHT_FAILED -> Failure("right app did not start", "Не открылось второе приложение комплекта")
-            AppSetLauncher.Outcome.LEFT_FAILED -> Failure("left app did not start", "Не открылось первое приложение комплекта")
-            AppSetLauncher.Outcome.NOT_SPLIT -> Failure("screen did not split", "Экран не разделился")
-        }
         report("appset:${set.name}", "cmd=appset name=${set.name} left=${set.leftPkg} right=${set.rightPkg ?: "-"}",
-            failure, transcript, decodeMs)
+            appSetFailure(outcome), transcript, decodeMs)
+    }
+
+    private fun appSetFailure(outcome: AppSetLauncher.Outcome): Failure? = when (outcome) {
+        AppSetLauncher.Outcome.OK -> null
+        AppSetLauncher.Outcome.RIGHT_FAILED -> Failure("right app did not start", "Не открылось второе приложение комплекта")
+        AppSetLauncher.Outcome.LEFT_FAILED -> Failure("left app did not start", "Не открылось первое приложение комплекта")
+        AppSetLauncher.Outcome.NOT_SPLIT -> Failure("screen did not split", "Экран не разделился")
+    }
+
+    /**
+     * «сплит <приложение>» ([SplitAppQuery]) on the Android 10 head units: the app of the table, if
+     * it is installed, as a split of its own, or null (then the phrase goes on, to a set or the agent).
+     */
+    private fun adHocSplitApp(text: String): Resolution.SplitApp? {
+        if (!legacyHeadUnit() || appSetLauncher == null) return null
+        val resolver = appResolver ?: return null
+        val name = SplitAppQuery.name(text) ?: return null
+        val target = AliceAppCatalog.known(name)
+            ?.takeIf { it is AliceAppTarget.App || it is AliceAppTarget.Navigator } ?: return null
+        val pkg = runCatching { resolver.packageFor(target) }.getOrNull() ?: return null
+        return Resolution.SplitApp(name, pkg)
+    }
+
+    /** The app the driver named, into the left half; the launch is the one of a set without a second app. */
+    private suspend fun dispatchSplitApp(res: Resolution.SplitApp, transcript: String, decodeMs: Long) {
+        val outcome = appSetLauncher?.launch(AppSet(SPLIT_APP_ID, res.name, res.pkg))
+            ?: AppSetLauncher.Outcome.LEFT_FAILED
+        val failure = when (outcome) {
+            AppSetLauncher.Outcome.LEFT_FAILED -> Failure("app did not start", "Не открылось приложение")
+            else -> appSetFailure(outcome)
+        }
+        report("split:app:${res.name}", "cmd=split app=${res.name} pkg=${res.pkg}", failure, transcript, decodeMs)
     }
 
     /** The main split method's saved pair, the way the widget tap opens it (SplitSessionManager.startLastPair). */
@@ -1460,13 +1491,15 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         data class AppSetStart(val set: AppSet) : Resolution
         /** «Разделение экрана», main method of the Android 10 head units: its saved pair. */
         data object SplitStart : Resolution
+        /** «сплит <приложение>»: [pkg] into the left half, the screen's app stays on the right. */
+        data class SplitApp(val name: String, val pkg: String) : Resolution
         /** Nothing local claimed the phrase: it goes to the agent; [reason] is a VoiceRefusal code. */
         data class None(val reason: String) : Resolution
 
         /** The route code of the trace. */
         val route: String get() = when (this) {
             is Cmd -> if (label.startsWith("phrase:")) "phrase" else "nlu"
-            is RelTemp, is Vol, Music, is Navigator, is Navigate, is Answer, is AppSetStart, SplitStart -> "nlu"
+            is RelTemp, is Vol, Music, is Navigator, is Navigate, is Answer, is AppSetStart, SplitStart, is SplitApp -> "nlu"
             is Auto -> "automation"
             is None -> "agent"
         }
@@ -1479,6 +1512,8 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
 
     companion object {
         private const val TAG = "VoiceController"
+        /** The id of the one-off set a named-app split launches through ([dispatchSplitApp]). */
+        private const val SPLIT_APP_ID = "split-app"
         private const val MS_PER_SECOND = 1000L
         private const val MIC_HOLDER_LOOKUP_MS = 6_000L
         private const val MIC_SAMPLE_RATE = 16000L
