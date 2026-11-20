@@ -89,6 +89,16 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Upload the verified signed APK itself (no zip)
+        # A single file with archive: false is stored as it is: its download link gives the .apk
+        # directly, not a zip around it (the artifact takes the file's name).
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ runner.temp }}/bydmate-verified-apk/BYDMate-dilink3-v*.apk
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
   publish:
     # Separate job: the write token never shares a runner with the signing key. Each main build
     # becomes a GitHub release with the verified APK, a one-click link that does not expire.
