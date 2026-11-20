@@ -122,8 +122,8 @@ class VoiceControllerPrecedenceTest {
         controller.legacyHeadUnit = { split.legacy }
         appSets?.let { (store, launcher) ->
             controller.injectAppSets(
-                store.apply { setSetsMode(!split.mainMethod) }, launcher,
-                mockk { every { isFeatureEnabled() } returns split.switchedOn },
+                store.apply { setSetsMode(!split.mainMethod); setSetsOn(!split.mainMethod && split.switchedOn) }, launcher,
+                mockk { every { isFeatureEnabled() } returns (split.mainMethod && split.switchedOn) },
                 dagger.Lazy { split.manager },
             )
         }

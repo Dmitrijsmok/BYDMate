@@ -1980,15 +1980,15 @@ class AgentTools @Inject constructor(
     // --- split_screen ---
 
     private suspend fun splitScreen(args: JSONObject): String {
+        // Only one split works at a time (appSetsActive): the 1:1 sets are opened by the voice itself.
+        if (appSetsActive(LegacyHeadUnit.isAndroid10, appSetStore?.setsOn?.value == true)) {
+            return """{"error":"выбран способ «Пополам 1:1»: скажи «сплит» и название комплекта или приложения"}"""
+        }
         if (!splitPrefs.isFeatureEnabled()) {
             return """{"error":"разделение экрана выключено в настройках"}"""
         }
         val mgr = splitMgr
             ?: return """{"error":"разделение экрана недоступно"}"""
-        // Only one split works at a time (appSetsActive): the 1:1 sets are opened by the voice itself.
-        if (appSetsActive(LegacyHeadUnit.isAndroid10, true, appSetStore?.setsMode?.value == true)) {
-            return """{"error":"выбран способ «Пополам 1:1»: скажи «сплит» и название комплекта или приложения"}"""
-        }
         return when (val action = args.optString("action").trim()) {
             "start" -> {
                 val narrowName = args.optString("narrow_app").trim().takeIf { it.isNotEmpty() }
