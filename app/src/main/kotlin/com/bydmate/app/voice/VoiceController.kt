@@ -900,7 +900,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         automationResolver.match(text)?.let { return Resolution.Auto(it) }
         // Only one split works at a time ([appSetsActive]); the split switched off takes no phrase.
         val splitOn = splitPreferences?.isFeatureEnabled() == true
-        if (appSetsActive(legacyHeadUnit(), splitOn, appSets?.setsMode?.value == true)) {
+        if (appSetsActive(legacyHeadUnit(), appSets?.setsOn?.value == true)) {
             // A set's name wins over an app; an app the table knows is split with the screen.
             val adHoc = adHocSplitApp(text)
             appSets?.resolve(text, oneSetTakesAny = adHoc == null)?.let { return Resolution.AppSetStart(it) }

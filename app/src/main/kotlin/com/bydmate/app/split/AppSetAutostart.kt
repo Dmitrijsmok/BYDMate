@@ -55,8 +55,9 @@ class AppSetAutostart @Suppress("LongParameterList") constructor( // each guard 
 
     /** [speedKmh] is the car's speed when known, null before the first reading. */
     suspend fun runIfDue(speedKmh: () -> Int?): Result {
-        if (!isEnabled() || !splitFeatureEnabled()) return Result.OFF
-        val sets = appSetsActive(legacyHeadUnit(), splitFeatureEnabled = true, setsMode = store.setsMode.value)
+        if (!isEnabled()) return Result.OFF
+        val sets = appSetsActive(legacyHeadUnit(), store.setsOn.value)
+        if (!sets && !splitFeatureEnabled()) return Result.OFF
         val mode = if (sets) "sets" else "pair"
         val set = if (sets) store.defaultSet() ?: return trace(mode, Result.NO_SET) else null
         val last = prefs?.getLong(KEY_LAST_MS, 0L) ?: 0L

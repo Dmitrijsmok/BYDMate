@@ -29,14 +29,13 @@ data class AppSet(
 )
 
 /**
- * Whether the app sets are the split in use: on the Android 10 head units, with the split switched
- * on and «Пополам 1:1» chosen in its «Механизм разделения» row ([AppSetStore.setsMode]). Only one
- * split works at a time: with «Окна BYDMate» or «Родное разделение» the widget tap, the split key,
- * the voice and the start open the saved pair, and no set opens; with «Пополам 1:1» they open the
- * sets. The split switched off: neither.
+ * Whether the app sets are the split in use: on the Android 10 head units, with «Разделение экрана»
+ * switched on and «Пополам 1:1» chosen ([AppSetStore.setsOn]). They run exactly as they did with
+ * the split switched off: the author's split flag stays off then (its machinery idle), so only one
+ * split works at a time. With «Окна BYDMate» or «Родное разделение» the widget tap, the split key,
+ * the voice and the start open the saved pair, and no set opens.
  */
-fun appSetsActive(legacyHeadUnit: Boolean, splitFeatureEnabled: Boolean, setsMode: Boolean): Boolean =
-    legacyHeadUnit && splitFeatureEnabled && setsMode
+fun appSetsActive(legacyHeadUnit: Boolean, setsOn: Boolean): Boolean = legacyHeadUnit && setsOn
 
 /**
  * The saved [AppSet]s, JSON in SharedPreferences("bydmate_app_sets"). Null [prefs] keeps everything
@@ -52,28 +51,50 @@ class AppSetStore(private val prefs: SharedPreferences? = null) {
     val sets: StateFlow<List<AppSet>> = _sets.asStateFlow()
 
     private val _setsMode = MutableStateFlow(prefs?.getBoolean(KEY_SETS_MODE, false) ?: false)
+    private val _setsOn = MutableStateFlow(prefs?.getBoolean(KEY_SETS_ON, false) ?: false)
 
-    /** «Пополам 1:1» is chosen in the split's «Механизм разделения» row ([appSetsActive]). */
+    /** «Пополам 1:1» is the chosen mechanism (kept while the split is switched off). */
     val setsMode: StateFlow<Boolean> = _setsMode.asStateFlow()
+
+    /** «Пополам 1:1» is chosen and the split is switched on: the sets run ([appSetsActive]). */
+    val setsOn: StateFlow<Boolean> = _setsOn.asStateFlow()
 
     fun setSetsMode(on: Boolean) {
         _setsMode.value = on
         prefs?.edit()?.putBoolean(KEY_SETS_MODE, on)?.apply()
     }
 
+    fun setSetsOn(on: Boolean) {
+        _setsOn.value = on
+        prefs?.edit()?.putBoolean(KEY_SETS_ON, on)?.apply()
+    }
+
     /**
-     * Once, on the first start of a version with «Пополам 1:1»: before it the sets ran while the
-     * split switch was off. Such a head unit (switch off, sets saved) gets the switch on with
-     * «1:1» and the firmware's split (native mode, so the freeform flag is not asked for).
+     * Once, on the first start of this version:
+     * - 1.2.5 and before ran the sets with the split switched off: a head unit with sets and the
+     *   split off gets «Пополам 1:1» chosen and on;
+     * - the first 1.2.6 build switched the author's split on for «1:1», and the firmware split stopped
+     *   working there (on-car, 2026-11-20): it is switched back off, the sets keep running, and
+     *   [onSplitOff] runs what the author's own switch-off runs next (the freeform flag back to 0).
      */
-    fun migrateSetsMode(split: SplitPreferences) {
-        if (prefs == null || prefs.contains(KEY_SETS_MODE)) return
-        val hadSets = !split.isFeatureEnabled() && _sets.value.isNotEmpty()
-        if (hadSets) {
-            split.setNativeModeEnabled(true)
-            split.setFeatureEnabled(true)
+    fun migrateSetsMode(split: SplitPreferences, onSplitOff: () -> Unit = {}) {
+        if (prefs == null || prefs.contains(KEY_SETS_ON)) return
+        when {
+            prefs.getBoolean(KEY_SETS_MODE, false) -> {
+                val wasOn = split.isFeatureEnabled()
+                setSetsOn(wasOn)
+                split.setFeatureEnabled(false)
+                if (wasOn) onSplitOff()
+            }
+            !split.isFeatureEnabled() && _sets.value.isNotEmpty() -> {
+                setSetsMode(true)
+                setSetsOn(true)
+            }
+            else -> {
+                setSetsMode(false)
+                setSetsOn(false)
+            }
         }
-        setSetsMode(hadSets)
     }
 
     sealed interface Check {
@@ -218,6 +239,7 @@ class AppSetStore(private val prefs: SharedPreferences? = null) {
         const val PREFS_NAME = "bydmate_app_sets"
         const val KEY = "sets"
         const val KEY_SETS_MODE = "sets_mode"
+        const val KEY_SETS_ON = "sets_on"
         const val MAX_SETS = 8
         const val MAX_NAME_CHARS = 40
     }

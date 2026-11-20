@@ -69,26 +69,38 @@ class AppSetStoreTest {
         assertEquals("set1", s.defaultSet()?.id)
     }
 
-    @Test fun `the sets are the split in use only on Android 10 with the split on and 1-1 chosen`() {
-        assertTrue(appSetsActive(legacyHeadUnit = true, splitFeatureEnabled = true, setsMode = true))
-        assertFalse(appSetsActive(legacyHeadUnit = true, splitFeatureEnabled = true, setsMode = false))
-        assertFalse(appSetsActive(legacyHeadUnit = true, splitFeatureEnabled = false, setsMode = true))
-        assertFalse(appSetsActive(legacyHeadUnit = false, splitFeatureEnabled = true, setsMode = true))
+    @Test fun `the sets are the split in use only on Android 10 with 1-1 on`() {
+        assertTrue(appSetsActive(legacyHeadUnit = true, setsOn = true))
+        assertFalse(appSetsActive(legacyHeadUnit = true, setsOn = false))
+        assertFalse(appSetsActive(legacyHeadUnit = false, setsOn = true))
     }
 
-    @Test fun `a head unit that ran the sets with the split off gets the split on with 1-1, once`() {
-        val backing = mutableMapOf<String, Any?>()
-        val s = AppSetStore(fakeSplitSharedPrefs(backing)).apply { upsert(tiktokMusic) }
+    @Test fun `a 1-2-5 head unit on the sets gets 1-1 on, the author's split stays off`() {
+        val s = AppSetStore(fakeSplitSharedPrefs(mutableMapOf())).apply { upsert(tiktokMusic) }
         val split = FakeSplit(enabled = false)
 
         s.migrateSetsMode(split)
 
         assertTrue(s.setsMode.value)
-        assertTrue(split.enabled)
-        assertTrue(split.native)
-        split.enabled = false
+        assertTrue(s.setsOn.value)
+        assertFalse(split.enabled)
+        assertFalse(split.native)
+    }
+
+    @Test fun `the first 1-2-6 build's author flag for 1-1 is switched back off, once`() {
+        val backing = mutableMapOf<String, Any?>(AppSetStore.KEY_SETS_MODE to true)
+        val s = AppSetStore(fakeSplitSharedPrefs(backing)).apply { upsert(tiktokMusic) }
+        val split = FakeSplit(enabled = true, native = true)
+        var flagReset = 0
+
+        s.migrateSetsMode(split) { flagReset++ }
+
+        assertTrue(s.setsOn.value)
+        assertFalse(split.enabled)
+        assertEquals("the freeform flag goes back as the switch-off does", 1, flagReset)
+        split.enabled = true
         s.migrateSetsMode(split)
-        assertFalse("runs once", split.enabled)
+        assertTrue("runs once", split.enabled)
     }
 
     @Test fun `a head unit on the split pair keeps it`() {
@@ -98,7 +110,8 @@ class AppSetStoreTest {
         s.migrateSetsMode(split)
 
         assertFalse(s.setsMode.value)
-        assertFalse(split.native)
+        assertFalse(s.setsOn.value)
+        assertTrue(split.enabled)
     }
 
     private class FakeSplit(var enabled: Boolean, var native: Boolean = false) : SplitPreferences {

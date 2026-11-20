@@ -24,8 +24,8 @@ class AppSetAutostartTest {
     private fun autostart(
         legacy: Boolean = true, st: AppSetStore = store, splitOn: Boolean = false, switchedOn: Boolean = true,
     ) = AppSetAutostart(
-        st.apply { setSetsMode(!splitOn) }, launcher, fakeSplitSharedPrefs(backing),
-        legacyHeadUnit = { legacy }, splitFeatureEnabled = { switchedOn },
+        st.apply { setSetsMode(!splitOn); setSetsOn(!splitOn && switchedOn) }, launcher, fakeSplitSharedPrefs(backing),
+        legacyHeadUnit = { legacy }, splitFeatureEnabled = { splitOn && switchedOn },
         startSplit = { splitStarts++; splitResult }, now = { clock }, pause = { pauses += it },
     )
 
@@ -128,7 +128,7 @@ class AppSetAutostartTest {
     }
 
     @Test fun `other firmwares open the saved pair, never a set`() = runBlocking {
-        val a = autostart(legacy = false)
+        val a = autostart(legacy = false, splitOn = true)
         a.setEnabled(true)
 
         assertEquals(Result.STARTED, a.runIfDue { 0 })

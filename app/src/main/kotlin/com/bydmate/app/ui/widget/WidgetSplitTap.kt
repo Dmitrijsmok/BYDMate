@@ -48,7 +48,7 @@ internal suspend fun toggleSplitByUser(context: Context, fromWidget: Boolean) {
             SplitWidgetEntryPoint::class.java,
         )
         val store = ep.appSetStore()
-        if (appSetsActive(LegacyHeadUnit.isAndroid10, ep.splitPreferences().isFeatureEnabled(), store.setsMode.value)) {
+        if (appSetsActive(LegacyHeadUnit.isAndroid10, store.setsOn.value)) {
             openDefaultAppSet(context, store, ep.appSetLauncher())
             return
         }
