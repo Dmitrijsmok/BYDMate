@@ -887,8 +887,9 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
     /** Side-effect-free resolution of a transcript to an actionable command. Precedence (the
      *  agent follow-up window, checked by the caller, outranks all of them):
      *  1. an automation phrase equal to the whole utterance, word for word after normalization;
-     *  1a. an app set: «сплит <название>», «сплит», «включи разделение экрана», while «Разделение
-     *      экрана 1/3 + 2/3» is off (Android 10 head units, where sets exist, see [appSetsActive]);
+     *  1a. the split of the Android 10 head units ([appSetsActive]): with «Пополам 1:1» an app set
+     *      («сплит <название>», «сплит», «включи разделение экрана») or «сплит <приложение>»; with
+     *      the other mechanisms the bare split phrases open the saved pair;
      *  2. the user's own phrase for a built-in command, equal to the whole utterance;
      *  3. the built-in NluParser on the full utterance;
      *  4. the agent (Resolution.None, with the parser's reason).
@@ -897,16 +898,15 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
      *  «открой окно наполовину», «не открывай окно» or «открой окно на палец». */
     private suspend fun resolve(text: String): Resolution {
         automationResolver.match(text)?.let { return Resolution.Auto(it) }
-        // Only one split works at a time ([appSetsActive]). The main method (Android 10 head units):
-        // the bare split phrases open its saved pair. The alternative one: the sets, which are made
-        // only on those head units, so the firmware check is already behind them.
-        if (splitPreferences?.isFeatureEnabled() == true) {
-            if (legacyHeadUnit() && AppSetStore.isBareSplitPhrase(text)) return Resolution.SplitStart
-        } else {
+        // Only one split works at a time ([appSetsActive]); the split switched off takes no phrase.
+        val splitOn = splitPreferences?.isFeatureEnabled() == true
+        if (appSetsActive(legacyHeadUnit(), splitOn, appSets?.setsMode?.value == true)) {
             // A set's name wins over an app; an app the table knows is split with the screen.
             val adHoc = adHocSplitApp(text)
             appSets?.resolve(text, oneSetTakesAny = adHoc == null)?.let { return Resolution.AppSetStart(it) }
             adHoc?.let { return it }
+        } else if (splitOn && legacyHeadUnit() && AppSetStore.isBareSplitPhrase(text)) {
+            return Resolution.SplitStart
         }
         userPhrases.match(text)?.let { return Resolution.Cmd(listOf(it.command), "phrase:${it.id}") }
         return parse(text)

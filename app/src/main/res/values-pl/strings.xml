@@ -2372,14 +2372,12 @@
     <string name="settings_voice_app_matches_button">Pokaż</string>
     <string name="settings_voice_app_matches_dialog_title">Dopasowania aplikacji</string>
     <string name="settings_voice_app_matches_not_found">Nie znaleziono na tym urządzeniu</string>
-    <string name="settings_split_mode_title">Sposób</string>
-    <string name="settings_split_mode_main">Podstawowy</string>
-    <string name="settings_split_mode_alternative">Alternatywny</string>
-    <string name="settings_split_mode_desc">Działa jeden sposób. Podstawowy: okna BYDMate lub podział oprogramowania, jak w innych autach. Alternatywny: zestawy, podział oprogramowania na pół. Widżet, przycisk na kierownicy, głos i otwieranie przy starcie działają z wybranym.</string>
+    <string name="settings_split_mechanism_halves">Po połowie 1:1</string>
+    <string name="settings_split_enable_title_legacy">Podział ekranu</string>
+    <string name="settings_split_enable_desc_legacy">Działa jeden mechanizm, wybrany poniżej: okna BYDMate i podział oprogramowania otwierają zapisaną parę, „Po połowie 1:1” — zestawy. Widżet, przycisk na kierownicy, głos i otwieranie przy starcie działają z wybranym.</string>
     <string name="settings_split_autostart_title">Otwieraj przy starcie</string>
-    <string name="settings_split_autostart_desc">Tylko gdy auto stoi. Sposób podstawowy otwiera zapisaną parę, alternatywny — pierwszy zestaw.</string>
-    <string name="settings_split_mode_main_header">Sposób podstawowy</string>
-    <string name="settings_section_app_sets_title">Sposób alternatywny: 50/50</string>
+    <string name="settings_split_autostart_desc">Tylko gdy auto stoi. Okna BYDMate i podział oprogramowania otwierają zapisaną parę, „Po połowie 1:1” — pierwszy zestaw.</string>
+    <string name="settings_section_app_sets_title">Zestawy 1:1</string>
     <string name="settings_app_sets_howto">Głos:\n• „split” lub „włącz podział ekranu” — pierwszy zestaw na liście;\n• „split” i nazwa — wybrany zestaw. Nazwa dowolna, drobne błędy rozpoznawania są wybaczane.\n• „split” i nazwa aplikacji (lub „dodaj &lt;aplikację&gt; do splitu”) — ta aplikacja po lewej, to, co na ekranie, po prawej. Nazwa zestawu ma pierwszeństwo.\nWidżet: dotknięcie lewej części otwiera pierwszy zestaw.\nNie wybrano drugiej aplikacji: zostaje to, co jest teraz otwarte.</string>
     <string name="settings_app_sets_add_title">Nowy zestaw</string>
     <string name="settings_app_sets_add">Dodaj</string>
@@ -2403,7 +2401,7 @@
     <string name="settings_app_sets_err_in_use">Taka nazwa już istnieje: %1$s</string>
     <string name="settings_app_sets_saved">Zapisano</string>
     <string name="settings_app_sets_run_failed">Zestaw się nie otworzył</string>
-    <string name="app_sets_none_hint">Brak zestawu. Dodaj go w Ustawienia → Podział ekranu → Sposób alternatywny</string>
+    <string name="app_sets_none_hint">Brak zestawu. Dodaj go w Ustawienia → Podział ekranu → Po połowie 1:1</string>
     <string name="settings_widget_left_tap_zoning_description_legacy">Lewa część otwiera aplikację lub podział ekranu; reszta to BYDMate.</string>
     <string name="settings_widget_left_tap_mode_split_legacy">Podział ekranu</string>
 </resources>
