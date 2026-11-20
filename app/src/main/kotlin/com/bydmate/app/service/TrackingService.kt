@@ -759,7 +759,12 @@ class TrackingService : Service(), LocationListener {
             // Once: a head unit that ran the sets with the split switch off gets the switch on
             // with «Пополам 1:1» (Android 10 only; the sets exist only there).
             if (com.bydmate.app.platform.LegacyHeadUnit.isAndroid10) {
-                runCatching { appSetStore.migrateSetsMode(splitPreferences) }
+                runCatching {
+                    appSetStore.migrateSetsMode(splitPreferences) {
+                        com.bydmate.app.cluster.ClusterProjectionManager.realignFreeformFlag(
+                            this@TrackingService, helperClient, helperBootstrap, force = true)
+                    }
+                }
                     .onFailure { Log.w(TAG, "split mode migration failed: ${it.message}") }
             }
             runCatching { appSetAutostart.runIfDue { voiceGate.vehicleSnapshot()?.speed } }

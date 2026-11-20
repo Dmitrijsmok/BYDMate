@@ -91,11 +91,13 @@ class AppSetStoreTest {
         val backing = mutableMapOf<String, Any?>(AppSetStore.KEY_SETS_MODE to true)
         val s = AppSetStore(fakeSplitSharedPrefs(backing)).apply { upsert(tiktokMusic) }
         val split = FakeSplit(enabled = true, native = true)
+        var flagReset = 0
 
-        s.migrateSetsMode(split)
+        s.migrateSetsMode(split) { flagReset++ }
 
         assertTrue(s.setsOn.value)
         assertFalse(split.enabled)
+        assertEquals("the freeform flag goes back as the switch-off does", 1, flagReset)
         split.enabled = true
         s.migrateSetsMode(split)
         assertTrue("runs once", split.enabled)
