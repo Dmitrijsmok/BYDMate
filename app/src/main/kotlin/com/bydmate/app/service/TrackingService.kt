@@ -754,7 +754,7 @@ class TrackingService : Service(), LocationListener {
             }
         }
 
-        // The app set marked «open at start» (Android 10 head units only; no-op elsewhere).
+        // «Открывать при запуске» of the split section: the saved pair, or the first set on «Пополам 1:1».
         serviceScope.launch(Dispatchers.IO) {
             // Once: a head unit that ran the sets with the split switch off gets the switch on
             // with «Пополам 1:1» (Android 10 only; the sets exist only there).

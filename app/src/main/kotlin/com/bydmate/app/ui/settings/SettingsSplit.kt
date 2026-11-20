@@ -75,9 +75,10 @@ import com.bydmate.app.split.applyPick
  * The app rows edit the MENU pair; a launch with other apps changes only the session pair, which
  * the next process (car power cycle) forgets (SplitPreferences).
  *
- * Android 10 head units (DiLink 3 / 4): the mechanism row has a third choice, «Пополам 1:1», the
- * app sets through the firmware's own split ([AppSetsSection] instead of the pair rows), and one
- * «Открывать при запуске» switch serves every mechanism ([com.bydmate.app.split.AppSetAutostart]).
+ * «Открывать при запуске» under the mechanism row serves every mechanism
+ * ([com.bydmate.app.split.AppSetAutostart]). Android 10 head units (DiLink 3 / 4): the mechanism
+ * row has a third choice, «Пополам 1:1», the app sets through the firmware's own split
+ * ([AppSetsSection] instead of the pair rows); it exists only there (the firmware split it uses).
  */
 @Composable
 internal fun SplitSection(viewModel: SettingsViewModel) {
@@ -140,9 +141,9 @@ internal fun SplitSection(viewModel: SettingsViewModel) {
                 SettingDivider()
             }
             SettingToggleRow(
-                title = stringResource(if (legacy) R.string.settings_split_enable_title_legacy else R.string.settings_split_enable_title),
+                title = stringResource(R.string.settings_split_enable_title),
                 traceId = "split_enable",
-                description = stringResource(if (legacy) R.string.settings_split_enable_desc_legacy else R.string.settings_split_enable_desc),
+                description = stringResource(R.string.settings_split_enable_desc),
                 checked = splitEnabled,
                 onCheckedChange = { enabled ->
                     splitPrefs.setFeatureEnabled(enabled)
@@ -194,16 +195,16 @@ internal fun SplitSection(viewModel: SettingsViewModel) {
                 if (nativeMode && pairMechanism) {
                     SettingHint(text = stringResource(R.string.settings_split_mechanism_native_hint))
                 }
-                if (legacy) {
-                    SettingDivider()
-                    SettingToggleRow(
-                        title = stringResource(R.string.settings_split_autostart_title),
-                        description = stringResource(R.string.settings_split_autostart_desc),
-                        checked = autostart,
-                        onCheckedChange = { autostart = it; setsViewModel.setAutostart(it) },
-                        traceId = "split_autostart",
-                    )
-                }
+            }
+            if (splitEnabled) {
+                SettingDivider()
+                SettingToggleRow(
+                    title = stringResource(R.string.settings_split_autostart_title),
+                    description = stringResource(R.string.settings_split_autostart_desc),
+                    checked = autostart,
+                    onCheckedChange = { autostart = it; setsViewModel.setAutostart(it) },
+                    traceId = "split_autostart",
+                )
             }
             // Reboot hint: shown when split was enabled while freeform was not yet active.
             // enable_freeform_support is read once at boot, so a restart is required. Once the

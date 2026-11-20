@@ -1675,8 +1675,8 @@
     <string name="widget_button_icon_star">收藏</string>
     <!-- Split-screen settings section -->
     <string name="settings_section_split_title">分屏</string>
-    <string name="settings_split_enable_title">分屏 1/3 + 2/3</string>
-    <string name="settings_split_enable_desc">两个自由窗口：一个占三分之一，另一个占三分之二。默认关闭。车机自带的分屏按钮仍然是对半分屏。</string>
+    <string name="settings_split_enable_title">分屏</string>
+    <string name="settings_split_enable_desc">只有下方所选的一种机制生效。小组件、方向盘按键、语音和启动时打开都使用它。默认关闭。</string>
     <string name="settings_split_clear_pair_title">重置上次应用对</string>
     <string name="settings_split_clear_pair_desc">清除保存的应用对，下次启动时将打开选择器。</string>
     <string name="settings_split_pair_cleared">应用对已重置</string>
@@ -2323,10 +2323,8 @@
     <string name="settings_voice_app_matches_dialog_title">应用匹配</string>
     <string name="settings_voice_app_matches_not_found">此设备上未找到</string>
     <string name="settings_split_mechanism_halves">对半 1:1</string>
-    <string name="settings_split_enable_title_legacy">分屏</string>
-    <string name="settings_split_enable_desc_legacy">只有下方所选的一种机制生效：BYDMate 窗口和固件分屏打开已保存的应用对，“对半 1:1”打开组合。小组件、方向盘按键、语音和启动时打开都使用所选机制。</string>
     <string name="settings_split_autostart_title">启动时打开</string>
-    <string name="settings_split_autostart_desc">仅在车辆停止时。BYDMate 窗口和固件分屏打开已保存的应用对，“对半 1:1”打开第一个组合。</string>
+    <string name="settings_split_autostart_desc">仅在车辆停止时：所选机制打开已保存的应用对，“对半 1:1”打开第一个组合。</string>
     <string name="settings_section_app_sets_title">组合 1:1</string>
     <string name="settings_app_sets_howto">语音：\n• “split”或“打开分屏”——列表中的第一个组合；\n• “split”加名称——对应的组合。名称随意，轻微的识别误差也能容忍。\n• “split”加应用名称（或“把&lt;应用&gt;加入分屏”）——该应用在左侧，当前屏幕上的内容在右侧。组合名称优先。\n小组件：点按左侧打开第一个组合。\n未选择第二个应用：保留当前已打开的内容。</string>
     <string name="settings_app_sets_add_title">新建组合</string>

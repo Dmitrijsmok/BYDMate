@@ -127,8 +127,16 @@ class AppSetAutostartTest {
         assertEquals(Result.REPEAT, autostart().runIfDue { 0 })
     }
 
-    @Test fun `other firmwares and an empty choice do nothing`() = runBlocking {
-        assertEquals(Result.NOT_LEGACY, autostart(legacy = false).runIfDue { 0 })
+    @Test fun `other firmwares open the saved pair, never a set`() = runBlocking {
+        val a = autostart(legacy = false)
+        a.setEnabled(true)
+
+        assertEquals(Result.STARTED, a.runIfDue { 0 })
+        assertEquals(1, splitStarts)
+        coVerify(exactly = 0) { launcher.launch(any()) }
+    }
+
+    @Test fun `an empty choice does nothing`() = runBlocking {
         val empty = autostart(st = AppSetStore())
         empty.setEnabled(true)
         assertEquals(Result.NO_SET, empty.runIfDue { 0 })

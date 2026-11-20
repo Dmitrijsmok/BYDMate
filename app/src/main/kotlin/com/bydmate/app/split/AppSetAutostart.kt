@@ -11,10 +11,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * «Открывать при запуске» of the «Разделение экрана» section on the Android 10 head units: one
- * switch for whichever mechanism is chosen ([appSetsActive]). «Окна BYDMate» and «Родное
- * разделение» open the saved pair ([startSplit], SplitSessionManager.startLastPair), «Пополам 1:1»
- * the first app set. The split switched off opens nothing.
+ * «Открывать при запуске» of the «Разделение экрана» section, every firmware: one switch for
+ * whichever mechanism is chosen ([appSetsActive]). «Окна BYDMate» and «Родное разделение» open the
+ * saved pair ([startSplit], SplitSessionManager.startLastPair), «Пополам 1:1» (Android 10 head
+ * units) the first app set. The split switched off opens nothing.
  *
  * Two guards keep it from firing when it should not. The service restarts itself seconds after a
  * start there (the accessibility recovery), so a split already started within [REPEAT_WINDOW_MS]
@@ -44,7 +44,7 @@ class AppSetAutostart @Suppress("LongParameterList") constructor( // each guard 
     )
 
     /** [OFF]: this switch or the split's is off; [NO_SET]: nothing to open (no set, or no saved pair for the main method). */
-    enum class Result { NOT_LEGACY, OFF, NO_SET, REPEAT, MOVING, NO_SPEED, STARTED, FAILED }
+    enum class Result { OFF, NO_SET, REPEAT, MOVING, NO_SPEED, STARTED, FAILED }
 
     /** The switch. Before it existed each set had its own «open at start»: such a set turns it on. */
     fun isEnabled(): Boolean = prefs?.getBoolean(KEY_ENABLED, store.autostartSet() != null) ?: false
@@ -55,9 +55,8 @@ class AppSetAutostart @Suppress("LongParameterList") constructor( // each guard 
 
     /** [speedKmh] is the car's speed when known, null before the first reading. */
     suspend fun runIfDue(speedKmh: () -> Int?): Result {
-        if (!legacyHeadUnit()) return Result.NOT_LEGACY
         if (!isEnabled() || !splitFeatureEnabled()) return Result.OFF
-        val sets = appSetsActive(legacyHeadUnit = true, splitFeatureEnabled = true, setsMode = store.setsMode.value)
+        val sets = appSetsActive(legacyHeadUnit(), splitFeatureEnabled = true, setsMode = store.setsMode.value)
         val mode = if (sets) "sets" else "pair"
         val set = if (sets) store.defaultSet() ?: return trace(mode, Result.NO_SET) else null
         val last = prefs?.getLong(KEY_LAST_MS, 0L) ?: 0L
