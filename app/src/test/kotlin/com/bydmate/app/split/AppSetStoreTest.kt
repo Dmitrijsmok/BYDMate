@@ -69,11 +69,46 @@ class AppSetStoreTest {
         assertEquals("set1", s.defaultSet()?.id)
     }
 
-    @Test fun `the sets are the split in use only on Android 10 with the 1-3 split switched off`() {
-        assertTrue(appSetsActive(legacyHeadUnit = true, splitFeatureEnabled = false))
-        assertFalse(appSetsActive(legacyHeadUnit = true, splitFeatureEnabled = true))
-        assertFalse(appSetsActive(legacyHeadUnit = false, splitFeatureEnabled = false))
-        assertFalse(appSetsActive(legacyHeadUnit = false, splitFeatureEnabled = true))
+    @Test fun `the sets are the split in use only on Android 10 with the split on and 1-1 chosen`() {
+        assertTrue(appSetsActive(legacyHeadUnit = true, splitFeatureEnabled = true, setsMode = true))
+        assertFalse(appSetsActive(legacyHeadUnit = true, splitFeatureEnabled = true, setsMode = false))
+        assertFalse(appSetsActive(legacyHeadUnit = true, splitFeatureEnabled = false, setsMode = true))
+        assertFalse(appSetsActive(legacyHeadUnit = false, splitFeatureEnabled = true, setsMode = true))
+    }
+
+    @Test fun `a head unit that ran the sets with the split off gets the split on with 1-1, once`() {
+        val backing = mutableMapOf<String, Any?>()
+        val s = AppSetStore(fakeSplitSharedPrefs(backing)).apply { upsert(tiktokMusic) }
+        val split = FakeSplit(enabled = false)
+
+        s.migrateSetsMode(split)
+
+        assertTrue(s.setsMode.value)
+        assertTrue(split.enabled)
+        assertTrue(split.native)
+        split.enabled = false
+        s.migrateSetsMode(split)
+        assertFalse("runs once", split.enabled)
+    }
+
+    @Test fun `a head unit on the split pair keeps it`() {
+        val s = AppSetStore(fakeSplitSharedPrefs(mutableMapOf())).apply { upsert(tiktokMusic) }
+        val split = FakeSplit(enabled = true)
+
+        s.migrateSetsMode(split)
+
+        assertFalse(s.setsMode.value)
+        assertFalse(split.native)
+    }
+
+    private class FakeSplit(var enabled: Boolean, var native: Boolean = false) : SplitPreferences {
+        override fun getLastPair(): SplitPair? = null
+        override fun saveLastPair(pair: SplitPair) = Unit
+        override fun clearLastPair() = Unit
+        override fun isFeatureEnabled() = enabled
+        override fun setFeatureEnabled(enabled: Boolean) { this.enabled = enabled }
+        override fun isNativeModeEnabled() = native
+        override fun setNativeModeEnabled(enabled: Boolean) { native = enabled }
     }
 
     @Test fun `the bare name never opens a set, it would clash with open-app commands`() {

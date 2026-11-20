@@ -69,11 +69,15 @@ class VoiceControllerPrecedenceTest {
         fail("condition not met within ${timeoutMs}ms")
     }
 
-    /** «Разделение экрана»: [mainMethod] = the split master switch on (Android 10: «Основной»). */
+    /**
+     * «Разделение экрана» (Android 10): [mainMethod] = the saved pair's mechanism, else «Пополам
+     * 1:1» (the sets); [switchedOn] = the split switch.
+     */
     private class SplitSetup(
         val mainMethod: Boolean = false,
         val manager: SplitSessionManager = mockk { coEvery { startLastPair() } returns SplitStartResult.OK },
         val legacy: Boolean = true,
+        val switchedOn: Boolean = true,
     )
 
     /** A real VoiceAutomationResolver over one enabled rule (id 9, name «Моё») with [automationPhrase]. */
@@ -118,7 +122,8 @@ class VoiceControllerPrecedenceTest {
         controller.legacyHeadUnit = { split.legacy }
         appSets?.let { (store, launcher) ->
             controller.injectAppSets(
-                store, launcher, mockk { every { isFeatureEnabled() } returns split.mainMethod },
+                store.apply { setSetsMode(!split.mainMethod) }, launcher,
+                mockk { every { isFeatureEnabled() } returns split.switchedOn },
                 dagger.Lazy { split.manager },
             )
         }
@@ -324,6 +329,17 @@ class VoiceControllerPrecedenceTest {
 
         assertNotEquals("split:app:яндекс музыка", r.say("сплит яндекс музыка").command)
         coVerify(exactly = 0) { launcher.launch(any()) }
+    }
+
+    @Test fun `with the split switched off neither a set nor the pair opens`() {
+        val manager = mockk<SplitSessionManager>(relaxed = true)
+        val launcher = setLauncher()
+        val r = rig(null, VoiceUserPhrases(), appSets = setStore to launcher,
+            split = SplitSetup(manager = manager, switchedOn = false))
+
+        assertNotEquals("appset:открой окна", r.say("включи разделение экрана").command)
+        coVerify(exactly = 0) { launcher.launch(any()) }
+        coVerify(exactly = 0) { manager.startLastPair() }
     }
 
     @Test fun `an app set that does not open is reported as blocked`() {

@@ -85,6 +85,9 @@ import com.bydmate.app.split.DisabledSplitPreferences
 import com.bydmate.app.split.Pane
 import com.bydmate.app.split.SplitPair
 import com.bydmate.app.split.SplitPreferences
+import com.bydmate.app.split.AppSetStore
+import com.bydmate.app.platform.LegacyHeadUnit
+import com.bydmate.app.split.appSetsActive
 import com.bydmate.app.split.SplitSessionManager
 import com.bydmate.app.split.SplitSessionState
 import com.bydmate.app.split.SplitSide
@@ -133,6 +136,14 @@ class AgentTools @Inject constructor(
     internal fun injectSplit(prefs: SplitPreferences, mgr: SplitSessionManager) {
         splitPrefs = prefs
         splitMgr = mgr
+    }
+
+    // Android 10 head units: with «Пополам 1:1» the app sets are the split, not this one.
+    private var appSetStore: AppSetStore? = null
+
+    @Inject
+    internal fun injectAppSets(store: AppSetStore) {
+        appSetStore = store
     }
 
     // Same method-injection reason as splitPrefs above: keeps every existing test constructor
@@ -1974,6 +1985,10 @@ class AgentTools @Inject constructor(
         }
         val mgr = splitMgr
             ?: return """{"error":"разделение экрана недоступно"}"""
+        // Only one split works at a time (appSetsActive): the 1:1 sets are opened by the voice itself.
+        if (appSetsActive(LegacyHeadUnit.isAndroid10, true, appSetStore?.setsMode?.value == true)) {
+            return """{"error":"выбран способ «Пополам 1:1»: скажи «сплит» и название комплекта или приложения"}"""
+        }
         return when (val action = args.optString("action").trim()) {
             "start" -> {
                 val narrowName = args.optString("narrow_app").trim().takeIf { it.isNotEmpty() }

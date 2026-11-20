@@ -29,25 +29,52 @@ data class AppSet(
 )
 
 /**
- * Whether the app sets are the split in use: on the Android 10 head units, with «Альтернативный»
- * chosen in «Разделение экрана» (the split master switch off). Only one method works at a time:
- * with «Основной» the widget tap, the split key, the voice and the start open its saved pair, and
- * no set opens; with «Альтернативный» they open the sets.
+ * Whether the app sets are the split in use: on the Android 10 head units, with the split switched
+ * on and «Пополам 1:1» chosen in its «Механизм разделения» row ([AppSetStore.setsMode]). Only one
+ * split works at a time: with «Окна BYDMate» or «Родное разделение» the widget tap, the split key,
+ * the voice and the start open the saved pair, and no set opens; with «Пополам 1:1» they open the
+ * sets. The split switched off: neither.
  */
-fun appSetsActive(legacyHeadUnit: Boolean, splitFeatureEnabled: Boolean): Boolean =
-    legacyHeadUnit && !splitFeatureEnabled
+fun appSetsActive(legacyHeadUnit: Boolean, splitFeatureEnabled: Boolean, setsMode: Boolean): Boolean =
+    legacyHeadUnit && splitFeatureEnabled && setsMode
 
 /**
  * The saved [AppSet]s, JSON in SharedPreferences("bydmate_app_sets"). Null [prefs] keeps everything
  * in memory (unit tests). At most one set starts with the service ([AppSet.autostart]).
  */
 @Singleton
+@Suppress("TooManyFunctions") // the sets, the phrase they answer to and the «Пополам 1:1» choice
 class AppSetStore(private val prefs: SharedPreferences? = null) {
     @Inject constructor(@ApplicationContext context: Context) :
         this(context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE))
 
     private val _sets = MutableStateFlow(load())
     val sets: StateFlow<List<AppSet>> = _sets.asStateFlow()
+
+    private val _setsMode = MutableStateFlow(prefs?.getBoolean(KEY_SETS_MODE, false) ?: false)
+
+    /** «Пополам 1:1» is chosen in the split's «Механизм разделения» row ([appSetsActive]). */
+    val setsMode: StateFlow<Boolean> = _setsMode.asStateFlow()
+
+    fun setSetsMode(on: Boolean) {
+        _setsMode.value = on
+        prefs?.edit()?.putBoolean(KEY_SETS_MODE, on)?.apply()
+    }
+
+    /**
+     * Once, on the first start of a version with «Пополам 1:1»: before it the sets ran while the
+     * split switch was off. Such a head unit (switch off, sets saved) gets the switch on with
+     * «1:1» and the firmware's split (native mode, so the freeform flag is not asked for).
+     */
+    fun migrateSetsMode(split: SplitPreferences) {
+        if (prefs == null || prefs.contains(KEY_SETS_MODE)) return
+        val hadSets = !split.isFeatureEnabled() && _sets.value.isNotEmpty()
+        if (hadSets) {
+            split.setNativeModeEnabled(true)
+            split.setFeatureEnabled(true)
+        }
+        setSetsMode(hadSets)
+    }
 
     sealed interface Check {
         data object Ok : Check
@@ -190,6 +217,7 @@ class AppSetStore(private val prefs: SharedPreferences? = null) {
         }
         const val PREFS_NAME = "bydmate_app_sets"
         const val KEY = "sets"
+        const val KEY_SETS_MODE = "sets_mode"
         const val MAX_SETS = 8
         const val MAX_NAME_CHARS = 40
     }
