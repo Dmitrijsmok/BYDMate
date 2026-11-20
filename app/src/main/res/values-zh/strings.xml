@@ -2330,7 +2330,7 @@
     <string name="settings_split_autostart_desc">仅在车辆停止时。主要方式打开已保存的应用对，备用方式打开第一个组合。</string>
     <string name="settings_split_mode_main_header">主要方式</string>
     <string name="settings_section_app_sets_title">备用方式：50/50</string>
-    <string name="settings_app_sets_howto">语音：\n• “split”或“打开分屏”——列表中的第一个组合；\n• “split”加名称——对应的组合。名称随意，轻微的识别误差也能容忍。\n小组件：点按左侧打开第一个组合。\n未选择第二个应用：保留当前已打开的内容。</string>
+    <string name="settings_app_sets_howto">语音：\n• “split”或“打开分屏”——列表中的第一个组合；\n• “split”加名称——对应的组合。名称随意，轻微的识别误差也能容忍。\n• “split”加应用名称（或“把&lt;应用&gt;加入分屏”）——该应用在左侧，当前屏幕上的内容在右侧。组合名称优先。\n小组件：点按左侧打开第一个组合。\n未选择第二个应用：保留当前已打开的内容。</string>
     <string name="settings_app_sets_add_title">新建组合</string>
     <string name="settings_app_sets_add">添加</string>
     <string name="settings_app_sets_name_label">名称（语音指令）</string>
