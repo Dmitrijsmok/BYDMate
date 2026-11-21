@@ -94,6 +94,18 @@ class GigaAmModelIntegrityTest {
         assertFalse(File(dir, "asr/gigaam-v3-ru").exists())
     }
 
+    // With the hashes already recorded, the kept mark clears only once both the recognizer and the
+    // VAD loaded in one process: a recognizer that loads cannot clear the mark of a crashing VAD.
+    @Test fun `the kept mark clears only after both kinds of files loaded`() = runBlocking {
+        val (dir, _) = recorded("mark-intact")
+        val m = manager(dir)            // a new process
+        m.markUnverifiedKept()
+        m.recordIntegrityIfMissing(model = true)
+        assertTrue(m.unverifiedKeptBefore())
+        m.recordIntegrityIfMissing(model = false)
+        assertFalse(m.unverifiedKeptBefore())
+    }
+
     @Test fun `the dump names which hashes exist`() = runBlocking {
         val (_, m) = install("dump")
         assertEquals("model=no vad=no unverified_kept=false", m.manifestState())

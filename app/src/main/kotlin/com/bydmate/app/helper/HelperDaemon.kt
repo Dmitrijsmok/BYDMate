@@ -353,10 +353,7 @@ fun main(args: Array<String>) {
                 }.getOrElse { reply?.writeInt(-1); reply?.writeInt(0); true }
 
                 HelperBinderProtocol.TX_LAUNCH_APP -> runCatching {
-                    val pkg = data.readString() ?: ""
-                    // Additive trailing int (app sets): absent or 0 = the plain launch.
-                    val mode = if (data.dataAvail() >= 4) data.readInt() else 0
-                    val ok = if (mode > 0) launchAppInWindowingMode(pkg, mode) else launchApp(pkg)
+                    val ok = launchAppFromParcel(data)
                     reply?.writeInt(if (ok) 0 else -1); reply?.writeInt(0)
                     true
                 }.getOrElse { reply?.writeInt(-1); reply?.writeInt(0); true }
@@ -564,6 +561,22 @@ fun main(args: Array<String>) {
                     reply?.writeInt(if (result.code == 0) 0 else -1)
                     true
                 }.getOrElse { reply?.writeInt(-1); true }
+
+                HelperBinderProtocol.TX_PRESS_BACK -> runCatching {
+                    // Fixed key code (KEYCODE_BACK), nothing from the caller.
+                    val result = shExec("input keyevent 4")
+                    android.util.Log.i("bydmate_helper", "TX_PRESS_BACK code=${result.code}")
+                    reply?.writeInt(if (result.code == 0) 0 else -1); reply?.writeInt(0)
+                    true
+                }.getOrElse { reply?.writeInt(-1); reply?.writeInt(0); true }
+
+                HelperBinderProtocol.TX_PRESS_HOME -> runCatching {
+                    // Fixed key code (KEYCODE_HOME), nothing from the caller.
+                    val result = shExec("input keyevent 3")
+                    android.util.Log.i("bydmate_helper", "TX_PRESS_HOME code=${result.code}")
+                    reply?.writeInt(if (result.code == 0) 0 else -1); reply?.writeInt(0)
+                    true
+                }.getOrElse { reply?.writeInt(-1); reply?.writeInt(0); true }
 
                 HelperBinderProtocol.TX_SET_APP_HIDDEN -> runCatching {
                     val pkg = data.readString() ?: ""
@@ -943,7 +956,11 @@ fun main(args: Array<String>) {
 
                 HelperBinderProtocol.TX_DTC_SCAN_START,
                 HelperBinderProtocol.TX_DTC_SCAN_STATUS,
-                HelperBinderProtocol.TX_DTC_ERASE_START -> handleDtcScanTransact(code, data, reply, svc, autoIface)
+                HelperBinderProtocol.TX_DTC_ERASE_START,
+                HelperBinderProtocol.TX_TPMS_READ_START,
+                HelperBinderProtocol.TX_TPMS_WRITE_START,
+                HelperBinderProtocol.TX_FW_READ_START,
+                HelperBinderProtocol.TX_DIAG_JOB_STATUS -> handleDtcScanTransact(code, data, reply, svc, autoIface)
 
                 else -> super.onTransact(code, data, reply, flags)
             }

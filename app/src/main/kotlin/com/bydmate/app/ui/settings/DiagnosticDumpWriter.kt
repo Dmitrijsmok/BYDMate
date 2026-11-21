@@ -433,7 +433,7 @@ class DiagnosticDumpWriter @Inject @Suppress("LongParameterList") constructor( /
             // automation, agent) and why not, with the agent's tools and answer. The only place a
             // user report about a misheard or refused command becomes checkable.
             appendLine("--- voice ---")
-            // The GigaAM model and its load guard (model deleted and re-downloaded, 1.1.9): the
+            // The GigaAM model and its load guard (model deleted and re-downloaded, DiLink 3 field log 2026-11): the
             // interrupted-load counters as this process found them and as stored now, which
             // known-good hashes exist, and what the last tripped guard did with the files.
             if (asrLoadGuard != null && gigaAmModelManager != null) {
@@ -1037,6 +1037,25 @@ class DiagnosticDumpWriter @Inject @Suppress("LongParameterList") constructor( /
                 )
                 com.bydmate.app.data.dtc.DtcScanRepository.dumpLines(prefs, helperClient.dtcScanStatus())
                     .forEach { appendLine(it) }
+            } catch (e: Exception) { appendLine("error: ${e.message}") }
+
+            // The last tyre-sensor read and write, raw per wheel, and the owner's sets. Never reads the car.
+            appendLine("--- tpms ---")
+            try {
+                val prefs = appContext.getSharedPreferences(
+                    com.bydmate.app.data.tpms.TpmsRepository.PREFS_NAME, Context.MODE_PRIVATE,
+                )
+                com.bydmate.app.data.tpms.TpmsRepository.dumpLines(prefs, settingsRepository.getTyreSets(), helperClient.tpmsStatus())
+                    .forEach { appendLine(it) }
+            } catch (e: Exception) { appendLine("error: ${e.message}") }
+
+            // The saved block firmware checks, raw per address, and the head-unit baseline. Never reads the car.
+            appendLine("--- ecu firmware ---")
+            try {
+                val prefs = appContext.getSharedPreferences(
+                    com.bydmate.app.data.dtc.EcuFirmwareRepository.PREFS_NAME, Context.MODE_PRIVATE,
+                )
+                com.bydmate.app.data.dtc.EcuFirmwareRepository.dumpLines(prefs).forEach { appendLine(it) }
             } catch (e: Exception) { appendLine("error: ${e.message}") }
 
             appendLine("--- last crash ---")

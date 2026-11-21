@@ -206,6 +206,7 @@
     <ID>LargeClass:AutoserviceChargingDetectorTest.kt$AutoserviceChargingDetectorTest</ID>
     <ID>LargeClass:ClusterProjectionManager.kt$ClusterProjectionManager</ID>
     <ID>LargeClass:DiagnosticDumpWriter.kt$DiagnosticDumpWriter</ID>
+    <ID>LargeClass:HelperDaemon.kt$&lt;no name provided&gt; : Binder</ID>
     <ID>LargeClass:SettingsViewModel.kt$SettingsViewModel : ViewModel</ID>
     <ID>LargeClass:SettingsViewModelTest.kt$SettingsViewModelTest</ID>
     <ID>LargeClass:SherpaTtsEngineTest.kt$SherpaTtsEngineTest</ID>

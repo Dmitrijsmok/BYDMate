@@ -7,10 +7,17 @@ import org.junit.Test
 class VoiceEarconTest {
 
     @Test
-    fun `android 10 head units beep on the alarm stream at full volume`() {
-        assertEquals(AudioManager.STREAM_ALARM to 100, VoiceEarcon(legacyHeadUnit = true).primaryRoute())
+    fun `android 10 head units beep on the navigation stream of the voice at full volume`() {
+        assertEquals(SherpaTtsEngine.BYD_STREAM_NAVI to 100, VoiceEarcon(legacyHeadUnit = true).primaryRoute())
         // The caller's volume does not apply there: the DiLink 3.0 cue must not be quiet.
-        assertEquals(AudioManager.STREAM_ALARM to 100, VoiceEarcon(volume = 40, legacyHeadUnit = true).primaryRoute())
+        assertEquals(SherpaTtsEngine.BYD_STREAM_NAVI to 100, VoiceEarcon(volume = 40, legacyHeadUnit = true).primaryRoute())
+    }
+
+    @Test
+    fun `a rejected stream falls back to the alarm stream there, then the music stream`() {
+        assertEquals(listOf(AudioManager.STREAM_ALARM, AudioManager.STREAM_MUSIC),
+            VoiceEarcon(legacyHeadUnit = true).fallbackStreams())
+        assertEquals(listOf(AudioManager.STREAM_MUSIC), VoiceEarcon(legacyHeadUnit = false).fallbackStreams())
     }
 
     @Test

@@ -10,10 +10,17 @@ import com.bydmate.app.data.dtc.DtcScanPhase
 import com.bydmate.app.data.dtc.DtcScanState
 import com.bydmate.app.data.dtc.DtcScanSummary
 import com.bydmate.app.data.dtc.DtcSendResult
+import com.bydmate.app.data.dtc.FirmwarePhase
+import com.bydmate.app.data.dtc.FirmwareUiState
 import com.bydmate.app.data.nativestack.VehicleKind
+import com.bydmate.app.data.tpms.TpmsPhase
+import com.bydmate.app.data.tpms.TpmsUiState
 
 /** Caption of the «Сканировать» button. */
 enum class DtcScanLabel { SCAN, SCANNING, ONLY_PARK }
+
+/** Why the tyre window cannot write now; each has its own plain line in place of the buttons. */
+enum class TyreWriteBlock { READING, WRITING, NO_READ, NOT_L3, NOT_PARK, BUSY }
 
 /**
  * Live state of the «Техника» screen. Everything vehicle-side rides the poller that already
@@ -78,6 +85,8 @@ data class TechPanelUiState(
     // Батарея · история
     val lifetimeKm: Float? = null,
     val lifetimeKwh: Float? = null,
+    /** The BMS counter the «Полных циклов» row divides: live, else the last one remembered. */
+    val bmsLifetimeKwhForCycles: Float? = null,
     val avgSocSinceCharge: Int? = null,
     val avgSocAllTime: Int? = null,
     /** Everything the app has ever seen charged into the pack, kWh; null until the first session. */
@@ -130,13 +139,39 @@ data class TechPanelUiState(
     val dtcBlocks: Map<Int, DtcBlockName> = emptyMap(),
     /** Blocks of unknown erase result since the saved scan: no erase of them until a new scan. */
     val dtcEraseLocked: Set<Int> = emptySet(),
+    // Состояние машины: the tyre-sensor ID window
+    val tpms: TpmsUiState = TpmsUiState(),
+    val tyreDialogOpen: Boolean = false,
+    // Диагностика: the block firmware check
+    val firmware: FirmwareUiState = FirmwareUiState(),
 ) {
     val dtcErasing: Boolean
         get() = dtcErase?.phase == DtcErasePhase.ERASING
 
-    /** The scan button is enabled on a running service in P and while no scan or erase runs. */
+    /** The scan button is enabled on a running service in P and while no scan, erase, tyre job or firmware check runs. */
     val canScan: Boolean
-        get() = gear == GEAR_PARK && serviceRunning && dtcScan.phase != DtcScanPhase.SCANNING && !dtcErasing
+        get() = gear == GEAR_PARK && serviceRunning && dtcScan.phase != DtcScanPhase.SCANNING && !dtcErasing &&
+            tpms.phase == TpmsPhase.IDLE && firmware.phase == FirmwarePhase.IDLE
+
+    /** «Проверить сейчас» has the scan button's gates: the daemon runs one diagnostic job at a time. */
+    val canCheckFirmware: Boolean
+        get() = canScan
+
+    /** A fault-code scan or erase, or a firmware check holds the daemon: the tyre window reads nothing. */
+    val diagBusy: Boolean
+        get() = dtcScan.phase == DtcScanPhase.SCANNING || dtcErasing || firmware.phase != FirmwarePhase.IDLE
+
+    /** Null when the tyre window may write: a Leopard 3 shaped read, P, and no tyre or fault-code job running. */
+    val tyreWriteBlock: TyreWriteBlock?
+        get() = when {
+            tpms.phase == TpmsPhase.READING -> TyreWriteBlock.READING
+            tpms.phase == TpmsPhase.WRITING -> TyreWriteBlock.WRITING
+            tpms.lastRead == null -> TyreWriteBlock.NO_READ
+            !tpms.canWrite -> TyreWriteBlock.NOT_L3
+            gear != GEAR_PARK || !serviceRunning -> TyreWriteBlock.NOT_PARK
+            diagBusy -> TyreWriteBlock.BUSY
+            else -> null
+        }
 
     /** An erase of unknown outcome ran after the saved scan: its list may be out of date until a new scan. */
     val dtcErasedSinceScan: Boolean
@@ -152,10 +187,12 @@ data class TechPanelUiState(
         return group.none { it in dtcEraseLocked }
     }
 
+    /** «только на P» only when the car is the reason; another running job just disables the button. */
     val scanLabel: DtcScanLabel
         get() = when {
             dtcScan.phase == DtcScanPhase.SCANNING -> DtcScanLabel.SCANNING
             canScan -> DtcScanLabel.SCAN
+            gear == GEAR_PARK && serviceRunning -> DtcScanLabel.SCAN
             else -> DtcScanLabel.ONLY_PARK
         }
 
@@ -223,7 +260,7 @@ data class TechPanelUiState(
         get() = faultCount != null || hasServiceRow || gear != null || dtcSummary != null
     val showHistory: Boolean
         get() = anyOf(
-            lifetimeKm, lifetimeKwh, avgSocSinceCharge, avgSocAllTime,
+            lifetimeKm, lifetimeKwh, bmsLifetimeKwhForCycles, avgSocSinceCharge, avgSocAllTime,
             // The «Полных циклов» row lives here; a car that logged charges but answers no
             // lifetime counter still has a number to show. A zero sum has nothing to divide.
             lifetimeChargedKwh?.takeIf { it > 0.0 },

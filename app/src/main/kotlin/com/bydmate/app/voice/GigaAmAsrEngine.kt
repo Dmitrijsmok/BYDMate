@@ -12,6 +12,7 @@ import com.k2fsa.sherpa.onnx.SileroVadModelConfig
 import com.k2fsa.sherpa.onnx.Vad
 import com.k2fsa.sherpa.onnx.VadModelConfig
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import java.util.concurrent.Executor
@@ -104,21 +105,42 @@ private class RealVadHandle(modelManager: GigaAmModelManager) : VadHandle {
  */
 private class NoiseGate {
     private val endpointer = NoiseEndpointer()
+    private val loudOnset = LoudOnsetSegmenter()
     private var heardMs = 0L
     private var speechMs = 0L
     private var segments = 0
     private var flushes = 0
+    private var loudSegments = 0
+    private var lastRms = 0.0
+    private var lastFrameMs = 0L
+
+    /** A phrase the VAD did not hear is being collected by loudness ([LoudOnsetSegmenter]). */
+    val loudActive: Boolean get() = loudOnset.active
 
     /** True when the phrase must be ended now: the caller flushes the VAD. */
     fun endsPhrase(frame: ShortArray, inSpeech: Boolean): Boolean {
         val frameMs = frame.size * 1000L / GigaAmAsrEngine.SAMPLE_RATE
+        lastFrameMs = frameMs
+        lastRms = NoiseEndpointer.rms(frame)
         heardMs += frameMs
         if (inSpeech) speechMs += frameMs
-        if (endpointer.onFrame(NoiseEndpointer.rms(frame), frameMs, inSpeech) != NoiseEndpointer.Decision.FLUSH) return false
+        if (endpointer.onFrame(lastRms, frameMs, inSpeech) != NoiseEndpointer.Decision.FLUSH) return false
         flushes++
         Log.i("VoiceController", "vad end by noise floor: floor=${endpointer.floor.toInt()} loud_ms=${endpointer.lastLoudMs}")
         Trace.event(TraceArea.VOICE, "vad-endpoint", "floor" to endpointer.floor.toInt(), "loud_ms" to endpointer.lastLoudMs)
         return true
+    }
+
+    /** After [endsPhrase] for the same frame: a phrase found by loudness alone, to decode, else null. */
+    fun loudSegment(frame: FloatArray, inSpeech: Boolean): FloatArray? {
+        val segment = loudOnset.onFrame(frame, lastRms, lastFrameMs, endpointer.floor, endpointer.noisy, inSpeech)
+            ?: return null
+        loudSegments++
+        val ms = segment.size * 1000L / GigaAmAsrEngine.SAMPLE_RATE
+        Log.i("VoiceController", "phrase by loudness: floor=${endpointer.floor.toInt()} loud_ms=${loudOnset.lastLoudMs} ms=$ms")
+        Trace.event(TraceArea.VOICE, "vad-loud-onset", "floor" to endpointer.floor.toInt(),
+            "loud_ms" to loudOnset.lastLoudMs, "ms" to ms)
+        return segment
     }
 
     fun onSegment() {
@@ -127,9 +149,53 @@ private class NoiseGate {
 
     fun summary() {
         Trace.event(TraceArea.VOICE, "vad-summary", "heard_ms" to heardMs, "speech_ms" to speechMs,
-            "segments" to segments, "noise_flushes" to flushes, "floor" to endpointer.floor.toInt(),
-            "noisy" to endpointer.noisy)
+            "segments" to segments, "noise_flushes" to flushes, "loud_segments" to loudSegments,
+            "floor" to endpointer.floor.toInt(), "noisy" to endpointer.noisy)
     }
+}
+
+/**
+ * The speech start and silence ticks of one collection: speech is the VAD's, or, in road noise,
+ * a phrase loudness is collecting ([NoiseGate.loudActive]); a start is emitted once per phrase.
+ */
+private class SpeechTicks(private val onVadSpeechStart: () -> Unit) {
+    private var speaking = false
+    private var loudSpeaking = false
+    private var silentMs = 0L
+
+    fun onFrame(inSpeech: Boolean, loudActive: Boolean, frameMs: Long): ContinuousAsrEvent? = when {
+        inSpeech -> if (speaking) null else {
+            onVadSpeechStart()
+            speaking = true
+            silentMs = 0L
+            ContinuousAsrEvent.SpeechStart
+        }
+        loudActive -> if (speaking || loudSpeaking) null else {
+            loudSpeaking = true
+            silentMs = 0L
+            ContinuousAsrEvent.SpeechStart
+        }
+        else -> {
+            loudSpeaking = false
+            silentMs += frameMs
+            ContinuousAsrEvent.SilenceTick(silentMs)
+        }
+    }
+
+    /** A segment went to the recognizer: the next speech is a new phrase. */
+    fun onSegment() {
+        speaking = false
+        loudSpeaking = false
+    }
+}
+
+/** Decodes one segment of a collection and emits its text, if any. */
+private suspend fun FlowCollector<ContinuousAsrEvent>.emitDecoded(
+    recognizer: RecognizerHandle, segment: FloatArray, noise: NoiseGate,
+) {
+    val text = recognizer.decode(segment)
+    noise.onSegment()
+    if (text.isNotBlank()) emit(ContinuousAsrEvent.Utterance(text))
 }
 
 /** GigaAM v3 Russian nemo-CTC recognizer segmented by a silero VAD, for the continuous voice
@@ -278,39 +344,32 @@ internal class GigaAmAsrEngine @Suppress("LongParameterList") constructor(
             Log.i(TAG, "vad ready: ms=$vadMs prebuilt=${spare != null}")
             Trace.event(TraceArea.VOICE, "vad-ready", "ms" to vadMs, "prebuilt" to (spare != null))
             if (warmVad) prewarmNextVad()
-            var speaking = false
-            var silentMs = 0L
             val preRoll = if (preRollMs > 0) {
                 val prepend = preRollMs * SAMPLE_RATE / 1000
                 SpeechPreRoll(prepend + VAD_ONSET_LAG_SAMPLES, maxPrepend = prepend)
             } else null
+            val ticks = SpeechTicks(onVadSpeechStart = { preRoll?.speechStart() })
             pcm.collect { shorts ->
                 val frame = FloatArray(shorts.size) { i -> shorts[i] / 32768f }
                 vad.acceptWaveform(frame)
                 preRoll?.append(frame)
                 val inSpeech = vad.isSpeechDetected()
                 if (noise.endsPhrase(shorts, inSpeech)) vad.flush()
-                if (inSpeech) {
-                    if (!speaking) {
-                        preRoll?.speechStart()
-                        speaking = true
-                        silentMs = 0L
-                        emit(ContinuousAsrEvent.SpeechStart)
-                    }
-                } else {
-                    silentMs += (shorts.size * 1000L) / SAMPLE_RATE
-                    emit(ContinuousAsrEvent.SilenceTick(silentMs))
-                }
+                val loudSegment = noise.loudSegment(frame, inSpeech)
+                ticks.onFrame(inSpeech, noise.loudActive, (shorts.size * 1000L) / SAMPLE_RATE)?.let { emit(it) }
                 while (!vad.empty()) {
                     val segment = if (preRoll == null) vad.front() else {
                         val (start, samples) = vad.frontWithStart()
                         preRoll.finish(start, samples)
                     }
                     vad.pop()
-                    speaking = false
-                    val text = recognizer.decode(segment)
-                    noise.onSegment()
-                    if (text.isNotBlank()) emit(ContinuousAsrEvent.Utterance(text))
+                    ticks.onSegment()
+                    emitDecoded(recognizer, segment, noise)
+                }
+                // Road noise: a phrase the VAD never heard, found by loudness (LoudOnsetSegmenter).
+                if (loudSegment != null) {
+                    ticks.onSegment()
+                    emitDecoded(recognizer, loudSegment, noise)
                 }
             }
         } finally {

@@ -456,7 +456,7 @@ class GigaAmSegmenterTest {
         assertEquals(
             listOf(
                 "voice  vad-ready ms=N prebuilt=false #1",
-                "voice  vad-summary heard_ms=40 speech_ms=20 segments=1 noise_flushes=0 floor=1000 noisy=false #2",
+                "voice  vad-summary heard_ms=40 speech_ms=20 segments=1 noise_flushes=0 loud_segments=0 floor=1000 noisy=false #2",
             ),
             trace.events().map { it.replace(Regex(""" ms=\d+"""), " ms=N") },
         )
@@ -471,9 +471,42 @@ class GigaAmSegmenterTest {
         assertEquals(
             listOf(
                 "voice  vad-ready ms=N prebuilt=true #1",
-                "voice  vad-summary heard_ms=10 speech_ms=0 segments=0 noise_flushes=0 floor=0 noisy=false #2",
+                "voice  vad-summary heard_ms=10 speech_ms=0 segments=0 noise_flushes=0 loud_segments=0 floor=0 noisy=false #2",
             ),
             trace.events().map { it.replace(Regex(""" ms=\d+"""), " ms=N") },
         )
+    }
+
+    // --- Road noise the VAD never hears speech in (2026-11-21, 100 km/h): loudness finds it. ---
+
+    @Test fun `a phrase the VAD missed in a noisy cabin is decoded by loudness`() = runTest {
+        val vad = FakeVadHandle() // silence forever
+        val recognizer = FakeRecognizerHandle("воздух в лицо")
+        val engine = GigaAmAsrEngine(readyModelManager(), { recognizer }, { vad })
+        // 100 ms frames: 1.2 s of cabin noise, 0.6 s of voice at 1.9 times it, 0.8 s of noise.
+        val frames = List(12) { ShortArray(1600) { 370 } } + List(6) { ShortArray(1600) { 700 } } +
+            List(8) { ShortArray(1600) { 370 } }
+
+        val events = engine.transcribe(frames.asFlow()).toList()
+
+        assertEquals(listOf("воздух в лицо"),
+            events.filterIsInstance<ContinuousAsrEvent.Utterance>().map { it.text })
+        assertEquals(1, events.count { it is ContinuousAsrEvent.SpeechStart })
+        // 400 ms before the voice, the voice and the 800 ms tail.
+        assertEquals((4 + 6 + 8) * 1600, recognizer.lastSamples!!.size)
+        assertTrue(trace.events().any { it.startsWith("voice  vad-loud-onset floor=370 loud_ms=600") })
+    }
+
+    @Test fun `a quiet cabin never decodes by loudness`() = runTest {
+        val vad = FakeVadHandle()
+        val recognizer = FakeRecognizerHandle("шум")
+        val engine = GigaAmAsrEngine(readyModelManager(), { recognizer }, { vad })
+        val frames = List(12) { ShortArray(1600) { 60 } } + List(6) { ShortArray(1600) { 200 } } +
+            List(8) { ShortArray(1600) { 60 } }
+
+        val events = engine.transcribe(frames.asFlow()).toList()
+
+        assertTrue(events.none { it is ContinuousAsrEvent.Utterance })
+        assertEquals(null, recognizer.lastSamples)
     }
 }

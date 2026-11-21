@@ -9,7 +9,7 @@ import com.bydmate.app.voice.GigaAmModelManager.Integrity
  * hashes taken when they were known good, and deleted only when that check says they are bad.
  *
  * Deleting on every trip cost DiLink 3 drivers the 226 MB model again and again (field log,
- * 1.1.9): the Android 10 accessibility recovery force-stops the app seconds after every start,
+ * 2026-11): the Android 10 accessibility recovery force-stops the app seconds after every start,
  * while the start-up warm-up is still loading the model, so the guard kept counting kills that
  * had nothing to do with the files.
  */
@@ -54,8 +54,8 @@ class AsrGuardRecovery(
         val outcome = decide(integrity, files.unverifiedKeptBefore())
         when (outcome) {
             Outcome.DELETED -> files.delete()
-            Outcome.KEPT_UNVERIFIED -> files.markUnverifiedKept()
-            Outcome.KEPT_INTACT, Outcome.NOT_TRIPPED -> Unit
+            Outcome.KEPT_UNVERIFIED, Outcome.KEPT_INTACT -> files.markUnverifiedKept()
+            Outcome.NOT_TRIPPED -> Unit
         }
         guard.reset()
         record(outcome, integrity, counts)
@@ -83,6 +83,15 @@ class AsrGuardRecovery(
             Integrity.CORRUPT -> Outcome.DELETED
             Integrity.UNVERIFIED -> if (unverifiedKeptBefore) Outcome.DELETED else Outcome.KEPT_UNVERIFIED
         }
+
+        /**
+         * Whether the service preloads the model at start. Not after a delete, and not while a
+         * kept trip is unsettled ([keptMark]: no process has loaded both the recognizer and the
+         * VAD since): files that abort the native load every time would otherwise crash the app
+         * at every start. The model then loads on the first voice press.
+         */
+        fun warmUpAtStart(outcome: Outcome, keptMark: Boolean): Boolean =
+            outcome != Outcome.DELETED && !keptMark
 
         /** One dump line: what the last trip did and how often each outcome happened. */
         fun dumpLine(journal: SharedPreferences): String {

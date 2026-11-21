@@ -451,7 +451,8 @@ class AgentTools @Inject constructor(
                 "find_chargers" -> findChargers(args)
                 "range_to_destination" -> rangeToDestination(args)
                 "get_route_info" -> routeInfo()
-                "go_home" -> goHomeScreen()
+                "go_home" -> dispatchPlain("go_home", "Домой")
+                "go_back" -> dispatchPlain("go_back", "Назад")
                 // The voice session closes itself on this outcome (VoiceController); nothing to do here.
                 "end_conversation" -> """{"ok":true}"""
                 "play_music" -> playMusic(args)
@@ -1767,9 +1768,10 @@ class AgentTools @Inject constructor(
         else "$min мин"
     }
 
-    private suspend fun goHomeScreen(): String {
+    /** A payload-free action kind (go_home, go_back) run once. */
+    private suspend fun dispatchPlain(kind: String, displayName: String): String {
         val result = actionDispatcher.dispatch(
-            ActionDef(command = "", displayName = "Домой", kind = "go_home"), data = null)
+            ActionDef(command = "", displayName = displayName, kind = kind), data = null)
         return if (result.success) """{"ok":true}"""
         else JSONObject().put("error", result.reason ?: "не получилось").toString()
     }
@@ -1829,6 +1831,10 @@ class AgentTools @Inject constructor(
             else -> Built.Value(matches.single().let { it.label to it.packageName })
         }
     }
+
+    /** The package of the one installed app [name] names, else null: «сплит <приложение>». */
+    internal suspend fun launcherAppPackage(name: String): String? =
+        (resolveLauncherApp(name.trim()) as? Built.Value)?.value?.second
 
     /** A navigation app as candidate packages, resolved the way routes are: the manual package,
      *  the app's builds (by package or launcher label). [navigator] null is the app chosen in
@@ -2418,6 +2424,8 @@ class AgentTools @Inject constructor(
             }
             "go_home" -> Built.Value(
                 ActionDef(command = "", displayName = "Домой", kind = "go_home"))
+            "go_back" -> Built.Value(
+                ActionDef(command = "", displayName = "Назад", kind = "go_back"))
             "sentry" -> {
                 val on = requireBoolArg(a, "on") ?: return Built.Error("не указано состояние охранного режима")
                 Built.Value(ActionDef(command = "sentry",
@@ -2599,8 +2607,8 @@ class AgentTools @Inject constructor(
             "run_automation", "set_automation_enabled", "create_automation", "call_contact")
 
         /** Tools that open a route, a map search or a point, or leave the current screen for the
-         *  home screen: withheld from a turn whose caller may not navigate. */
-        internal val NAVIGATION_TOOLS = setOf("navigate_to", "search_on_map", "show_point_on_map", "go_home")
+         *  home screen or the previous one: withheld from a turn whose caller may not navigate. */
+        internal val NAVIGATION_TOOLS = setOf("navigate_to", "search_on_map", "show_point_on_map", "go_home", "go_back")
 
         /** Every other tool: readings, statistics, weather, search, route info, apps and media. A
          *  new tool must be added to exactly one of the three sets (AgentToolsDeniedToolsTest). */

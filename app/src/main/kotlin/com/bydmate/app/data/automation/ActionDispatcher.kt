@@ -397,7 +397,7 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
         }
 
         private fun writeErrorText(err: Throwable?): Int = when (err) {
-            is VehicleWriteError.Sentinel -> R.string.auto_err_not_confirmed
+            is VehicleWriteError.Unconfirmed -> R.string.auto_err_not_confirmed
             is VehicleWriteError.AllowlistMiss -> R.string.auto_err_not_supported
             is VehicleWriteError.OutOfRange -> R.string.auto_err_out_of_range
             is VehicleWriteError.HelperUnreachable -> R.string.auto_err_unreachable
@@ -683,6 +683,7 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
             "yandex_music" -> launchYandexMusic(action)
             "youtube" -> launchYoutube(action)
             "go_home" -> goHome()
+            "go_back" -> goBack()
             "delay" -> dispatchDelay(action)
             "media_volume" -> setMediaVolume(action)
             "media_key" -> dispatchMediaKey(action)
@@ -1746,11 +1747,27 @@ class ActionDispatcher @Inject @Suppress("LongParameterList") constructor( // Hi
     // Like app_launch: a build without a standard launch intent still counts when it opens.
     private fun isPackageInstalled(pkg: String): Boolean = openIntentFor(pkg) != null
 
-    private fun goHome(): DispatchResult {
+    // Home key through the daemon first: Android 12 drops a background HOME intent silently, so a
+    // rule fired while another app is in front would report success with nothing on screen. An
+    // old or absent daemon falls back to the intent, as before.
+    private suspend fun goHome(): DispatchResult {
+        if (helper.pressHome()) {
+            Log.i(TAG, "go_home via daemon key")
+            return DispatchResult(true)
+        }
+        Log.i(TAG, "go_home via HOME intent (daemon key unavailable)")
         val home = Intent(Intent.ACTION_MAIN)
             .addCategory(Intent.CATEGORY_HOME)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         return tryStartActivity(home, "go_home")
+    }
+
+    // System Back key through the helper daemon; no speed gate, it changes no car state.
+    private suspend fun goBack(): DispatchResult {
+        val ok = helper.pressBack()
+        Log.i(TAG, "go_back ok=$ok")
+        return if (ok) DispatchResult(true)
+        else DispatchResult(false, appStrings.get(R.string.dispatch_back_failed))
     }
 
     private suspend fun maybeMinimize(payload: JSONObject?) {

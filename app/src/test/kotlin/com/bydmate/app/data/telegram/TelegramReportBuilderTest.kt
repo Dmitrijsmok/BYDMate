@@ -107,11 +107,11 @@ class TelegramReportBuilderTest {
                 "${em}Стоимость 1,14 BYN",
                 "",
                 "🔁 <b>TRIP 1</b> с ${dayOf(counter1.resetTs)}",
-                "${em}412 км за 9 ч 20 мин",
+                "${em}412,3 км за 9 ч 20 мин",
                 "${em}Расход 21,4 кВт·ч/100 км",
                 "",
                 "🔁 <b>TRIP 2</b> с ${dayOf(counter2.resetTs)}",
-                "${em}32 км за 47 мин",
+                "${em}31,6 км за 47 мин",
                 "${em}Расход 16,1 кВт·ч/100 км",
                 "",
                 "⚠️ <b>Открыто: окно водителя</b>",
@@ -408,7 +408,7 @@ class TelegramReportBuilderTest {
                 "<b>BYDMate: Где машина</b>",
                 "",
                 "🔁 <b>TRIP 2</b> с ${dayOf(counter2.resetTs)}",
-                "${em}32 км за 47 мин",
+                "${em}31,6 км за 47 мин",
                 "${em}Расход 16,1 кВт·ч/100 км",
             ),
             report.text.lines(),
@@ -443,7 +443,7 @@ class TelegramReportBuilderTest {
         )
         val noTime = counter(41.6, 0.0, 0L)
         assertEquals(
-            listOf("🔁 <b>TRIP 1</b> с ${dayOf(noTime.resetTs)}", "${em}42 км"),
+            listOf("🔁 <b>TRIP 1</b> с ${dayOf(noTime.resetTs)}", "${em}41,6 км"),
             build(fields = setOf(ReportField.TRIP1), inputs = inputs(trip1 = noTime)).text.lines().drop(2),
         )
     }
@@ -469,13 +469,30 @@ class TelegramReportBuilderTest {
         assertFalse(MapPoint(53.9, 27.56).toString().contains("53"))
     }
 
-    @Test fun `power-off header carries the time placeholder the daemon fills`() {
-        val header = TelegramReportBuilder.powerOffHeader(strings("ru"))
-        assertEquals("BYDMate: машина выключена в ${TelegramReportBuilder.TIME_PLACEHOLDER}", header)
+    @Test fun `power-off header carries the date and the time placeholder`() {
+        val header = TelegramReportBuilder.powerOffHeader(strings("ru"), now)
+        assertEquals("BYDMate: машина выключена ${dayOf(now)} в ${TelegramReportBuilder.TIME_PLACEHOLDER}", header)
+    }
+
+    @Test fun `power-off header filled by the daemon reads date and time`() {
+        val header = TelegramReportBuilder.powerOffHeader(strings("ru"), now)
         val text = build(fields = setOf(ReportField.SOC), header = header).text
         val filled = TelegramReportBuilder.fillTime(text, now)
-        assertTrue(filled, filled.startsWith("<b>BYDMate: машина выключена в ${TelegramReportBuilder.formatTime(now)}</b>"))
+        assertTrue(filled, filled.startsWith("<b>BYDMate: машина выключена ${dayOf(now)} в ${TelegramReportBuilder.formatTime(now)}</b>"))
         assertFalse(filled.contains(TelegramReportBuilder.TIME_PLACEHOLDER))
+    }
+
+    @Test fun `power-off header has date and time placeholder in every language`() {
+        for (lang in listOf("ru", "be", "en", "pl", "pt", "zh")) {
+            val header = TelegramReportBuilder.powerOffHeader(strings(lang), now)
+            assertTrue("$lang: $header", header.contains(dayOf(now)))
+            assertTrue("$lang: $header", header.contains(TelegramReportBuilder.TIME_PLACEHOLDER))
+            assertFalse("$lang: $header", header.contains("%"))
+        }
+        assertEquals(
+            "BYDMate: car turned off on ${dayOf(now)} at ${TelegramReportBuilder.TIME_PLACEHOLDER}",
+            TelegramReportBuilder.powerOffHeader(strings("en"), now),
+        )
     }
 
     // --- trip time, energy and cost ---
