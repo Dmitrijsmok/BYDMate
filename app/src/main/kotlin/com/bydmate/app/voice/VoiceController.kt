@@ -12,7 +12,6 @@ import com.bydmate.app.data.automation.DispatchResult
 import com.bydmate.app.data.automation.VoiceFireResult
 import com.bydmate.app.R
 import com.bydmate.app.data.local.entity.ActionDef
-import com.bydmate.app.data.remote.AliceAppCatalog
 import com.bydmate.app.data.remote.AliceAppResolver
 import com.bydmate.app.data.remote.AliceAppTarget
 import com.bydmate.app.diagnostics.Trace
@@ -98,6 +97,11 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
 
     /** The Android 10 head units, where «Разделение экрана» has a main and an alternative method. */
     internal var legacyHeadUnit: () -> Boolean = { LegacyHeadUnit.isAndroid10 }
+
+    /** The package of an installed app by its spoken name, as launch_app finds it; null when none or several. */
+    internal var splitAppPackage: suspend (String) -> String? = { name ->
+        if (::agentTools.isInitialized) agentTools.launcherAppPackage(name) else null
+    }
 
     @Inject
     internal fun injectAppSets(
@@ -1173,16 +1177,14 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
     }
 
     /**
-     * «сплит <приложение>» ([SplitAppQuery]) on the Android 10 head units: the app of the table, if
-     * it is installed, as a split of its own, or null (then the phrase goes on, to a set or the agent).
+     * «сплит <приложение>» ([SplitAppQuery]) on the Android 10 head units: the installed app of that
+     * name, found the way the agent's launch_app finds it, as a split of its own, or null (then the
+     * phrase goes on, to a set or the agent).
      */
-    private fun adHocSplitApp(text: String): Resolution.SplitApp? {
+    private suspend fun adHocSplitApp(text: String): Resolution.SplitApp? {
         if (!legacyHeadUnit() || appSetLauncher == null) return null
-        val resolver = appResolver ?: return null
         val name = SplitAppQuery.name(text) ?: return null
-        val target = AliceAppCatalog.known(name)
-            ?.takeIf { it is AliceAppTarget.App || it is AliceAppTarget.Navigator } ?: return null
-        val pkg = runCatching { resolver.packageFor(target) }.getOrNull() ?: return null
+        val pkg = splitAppPackage(name) ?: return null
         return Resolution.SplitApp(name, pkg)
     }
 

@@ -78,6 +78,8 @@ class VoiceControllerPrecedenceTest {
         val manager: SplitSessionManager = mockk { coEvery { startLastPair() } returns SplitStartResult.OK },
         val legacy: Boolean = true,
         val switchedOn: Boolean = true,
+        /** «сплит <приложение>»: the installed app by its spoken name (launch_app's lookup). */
+        val apps: suspend (String) -> String? = { null },
     )
 
     /** A real VoiceAutomationResolver over one enabled rule (id 9, name «Моё») with [automationPhrase]. */
@@ -120,6 +122,7 @@ class VoiceControllerPrecedenceTest {
             appResolver = appResolver,
         )
         controller.legacyHeadUnit = { split.legacy }
+        controller.splitAppPackage = split.apps
         appSets?.let { (store, launcher) ->
             controller.injectAppSets(
                 store.apply { setSetsMode(!split.mainMethod); setSetsOn(!split.mainMethod && split.switchedOn) }, launcher,
@@ -281,18 +284,14 @@ class VoiceControllerPrecedenceTest {
 
     // --- the split with an app named on the spot (alternative method) ---
 
-    private val music = AliceAppCatalog.forAction("app.music.open")!!
-
-    /** A head unit with Yandex Music installed and nothing else the table knows. */
-    private fun withMusic() = mockk<AliceAppResolver> {
-        every { packageFor(any()) } answers {
-            if (firstArg<AliceAppTarget>() == music) "ru.yandex.music" else null
-        }
+    /** A head unit with Yandex Music installed: the name launch_app would find it by. */
+    private val withMusic: suspend (String) -> String? = { name ->
+        if (name.startsWith("яндекс музык")) "ru.yandex.music" else null
     }
 
     @Test fun `split and an app name splits the screen with that app`() {
         val launcher = setLauncher()
-        val r = rig(null, VoiceUserPhrases(), withMusic(), appSets = setStore to launcher)
+        val r = rig(null, VoiceUserPhrases(), appSets = setStore to launcher, split = SplitSetup(apps = withMusic))
 
         val entry = r.say("сплит яндекс музыка")
 
@@ -303,29 +302,28 @@ class VoiceControllerPrecedenceTest {
 
     @Test fun `add an app to the split works too`() {
         val launcher = setLauncher()
-        val r = rig(null, VoiceUserPhrases(), withMusic(), appSets = setStore to launcher)
+        val r = rig(null, VoiceUserPhrases(), appSets = setStore to launcher, split = SplitSetup(apps = withMusic))
 
         assertEquals("split:app:яндекс музыку", r.say("добавь яндекс музыку в сплит").command)
     }
 
     @Test fun `a set name still wins over an app`() {
         val launcher = setLauncher()
-        val r = rig(null, VoiceUserPhrases(), withMusic(), appSets = setStore to launcher)
+        val r = rig(null, VoiceUserPhrases(), appSets = setStore to launcher, split = SplitSetup(apps = withMusic))
 
         assertEquals("appset:открой окна", r.say("сплит открой окна").command)
     }
 
     @Test fun `an app that is not installed leaves the one set to open as before`() {
         val launcher = setLauncher()
-        val nothingInstalled = mockk<AliceAppResolver> { every { packageFor(any()) } returns null }
-        val r = rig(null, VoiceUserPhrases(), nothingInstalled, appSets = setStore to launcher)
+        val r = rig(null, VoiceUserPhrases(), appSets = setStore to launcher)
 
         assertEquals("appset:открой окна", r.say("сплит яндекс музыка").command)
     }
 
     @Test fun `with the main method an app split is left to the agent`() {
         val launcher = setLauncher()
-        val r = rig(null, VoiceUserPhrases(), withMusic(), appSets = setStore to launcher, split = SplitSetup(mainMethod = true))
+        val r = rig(null, VoiceUserPhrases(), appSets = setStore to launcher, split = SplitSetup(mainMethod = true, apps = withMusic))
 
         assertNotEquals("split:app:яндекс музыка", r.say("сплит яндекс музыка").command)
         coVerify(exactly = 0) { launcher.launch(any()) }

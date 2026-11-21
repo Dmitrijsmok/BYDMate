@@ -1832,6 +1832,10 @@ class AgentTools @Inject constructor(
         }
     }
 
+    /** The package of the one installed app [name] names, else null: «сплит <приложение>». */
+    internal suspend fun launcherAppPackage(name: String): String? =
+        (resolveLauncherApp(name.trim()) as? Built.Value)?.value?.second
+
     /** A navigation app as candidate packages, resolved the way routes are: the manual package,
      *  the app's builds (by package or launcher label). [navigator] null is the app chosen in
      *  «Навигатор для маршрутов» (#334), then Yandex Navigator's packages, so a chosen app that is
