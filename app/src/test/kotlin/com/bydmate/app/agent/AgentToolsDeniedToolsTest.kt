@@ -87,7 +87,7 @@ class AgentToolsDeniedToolsTest {
         assertTrue(AgentTools.CAR_CONTROL_TOOLS.containsAll(listOf(
             "vehicle_control", "set_sentry", "set_hotspot", "set_screen", "split_screen",
             "run_automation", "set_automation_enabled", "call_contact")))
-        assertEquals(setOf("navigate_to", "search_on_map", "show_point_on_map", "go_home"), AgentTools.NAVIGATION_TOOLS)
+        assertEquals(setOf("navigate_to", "search_on_map", "show_point_on_map", "go_home", "go_back"), AgentTools.NAVIGATION_TOOLS)
     }
 
     @Test
