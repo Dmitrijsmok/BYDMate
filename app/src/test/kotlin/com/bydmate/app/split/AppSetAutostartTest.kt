@@ -12,7 +12,7 @@ class AppSetAutostartTest {
 
     private val set = AppSet("set1", "Видео", "com.zhiliaoapp.musically", "ru.yandex.music", autostart = true)
     private val store = AppSetStore().apply { upsert(set) }
-    private val launcher = mockk<AppSetLauncher>()
+    private val launcher = mockk<AppSetLauncher>().also { coEvery { it.cameraClosed() } returns true }
     private val backing = mutableMapOf<String, Any?>()
     private val pauses = mutableListOf<Long>()
     private var clock = 1_000_000_000L
@@ -99,6 +99,23 @@ class AppSetAutostartTest {
         clock += AppSetAutostart.REPEAT_WINDOW_MS + 1
 
         assertEquals(Result.STARTED, autostart().runIfDue { 0 })
+    }
+
+    @Test fun `a camera that does not close opens nothing`() = runBlocking {
+        coEvery { launcher.cameraClosed() } returns false
+
+        assertEquals(Result.CAMERA, autostart().runIfDue { 0 })
+        assertEquals(Result.CAMERA, autostart(splitOn = true).runIfDue { 0 })
+        coVerify(exactly = 0) { launcher.launch(any()) }
+        assertEquals(0, splitStarts)
+    }
+
+    @Test fun `the speed is read once the camera has closed`() = runBlocking {
+        var cameraGone = false
+        coEvery { launcher.cameraClosed() } coAnswers { cameraGone = true; true }
+        coEvery { launcher.launch(set) } returns AppSetLauncher.Outcome.OK
+
+        assertEquals(Result.STARTED, autostart().runIfDue { if (cameraGone) 0 else 12 })
     }
 
     @Test fun `a moving car never gets a video app opened`() = runBlocking {

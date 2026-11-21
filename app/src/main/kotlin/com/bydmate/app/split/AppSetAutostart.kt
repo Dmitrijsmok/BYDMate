@@ -19,6 +19,7 @@ import javax.inject.Singleton
  * Two guards keep it from firing when it should not. The service restarts itself seconds after a
  * start there (the accessibility recovery), so a split already started within [REPEAT_WINDOW_MS]
  * is not started again. And it starts only with the car standing: the speed must be read and be 0.
+ * The BYD camera on screen (reverse, parking) is waited out first, the speed is read after it.
  */
 @Singleton
 class AppSetAutostart @Suppress("LongParameterList") constructor( // each guard injectable for the tests
@@ -43,8 +44,11 @@ class AppSetAutostart @Suppress("LongParameterList") constructor( // each guard 
         startSplit = { splitManager.get().startLastPair() },
     )
 
-    /** [OFF]: this switch or the split's is off; [NO_SET]: nothing to open (no set, or no saved pair for the main method). */
-    enum class Result { OFF, NO_SET, REPEAT, MOVING, NO_SPEED, STARTED, FAILED }
+    /**
+     * [OFF]: this switch or the split's is off; [NO_SET]: nothing to open (no set, or no saved pair for
+     * the main method); [CAMERA]: the BYD camera did not close within AppSetLauncher.CAMERA_WAIT_MS.
+     */
+    enum class Result { OFF, NO_SET, REPEAT, CAMERA, MOVING, NO_SPEED, STARTED, FAILED }
 
     /** The switch. Before it existed each set had its own «open at start»: such a set turns it on. */
     fun isEnabled(): Boolean = prefs?.getBoolean(KEY_ENABLED, store.autostartSet() != null) ?: false
@@ -63,6 +67,7 @@ class AppSetAutostart @Suppress("LongParameterList") constructor( // each guard 
         val last = prefs?.getLong(KEY_LAST_MS, 0L) ?: 0L
         if (last > 0L && now() - last in 0 until REPEAT_WINDOW_MS) return trace(mode, Result.REPEAT)
         pause(START_DELAY_MS)
+        if (!launcher.cameraClosed()) return trace(mode, Result.CAMERA)
         standingOrNot(speedKmh)?.let { return trace(mode, it) }
         // Marked before the launch: a second service start must not open it twice, whatever the outcome.
         prefs?.edit()?.putLong(KEY_LAST_MS, now())?.apply()

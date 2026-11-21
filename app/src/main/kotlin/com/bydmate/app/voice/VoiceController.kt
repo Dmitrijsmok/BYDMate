@@ -1169,6 +1169,7 @@ class VoiceController @Inject @Suppress("LongParameterList") constructor( // Hil
         AppSetLauncher.Outcome.RIGHT_FAILED -> Failure("right app did not start", "Не открылось второе приложение комплекта")
         AppSetLauncher.Outcome.LEFT_FAILED -> Failure("left app did not start", "Не открылось первое приложение комплекта")
         AppSetLauncher.Outcome.NOT_SPLIT -> Failure("screen did not split", "Экран не разделился")
+        AppSetLauncher.Outcome.CAMERA -> Failure("camera on screen", "Камера на экране, разделение не открыто")
     }
 
     /**
