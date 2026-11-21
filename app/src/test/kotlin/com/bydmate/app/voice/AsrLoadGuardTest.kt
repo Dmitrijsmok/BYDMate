@@ -44,7 +44,7 @@ class AsrLoadGuardTest {
         assertTrue(reborn().isTripped())
     }
 
-    // 1.1.9 field log: the previous process died mid-load (1), this process is loading again
+    // DiLink 3 field log 2026-11: the previous process died mid-load (1), this process is loading again
     // (2 stored). A PTT now must not hear "model missing": the running load proves nothing yet.
     @Test fun `a load running in this process does not trip it`() {
         guard.noteLoadBegin(AsrLoadGuard.ARTIFACT_RECOGNIZER)

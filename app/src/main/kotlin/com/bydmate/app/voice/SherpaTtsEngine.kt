@@ -166,7 +166,7 @@ class SherpaTtsEngine(
                         return@execute
                     }
                     val voice = selectedVoice()
-                    val out = ensureTrackForRate(engine.sampleRate())
+                    val out = ensureTrackForRate(engine.sampleRate(), tailOwnerGen = myGen)
                     val synthesisText = textForSynthesis(voice.engine, text, marker::mark)
                     val speed = TtsTuning.speed(rate())
                     val cacheKey = if (pcmCacheable(text)) {
@@ -480,19 +480,39 @@ class SherpaTtsEngine(
      *  track. Not private: exercised directly by SherpaTtsEngineTest, since driving it through
      *  speak()/enqueue() would require a real OfflineTts, which cannot be constructed or mocked
      *  on the JVM unit test stub jar (its native library load always throws in <clinit>). */
-    internal fun ensureTrackForRate(sampleRate: Int): AudioTrack {
+    internal fun ensureTrackForRate(sampleRate: Int, tailOwnerGen: Int? = null): AudioTrack {
         val existing = track
         return if (existing != null && !shouldRecreateTrack(existing.sampleRate, sampleRate)) {
             Log.i(TAG, "track reused: rate=$sampleRate")
             existing
         } else {
             Log.i(TAG, "track recreated: rate=$sampleRate existing=${existing?.sampleRate}")
+            // The local voice taking over from an online sentence (another rate) must not cut
+            // the tail still buffered in the old track. Only speak()/enqueue() pass a generation:
+            // playPcm()'s caller waits for its write under a bound this wait would not fit in.
+            if (existing != null && tailOwnerGen != null) awaitWrittenAudio(tailOwnerGen)
             runCatching { existing?.release() }
             createTrack(sampleRate).also {
                 track = it
                 trackFramesWritten = 0L // fresh track, head restarts at 0
             }
         }
+    }
+
+    /** Blocks (worker thread only) until the audio already written to the track has nominally
+     *  sounded. For a newcomer that inherits a track from the utterance it superseded: that
+     *  utterance's own drain wait bailed out on the generation bump and left its tail playing.
+     *  Wall-clock, not head position: the head does not advance on some DiLink routes, and the
+     *  floor is exact enough for a tail. stop() zeroes the floor and bumps the generation, so a
+     *  barge-in never waits here. */
+    private fun awaitWrittenAudio(myGen: Int) {
+        awaitAudibleFloor(
+            audibleUntil = { audibleUntilMs },
+            maxWaitMs = DRAIN_TIMEOUT_MS,
+            pollMs = DRAIN_POLL_MS,
+            stillCurrent = { generation.get() == myGen },
+            now = SystemClock::elapsedRealtime,
+        )
     }
 
     /** Advances the wall-clock audible floor by the nominal duration of [writtenFrames]. Called
@@ -654,7 +674,7 @@ class SherpaTtsEngine(
                     if (item.end) break
                     if (generation.get() != myGen) break
 
-                    val out = ensureTrackForRate(item.sampleRate)
+                    val out = ensureTrackForRate(item.sampleRate, tailOwnerGen = myGen)
                     if (out.playState != AudioTrack.PLAYSTATE_PLAYING) out.play()
                     val written = writeSentence(
                         samples = item.samples,
@@ -686,6 +706,11 @@ class SherpaTtsEngine(
                             sampleRate = out.sampleRate,
                         )
                         awaitPlaybackDrain(out, targetFrames, myGen, timeout)
+                    } else {
+                        // This queue spoke nothing (an online reply whose last sentence broke
+                        // mid-stream opens it empty, with no engine loaded): what still sounds
+                        // is the tail of the utterance it superseded.
+                        awaitWrittenAudio(myGen)
                     }
                     if (generation.get() == myGen) runCatching { out?.pause() }
                 }
@@ -1180,6 +1205,25 @@ class SherpaTtsEngine(
         internal fun effectivePlaybackRate(base: Int, speed: Float): Int {
             val clamped = if (speed.isFinite() && speed > 0f) speed.coerceIn(0.5f, 2.0f) else 1.0f
             return (base * clamped).toInt()
+        }
+
+        /** Pure poll loop: waits until [now] reaches the [audibleUntil] floor, bailing out once
+         *  [stillCurrent] goes false; [maxWaitMs] bounds it against a floor gone wrong. */
+        @Suppress("LongParameterList") // seams, like awaitDrain
+        internal fun awaitAudibleFloor(
+            audibleUntil: () -> Long,
+            maxWaitMs: Long,
+            pollMs: Long,
+            stillCurrent: () -> Boolean,
+            now: () -> Long,
+            sleep: (Long) -> Unit = Thread::sleep,
+        ) {
+            val giveUpAt = now() + maxWaitMs
+            while (stillCurrent()) {
+                val t = now()
+                if (t >= audibleUntil() || t >= giveUpAt) return
+                sleep(pollMs)
+            }
         }
 
         /** Pure poll loop: waits for [currentFrames] to reach [targetFrames], bailing out

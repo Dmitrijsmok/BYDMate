@@ -18,7 +18,7 @@ import java.util.concurrent.ConcurrentHashMap
  *  Only interrupted loads of EARLIER processes count ([inherited], read once when this
  *  process builds the guard): the bump of a load still running in this process is not
  *  evidence of anything yet. Counting it made a PTT pressed during the start-up warm-up
- *  answer "model missing" while the files were fine (DiLink 3 field log, 1.1.9). */
+ *  answer "model missing" while the files were fine (DiLink 3 field log, 2026-11). */
 class AsrLoadGuard(private val prefs: SharedPreferences) {
 
     constructor(context: Context) :

@@ -63,6 +63,26 @@ class AsrGuardRecoveryTest {
         assertFalse(AsrLoadGuard(context).isTripped())
     }
 
+    // Files that match their hashes are never deleted, however often the load is cut: power cuts
+    // are not corruption. They stay marked, and a marked model is not preloaded at start.
+    @Test fun `intact files are never deleted and stay marked`() = runBlocking {
+        val files = FakeFiles(Integrity.INTACT)
+        assertEquals(Outcome.KEPT_INTACT, AsrGuardRecovery(trippedGuard(), files, journal).run())
+        assertEquals(Outcome.KEPT_INTACT, AsrGuardRecovery(trippedGuard(), files, journal).run())
+        assertEquals(0, files.deleted)
+        assertTrue(files.unverifiedKept)
+    }
+
+    // A model that aborts the native load every time (an ONNX build the firmware cannot run) must
+    // not crash the app at every start: after a kept trip it loads on the first voice press only.
+    @Test fun `a kept or deleted model is not preloaded at service start`() {
+        assertTrue(AsrGuardRecovery.warmUpAtStart(Outcome.NOT_TRIPPED, keptMark = false))
+        assertFalse(AsrGuardRecovery.warmUpAtStart(Outcome.NOT_TRIPPED, keptMark = true))
+        assertFalse(AsrGuardRecovery.warmUpAtStart(Outcome.KEPT_INTACT, keptMark = true))
+        assertFalse(AsrGuardRecovery.warmUpAtStart(Outcome.KEPT_UNVERIFIED, keptMark = true))
+        assertFalse(AsrGuardRecovery.warmUpAtStart(Outcome.DELETED, keptMark = false))
+    }
+
     @Test fun `corrupt files are deleted and the guard is reset`() = runBlocking {
         val guard = trippedGuard()
         val files = FakeFiles(Integrity.CORRUPT)
