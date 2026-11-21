@@ -639,7 +639,9 @@ class SherpaTtsEngine(
                     val remaining = pendingSynth.decrementAndGet()
                     // Compatibility fix for 3.19: if synthesis produced no PCM, finish must not
                     // leave the logical speaking flag stuck forever.
-                    if (remaining == 0 && finishRequested && !pcmQueued && generation.get() == myGen) {
+                    if (remaining == 0 && finishRequested && !pcmQueued && generation.get() == myGen &&
+                        !tailSounding()
+                    ) {
                         _speaking.value = false
                     }
                 }
@@ -649,7 +651,10 @@ class SherpaTtsEngine(
 
         override fun finish() {
             finishRequested = true
-            if (pendingSynth.get() == 0 && !pcmQueued && generation.get() == myGen) {
+            // A tail the superseded utterance left in the track still sounds: playbackLoop() waits
+            // it out and clears the flag then, so the mic does not open over it.
+            val nothingToPlay = pendingSynth.get() == 0 && !pcmQueued
+            if (nothingToPlay && generation.get() == myGen && !tailSounding()) {
                 _speaking.value = false
             }
             // Same synthesis worker means the end marker is published after all earlier synth jobs.
@@ -657,6 +662,8 @@ class SherpaTtsEngine(
                 if (generation.get() == myGen) offerWhileCurrent(endMarker)
             }
         }
+
+        private fun tailSounding(): Boolean = audibleUntilMs > SystemClock.elapsedRealtime()
 
         private fun offerWhileCurrent(item: ReadyPcm): Boolean {
             while (generation.get() == myGen) {

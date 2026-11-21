@@ -2603,8 +2603,8 @@ class AgentTools @Inject constructor(
             "run_automation", "set_automation_enabled", "create_automation", "call_contact")
 
         /** Tools that open a route, a map search or a point, or leave the current screen for the
-         *  home screen: withheld from a turn whose caller may not navigate. */
-        internal val NAVIGATION_TOOLS = setOf("navigate_to", "search_on_map", "show_point_on_map", "go_home")
+         *  home screen or the previous one: withheld from a turn whose caller may not navigate. */
+        internal val NAVIGATION_TOOLS = setOf("navigate_to", "search_on_map", "show_point_on_map", "go_home", "go_back")
 
         /** Every other tool: readings, statistics, weather, search, route info, apps and media. A
          *  new tool must be added to exactly one of the three sets (AgentToolsDeniedToolsTest). */
