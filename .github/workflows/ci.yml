@@ -89,6 +89,46 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Upload the verified signed APK itself (no zip)
+        # A single file with archive: false is stored as it is: its download link gives the .apk
+        # directly, not a zip around it (the artifact takes the file's name).
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ runner.temp }}/bydmate-verified-apk/BYDMate-dilink3-v*.apk
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    # Separate job: the write token never shares a runner with the signing key. Each main build
+    # becomes a GitHub release with the verified APK, a one-click link that does not expire.
+    needs: release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Dmitrijsmok/BYDMate'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: BYDMate-dilink3-release-${{ github.sha }}-${{ github.run_number }}-${{ github.run_attempt }}
+          path: apk
+
+      - name: Publish the verified signed APK as a GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          apk=$(ls apk/BYDMate-dilink3-v*.apk)
+          name=$(basename "$apk")
+          version=${name#BYDMate-dilink3-v}
+          version=${version%.apk}
+          tag="v${version}-b${GITHUB_RUN_NUMBER}"
+          sha=$(sha256sum "$apk" | cut -d' ' -f1)
+          gh release create "$tag" "$apk" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "BYDMate DiLink3 v${version} (build ${GITHUB_RUN_NUMBER})" \
+            --notes "Commit ${GITHUB_SHA::8} · SHA-256 ${sha}"
+          echo "https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${name}" | tee -a "$GITHUB_STEP_SUMMARY"
+
   telegram:
     # Separate job: the Telegram bot token never shares a runner with the signing key.
     needs: release
