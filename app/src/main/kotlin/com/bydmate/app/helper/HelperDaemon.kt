@@ -353,7 +353,7 @@ fun main(args: Array<String>) {
                 }.getOrElse { reply?.writeInt(-1); reply?.writeInt(0); true }
 
                 HelperBinderProtocol.TX_LAUNCH_APP -> runCatching {
-                    val ok = launchApp(data.readString() ?: "")
+                    val ok = launchAppFromParcel(data)
                     reply?.writeInt(if (ok) 0 else -1); reply?.writeInt(0)
                     true
                 }.getOrElse { reply?.writeInt(-1); reply?.writeInt(0); true }
@@ -948,7 +948,11 @@ fun main(args: Array<String>) {
 
                 HelperBinderProtocol.TX_DTC_SCAN_START,
                 HelperBinderProtocol.TX_DTC_SCAN_STATUS,
-                HelperBinderProtocol.TX_DTC_ERASE_START -> handleDtcScanTransact(code, data, reply, svc, autoIface)
+                HelperBinderProtocol.TX_DTC_ERASE_START,
+                HelperBinderProtocol.TX_TPMS_READ_START,
+                HelperBinderProtocol.TX_TPMS_WRITE_START,
+                HelperBinderProtocol.TX_FW_READ_START,
+                HelperBinderProtocol.TX_DIAG_JOB_STATUS -> handleDtcScanTransact(code, data, reply, svc, autoIface)
 
                 else -> super.onTransact(code, data, reply, flags)
             }

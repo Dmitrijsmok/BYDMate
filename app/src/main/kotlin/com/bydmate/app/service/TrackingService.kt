@@ -118,6 +118,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var asrLoadGuard: com.bydmate.app.voice.AsrLoadGuard
     @Inject lateinit var gigaAmModelManager: com.bydmate.app.voice.GigaAmModelManager
     @Inject lateinit var voiceGate: com.bydmate.app.voice.VoiceGate
+    @Inject lateinit var appSetAutostart: com.bydmate.app.split.AppSetAutostart
     @Named("ttsLoadGuard") @Inject lateinit var ttsLoadGuard: com.bydmate.app.voice.AsrLoadGuard
     @Inject lateinit var ttsModelManager: com.bydmate.app.voice.TtsModelManager
     @Inject lateinit var ttsEngine: com.bydmate.app.voice.TtsEngine
@@ -745,6 +746,12 @@ class TrackingService : Service(), LocationListener {
             }
         }
 
+        // «Открывать при запуске» of the split section: the saved pair, or the first set on «Пополам 1:1».
+        serviceScope.launch(Dispatchers.IO) {
+            runCatching { appSetAutostart.runIfDue() }
+                .onFailure { Log.w(TAG, "app set autostart failed: ${it.message}") }
+        }
+
         // Pre-warm the GigaAM recognizer (Task 5): building it now, off the main thread, means
         // the first PTT's transcribe() doesn't pay the ~1.3 s cold model-load cost before the
         // mic starts recording (field defect: first words swallowed). Fire-and-forget, gated on
@@ -1038,9 +1045,16 @@ class TrackingService : Service(), LocationListener {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // n=1 is the command that follows onCreate; later ones hit an already running service.
-        Trace.event(TraceArea.APP, "service-trigger",
-            "trigger" to AutostartTrace.startTrigger(intent != null, intent?.getStringExtra(AutostartTrace.EXTRA_TRIGGER)),
-            "n" to ++startCommands)
+        val trigger = AutostartTrace.startTrigger(intent != null, intent?.getStringExtra(AutostartTrace.EXTRA_TRIGGER))
+        Trace.event(TraceArea.APP, "service-trigger", "trigger" to trigger, "n" to ++startCommands)
+        // A car start that finds the service running (it came up before BOOT_COMPLETED, or the head
+        // unit woke with the process alive): onCreate's check ran for the previous start.
+        if (startCommands > 1 && AutostartTrace.isCarStartTrigger(trigger)) {
+            serviceScope.launch(Dispatchers.IO) {
+                runCatching { appSetAutostart.runIfDue() }
+                    .onFailure { Log.w(TAG, "app set autostart failed: ${it.message}") }
+            }
+        }
         maybeAttachWidget()
         return START_STICKY
     }
